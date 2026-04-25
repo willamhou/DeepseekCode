@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::env;
 use std::process::Command;
 
@@ -28,11 +29,29 @@ impl ModelClient for DeepSeekClient {
 
 impl DeepSeekClient {
     fn respond_remote(&self, input: &ModelRequest, api_key: &str) -> AppResult<ModelResponse> {
+        match api_flavor(&self.config.base_url) {
+            ApiFlavor::OpenAi => self.respond_remote_openai(input, api_key),
+            ApiFlavor::Anthropic => self.respond_remote_anthropic(input, api_key),
+        }
+    }
+
+    fn respond_remote_openai(&self, input: &ModelRequest, api_key: &str) -> AppResult<ModelResponse> {
         let endpoint = format!("{}/chat/completions", self.config.base_url.trim_end_matches('/'));
         let system_prompt = build_remote_system_prompt(&input.system_prompt);
         let user_prompt = build_user_prompt(input);
         let body = format!(
-            "{{\"model\":\"{}\",\"temperature\":0,\"messages\":[{{\"role\":\"system\",\"content\":\"{}\"}},{{\"role\":\"user\",\"content\":\"{}\"}}]}}",
+            concat!(
+                "{{",
+                "\"model\":\"{}\",",
+                "\"temperature\":0,",
+                "\"max_tokens\":1024,",
+                "\"response_format\":{{\"type\":\"json_object\"}},",
+                "\"messages\":[",
+                "{{\"role\":\"system\",\"content\":\"{}\"}},",
+                "{{\"role\":\"user\",\"content\":\"{}\"}}",
+                "]",
+                "}}"
+            ),
             json_escape(&self.config.model),
             json_escape(&system_prompt),
             json_escape(&user_prompt)
@@ -55,14 +74,63 @@ impl DeepSeekClient {
 
         if !output.status.success() {
             return Err(app_error(format!(
-                "deepseek request failed: {}",
+                "deepseek openai request failed: {}",
                 String::from_utf8_lossy(&output.stderr).trim()
             )));
         }
 
         let body = String::from_utf8_lossy(&output.stdout);
-        let content = extract_message_content(&body)?;
-        parse_planner_response(&content)
+        let content = extract_json_string_field(&body, "content")?;
+        parse_plan_json(&content)
+    }
+
+    fn respond_remote_anthropic(&self, input: &ModelRequest, api_key: &str) -> AppResult<ModelResponse> {
+        let endpoint = format!("{}/messages", self.config.base_url.trim_end_matches('/'));
+        let system_prompt = build_remote_system_prompt(&input.system_prompt);
+        let user_prompt = build_user_prompt(input);
+        let body = format!(
+            concat!(
+                "{{",
+                "\"model\":\"{}\",",
+                "\"max_tokens\":1024,",
+                "\"system\":\"{}\",",
+                "\"messages\":[",
+                "{{\"role\":\"user\",\"content\":[{{\"type\":\"text\",\"text\":\"{}\"}}]}}",
+                "]",
+                "}}"
+            ),
+            json_escape(&self.config.model),
+            json_escape(&system_prompt),
+            json_escape(&user_prompt)
+        );
+
+        let output = Command::new("curl")
+            .args([
+                "-sS",
+                "-X",
+                "POST",
+                &endpoint,
+                "-H",
+                &format!("x-api-key: {api_key}"),
+                "-H",
+                "anthropic-version: 2023-06-01",
+                "-H",
+                "Content-Type: application/json",
+                "--data-binary",
+                &body,
+            ])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(app_error(format!(
+                "deepseek anthropic request failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+
+        let body = String::from_utf8_lossy(&output.stdout);
+        let content = extract_json_string_field(&body, "text")?;
+        parse_plan_json(&content)
     }
 
     fn respond_offline(&self, input: ModelRequest) -> ModelResponse {
@@ -225,9 +293,24 @@ impl DeepSeekClient {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ApiFlavor {
+    OpenAi,
+    Anthropic,
+}
+
+fn api_flavor(base_url: &str) -> ApiFlavor {
+    if base_url.trim_end_matches('/').ends_with("/anthropic") {
+        ApiFlavor::Anthropic
+    } else {
+        ApiFlavor::OpenAi
+    }
+}
+
 fn build_remote_system_prompt(base: &str) -> String {
     format!(
-        "{base}\nReturn exactly one action in this format:\nACTION: FINISH\nMESSAGE: short summary\nor\nACTION: TOOL <tool_name>\nMESSAGE: short reason\nARG key=value\nARG key=value\nOnly use listed tools. Keep arguments plain text."
+        "{}\nReturn json only. Use this exact json schema:\n{{\"action\":\"finish|tool\",\"message\":\"short summary\",\"tool_name\":\"tool name or empty string\",\"arguments\":{{\"key\":\"value\"}}}}\nIf action is finish, set tool_name to an empty string and arguments to {{}}.\nIf action is tool, choose one listed tool and keep all argument values as strings.",
+        base
     )
 }
 
@@ -262,50 +345,50 @@ fn build_user_prompt(input: &ModelRequest) -> String {
     prompt
 }
 
-fn parse_planner_response(content: &str) -> AppResult<ModelResponse> {
-    let mut action = None::<ModelAction>;
-    let mut message = String::new();
-    let mut input = ToolInput::new();
-
-    for raw_line in content.lines() {
-        let line = raw_line.trim();
-        if let Some(rest) = line.strip_prefix("ACTION:") {
-            let rest = rest.trim();
-            if rest == "FINISH" {
-                action = Some(ModelAction::Finish);
-            } else if let Some(tool_name) = rest.strip_prefix("TOOL ") {
-                action = Some(ModelAction::CallTool {
-                    tool_name: tool_name.trim().to_string(),
-                    input: ToolInput::new(),
-                });
-            }
-        } else if let Some(rest) = line.strip_prefix("MESSAGE:") {
-            message = rest.trim().to_string();
-        } else if let Some(rest) = line.strip_prefix("ARG ") {
-            if let Some((key, value)) = rest.split_once('=') {
-                input = input.with_arg(key.trim(), value.trim());
-            }
-        }
-    }
-
-    let action = match action {
-        Some(ModelAction::CallTool { tool_name, .. }) => ModelAction::CallTool { tool_name, input },
-        Some(ModelAction::Finish) => ModelAction::Finish,
-        None => return Err(app_error("model response did not contain a valid ACTION line")),
+fn parse_plan_json(content: &str) -> AppResult<ModelResponse> {
+    let value = parse_json_value(content.trim())?;
+    let JsonValue::Object(root) = value else {
+        return Err(app_error("planner json must be an object"));
     };
 
-    if message.is_empty() {
-        message = "DeepSeek responded without a planner message.".to_string();
-    }
+    let action = root
+        .get("action")
+        .and_then(json_as_string)
+        .ok_or_else(|| app_error("planner json missing string field `action`"))?;
+    let message = root
+        .get("message")
+        .and_then(json_as_string)
+        .unwrap_or("DeepSeek returned an empty planner message.")
+        .to_string();
+
+    let action = match action {
+        "finish" => ModelAction::Finish,
+        "tool" => {
+            let tool_name = root
+                .get("tool_name")
+                .and_then(json_as_string)
+                .ok_or_else(|| app_error("planner json missing string field `tool_name`"))?;
+            let arguments = root
+                .get("arguments")
+                .map(json_as_string_map)
+                .transpose()?
+                .unwrap_or_default();
+            ModelAction::CallTool {
+                tool_name: tool_name.to_string(),
+                input: ToolInput { args: arguments },
+            }
+        }
+        other => return Err(app_error(format!("unsupported planner action: {other}"))),
+    };
 
     Ok(ModelResponse { message, action })
 }
 
-fn extract_message_content(body: &str) -> AppResult<String> {
-    let marker = "\"content\":\"";
+fn extract_json_string_field(body: &str, field_name: &str) -> AppResult<String> {
+    let marker = format!("\"{field_name}\":\"");
     let start = body
-        .find(marker)
-        .ok_or_else(|| app_error("deepseek response missing message content"))?
+        .find(&marker)
+        .ok_or_else(|| app_error(format!("response missing json string field `{field_name}`")))?
         + marker.len();
 
     let bytes = body.as_bytes();
@@ -335,7 +418,146 @@ fn extract_message_content(body: &str) -> AppResult<String> {
         index += 1;
     }
 
-    Err(app_error("unterminated content string in deepseek response"))
+    Err(app_error(format!(
+        "unterminated json string field `{field_name}` in response"
+    )))
+}
+
+#[derive(Debug, Clone)]
+enum JsonValue {
+    Object(BTreeMap<String, JsonValue>),
+    String(String),
+    Null,
+}
+
+fn parse_json_value(input: &str) -> AppResult<JsonValue> {
+    let bytes = input.as_bytes();
+    let mut index = 0;
+    parse_value(bytes, &mut index)
+}
+
+fn parse_value(bytes: &[u8], index: &mut usize) -> AppResult<JsonValue> {
+    skip_ws(bytes, index);
+    if *index >= bytes.len() {
+        return Err(app_error("unexpected end of json input"));
+    }
+
+    match bytes[*index] {
+        b'{' => parse_object(bytes, index),
+        b'"' => Ok(JsonValue::String(parse_string(bytes, index)?)),
+        b'n' => {
+            if bytes.get(*index..*index + 4) == Some(b"null") {
+                *index += 4;
+                Ok(JsonValue::Null)
+            } else {
+                Err(app_error("invalid json token"))
+            }
+        }
+        _ => Err(app_error("unsupported json value; expected object, string, or null")),
+    }
+}
+
+fn parse_object(bytes: &[u8], index: &mut usize) -> AppResult<JsonValue> {
+    let mut map = BTreeMap::new();
+    *index += 1;
+
+    loop {
+        skip_ws(bytes, index);
+        if *index >= bytes.len() {
+            return Err(app_error("unterminated json object"));
+        }
+        if bytes[*index] == b'}' {
+            *index += 1;
+            break;
+        }
+
+        let key = parse_string(bytes, index)?;
+        skip_ws(bytes, index);
+        if bytes.get(*index) != Some(&b':') {
+            return Err(app_error("expected `:` after json object key"));
+        }
+        *index += 1;
+        let value = parse_value(bytes, index)?;
+        map.insert(key, value);
+
+        skip_ws(bytes, index);
+        match bytes.get(*index) {
+            Some(b',') => *index += 1,
+            Some(b'}') => {
+                *index += 1;
+                break;
+            }
+            _ => return Err(app_error("expected `,` or `}` in json object")),
+        }
+    }
+
+    Ok(JsonValue::Object(map))
+}
+
+fn parse_string(bytes: &[u8], index: &mut usize) -> AppResult<String> {
+    if bytes.get(*index) != Some(&b'"') {
+        return Err(app_error("expected json string"));
+    }
+    *index += 1;
+
+    let mut output = String::new();
+    let mut escaped = false;
+
+    while *index < bytes.len() {
+        let byte = bytes[*index];
+        *index += 1;
+
+        if escaped {
+            match byte {
+                b'"' => output.push('"'),
+                b'\\' => output.push('\\'),
+                b'n' => output.push('\n'),
+                b'r' => output.push('\r'),
+                b't' => output.push('\t'),
+                _ => output.push(byte as char),
+            }
+            escaped = false;
+            continue;
+        }
+
+        match byte {
+            b'\\' => escaped = true,
+            b'"' => return Ok(output),
+            _ => output.push(byte as char),
+        }
+    }
+
+    Err(app_error("unterminated json string"))
+}
+
+fn skip_ws(bytes: &[u8], index: &mut usize) {
+    while *index < bytes.len() && bytes[*index].is_ascii_whitespace() {
+        *index += 1;
+    }
+}
+
+fn json_as_string(value: &JsonValue) -> Option<&str> {
+    match value {
+        JsonValue::String(value) => Some(value.as_str()),
+        _ => None,
+    }
+}
+
+fn json_as_string_map(value: &JsonValue) -> AppResult<BTreeMap<String, String>> {
+    let JsonValue::Object(map) = value else {
+        return Err(app_error("planner `arguments` must be a json object"));
+    };
+
+    let mut result = BTreeMap::new();
+    for (key, value) in map {
+        let Some(value) = json_as_string(value) else {
+            return Err(app_error(format!(
+                "planner argument `{key}` must be a string value"
+            )));
+        };
+        result.insert(key.clone(), value.to_string());
+    }
+    Ok(result)
 }
 
 fn json_escape(value: &str) -> String {
@@ -437,13 +659,18 @@ fn quoted_segments(task: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_message_content, parse_planner_response};
+    use super::{api_flavor, extract_json_string_field, parse_plan_json, ApiFlavor};
     use crate::model::protocol::ModelAction;
 
     #[test]
-    fn parses_planner_tool_response() {
-        let response = parse_planner_response(
-            "ACTION: TOOL read_file\nMESSAGE: inspect file\nARG path=README.md\nARG max_lines=20",
+    fn parses_planner_json_tool_response() {
+        let response = parse_plan_json(
+            r#"{
+                "action":"tool",
+                "message":"inspect file",
+                "tool_name":"read_file",
+                "arguments":{"path":"README.md","max_lines":"20"}
+            }"#,
         )
         .unwrap();
 
@@ -458,9 +685,21 @@ mod tests {
     }
 
     #[test]
-    fn extracts_json_content_string() {
-        let body = r#"{"choices":[{"message":{"role":"assistant","content":"ACTION: FINISH\nMESSAGE: done"}}]}"#;
-        let content = extract_message_content(body).unwrap();
-        assert!(content.contains("ACTION: FINISH"));
+    fn extracts_json_string_field_from_response() {
+        let body = r#"{"choices":[{"message":{"role":"assistant","content":"{\"action\":\"finish\",\"message\":\"done\",\"tool_name\":\"\",\"arguments\":{}}"}}]}"#;
+        let content = extract_json_string_field(body, "content").unwrap();
+        assert!(content.contains("\"action\":\"finish\""));
+    }
+
+    #[test]
+    fn detects_anthropic_base_url() {
+        assert!(matches!(
+            api_flavor("https://api.deepseek.com/anthropic"),
+            ApiFlavor::Anthropic
+        ));
+        assert!(matches!(
+            api_flavor("https://api.deepseek.com"),
+            ApiFlavor::OpenAi
+        ));
     }
 }
