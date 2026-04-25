@@ -25,6 +25,9 @@
   - `allowed_tools`
   - `shell_allowlist`
   - 写入/命令审批要求
+- 本机可验证性已具备：
+  - `doctor` 输出 workspace / model / api key / network / hints 五段
+  - `smoke` 可对 OpenAI 与 Anthropic 兼容路径单独发起最小远端请求
 
 ## 已完成
 
@@ -45,6 +48,7 @@
   - `dscode resume`
   - `dscode config`
   - `dscode doctor`
+  - `dscode smoke`（支持 `--flavor openai|anthropic` 与 `--prompt`）
 - 支持 `--skill`
 - 支持简单 `.dscode/config.toml` 配置读取：
   - `model.base_url`
@@ -131,16 +135,15 @@
   - 目前主要依赖 policy 和环境变量放行
 - 观测上下文裁剪还比较粗
 - 还没有真实的“失败后重新规划和继续修复”重试策略
-- 没有专门的远端 smoke test 命令
-- `doctor` 还没有覆盖联网与 API 可用性检查
 
 ## 已验证
 
 这些能力已经在当前本地环境里验证过：
 
 - `cargo check --offline`
-- `cargo test --offline`
-- `cargo run --offline -- doctor`
+- `cargo test --offline`（25 项单测全部通过）
+- `cargo run --offline -- doctor` 输出五段诊断（workspace / model / api key / network / hints）
+- `cargo run --offline -- smoke` 与 `cargo run --offline -- smoke --flavor anthropic` 在缺少 key 时给出预检失败
 - `cargo run --offline -- "inspect repository"`
 - `cargo run --offline -- run --skill fix-tests "fix tests"`
 - 文本替换式编辑在放行写入审批时可执行
@@ -162,15 +165,18 @@
 
 这部分优先级最高，直接决定这个项目能不能在真实环境里快速试用。
 
-- 扩展 `doctor`
-  - 检查 `DEEPSEEK_API_KEY`
-  - 显示当前 `base_url` 模式
-  - 提示 OpenAI / Anthropic 兼容路径
-  - 检查联网前置条件
-- 增加 `smoke` 命令
-  - 单次最小远端调用
-  - 单独验证 OpenAI-compatible 和 Anthropic-compatible 路径
-- 提供 `.dscode/config.toml` 示例文件
+- 扩展 `doctor`：已完成
+  - 检查 `DEEPSEEK_API_KEY` 是否存在并以掩码显示
+  - 显示当前 `base_url` 模式（OpenAI vs Anthropic 兼容）与对应 endpoint
+  - 提示 OpenAI / Anthropic 两条路径
+  - 通过 curl HEAD 探测联网前置条件
+- 增加 `smoke` 命令：已完成
+  - 单次最小远端调用，输出 http_status / duration_ms / 助手回复（截断）
+  - 通过 `--flavor openai|anthropic` 单独验证两条路径
+  - 缺 key、curl 缺失、非 2xx 都给出明确错误
+- 提供 `.dscode/config.toml` 示例文件：已完成
+  - `.dscode/config.example.toml` 含完整 key 注释与两种 base_url 模式说明
+  - 通过 `cp .dscode/config.example.toml .dscode/config.toml && dscode doctor` 验证可解析
 
 ### P1: 真实编辑能力增强
 
@@ -264,13 +270,13 @@
 
 ### Phase 6: 体验打磨
 
-- doctor
-- smoke
-- diff 展示
-- 更好的报错
-- 更好的上下文摘要
+- doctor：已完成扩展版（workspace / model / api key / network / hints 五段输出）
+- smoke：已完成（OpenAI 与 Anthropic 兼容路径独立验证）
+- diff 展示：基础版已具备
+- 更好的报错：进行中
+- 更好的上下文摘要：未开始
 
-状态：未完成
+状态：进行中
 
 ### Phase 7: 更强编辑能力
 
@@ -293,12 +299,13 @@
 
 建议严格按下面顺序推进：
 
-1. `doctor` 扩展
-2. `smoke` 命令
-3. `Anthropic-compatible` 正式 tool use
-4. `apply_patch` 多文件和失败诊断
-5. 审批交互
-6. observation / context 管理增强
+1. ~~`doctor` 扩展~~（已完成）
+2. ~~`smoke` 命令~~（已完成）
+3. ~~`.dscode/config.toml` 示例文件~~（已完成）
+4. `Anthropic-compatible` 正式 tool use
+5. `apply_patch` 多文件和失败诊断
+6. 审批交互
+7. observation / context 管理增强
 
 ## 最近里程碑
 

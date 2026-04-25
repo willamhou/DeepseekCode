@@ -11,5 +11,6 @@ pub fn run(cli: app::Cli) -> AppResult<()> {
         app::Command::Resume(args) => commands::resume::run(args),
         app::Command::Config(args) => commands::config::run(args),
         app::Command::Doctor(args) => commands::doctor::run(args),
+        app::Command::Smoke(args) => commands::smoke::run(args),
     }
 }

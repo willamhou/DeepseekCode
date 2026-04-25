@@ -1,0 +1,57 @@
+# DeepseekCode 示例配置
+#
+# 用法：
+#   1. 复制此文件为 `.dscode/config.toml`
+#         cp .dscode/config.example.toml .dscode/config.toml
+#   2. 设置环境变量
+#         export DEEPSEEK_API_KEY=sk-...
+#   3. 用 `dscode doctor` 验证配置生效
+#         dscode doctor
+#   4. 用 `dscode smoke` 验证远端可达
+#         dscode smoke                    # OpenAI-compatible 路径
+#         dscode smoke --flavor anthropic # Anthropic-compatible 路径
+#
+# 当前 v0.1 解析器是行级 key=value，不支持嵌套表头（如 [model]）。
+# 字符串值可加双引号也可不加，注释以 # 开头。
+
+# -----------------------------------------------------------------------------
+# model: DeepSeek 远端调用
+# -----------------------------------------------------------------------------
+
+# DeepSeek API base url
+# - OpenAI-compatible（默认，推荐）：调用 /chat/completions，使用正式 tool use
+# - Anthropic-compatible：以 /anthropic 结尾，调用 /messages（v0.1 走 JSON plan 回退）
+model.base_url = "https://api.deepseek.com"
+# model.base_url = "https://api.deepseek.com/anthropic"
+
+# DeepSeek 模型名
+# 常见值：deepseek-coder、deepseek-chat
+model.model = "deepseek-coder"
+
+# 读取 API key 的环境变量名
+# 仅指定变量名，不要把 key 本身写到这里
+model.api_key_env = "DEEPSEEK_API_KEY"
+
+# -----------------------------------------------------------------------------
+# approval: 写入与 shell 命令的审批策略
+# -----------------------------------------------------------------------------
+
+# 应用 patch 写入文件前是否要求确认
+# 用环境变量 DSCODE_AUTO_APPROVE_WRITES=1 可一次性放行
+approval.require_write_confirmation = true
+
+# 执行 run_shell 前是否要求确认
+# 用环境变量 DSCODE_AUTO_APPROVE_SHELL=1 可一次性放行
+approval.require_shell_confirmation = true
+
+# -----------------------------------------------------------------------------
+# workspace: 配置与会话目录
+# -----------------------------------------------------------------------------
+
+# 配置目录（相对于当前仓库根）
+# 默认 .dscode，包含 config.toml 与 sessions 子目录
+workspace.config_dir = ".dscode"
+
+# 会话快照目录
+# `dscode resume` 会从此目录读取上次会话
+workspace.session_dir = ".dscode/sessions"

@@ -1,5 +1,6 @@
 /target/
-/.dscode/
+/.dscode/*
+!/.dscode/config.example.toml
 /.idea/
 /.vscode/
 .DS_Store

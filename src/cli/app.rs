@@ -30,6 +30,7 @@ impl Cli {
                 print_default: args.iter().any(|arg| arg == "--print-default"),
             }),
             "doctor" => Command::Doctor(DoctorArgs {}),
+            "smoke" => Command::Smoke(parse_smoke_args(args)),
             _ => {
                 let mut combined = vec![first];
                 combined.extend(args);
@@ -54,6 +55,7 @@ pub enum Command {
     Resume(ResumeArgs),
     Config(ConfigArgs),
     Doctor(DoctorArgs),
+    Smoke(SmokeArgs),
 }
 
 impl Default for Command {
@@ -89,6 +91,50 @@ pub struct ConfigArgs {
 
 #[derive(Debug)]
 pub struct DoctorArgs {}
+
+#[derive(Debug, Default)]
+pub struct SmokeArgs {
+    pub flavor: Option<SmokeFlavor>,
+    pub prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum SmokeFlavor {
+    OpenAi,
+    Anthropic,
+}
+
+fn parse_smoke_args(args: Vec<String>) -> SmokeArgs {
+    let mut smoke = SmokeArgs::default();
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--flavor" => {
+                if index + 1 < args.len() {
+                    smoke.flavor = match args[index + 1].as_str() {
+                        "openai" | "openai-compatible" => Some(SmokeFlavor::OpenAi),
+                        "anthropic" | "anthropic-compatible" => Some(SmokeFlavor::Anthropic),
+                        _ => smoke.flavor,
+                    };
+                    index += 2;
+                    continue;
+                }
+            }
+            "--prompt" => {
+                if index + 1 < args.len() {
+                    smoke.prompt = Some(args[index + 1].clone());
+                    index += 2;
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+
+    smoke
+}
 
 fn parse_common_flags(args: Vec<String>) -> (Option<String>, Vec<String>) {
     let mut skill = None;
