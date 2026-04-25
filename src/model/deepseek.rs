@@ -37,15 +37,17 @@ impl DeepSeekClient {
 
     fn respond_remote_openai(&self, input: &ModelRequest, api_key: &str) -> AppResult<ModelResponse> {
         let endpoint = format!("{}/chat/completions", self.config.base_url.trim_end_matches('/'));
-        let system_prompt = build_remote_system_prompt(&input.system_prompt);
+        let system_prompt = build_openai_tool_system_prompt(&input.system_prompt);
         let user_prompt = build_user_prompt(input);
+        let tools = build_openai_tools(&input.available_tools);
         let body = format!(
             concat!(
                 "{{",
                 "\"model\":\"{}\",",
                 "\"temperature\":0,",
                 "\"max_tokens\":1024,",
-                "\"response_format\":{{\"type\":\"json_object\"}},",
+                "\"tool_choice\":\"auto\",",
+                "\"tools\":{},",
                 "\"messages\":[",
                 "{{\"role\":\"system\",\"content\":\"{}\"}},",
                 "{{\"role\":\"user\",\"content\":\"{}\"}}",
@@ -53,6 +55,7 @@ impl DeepSeekClient {
                 "}}"
             ),
             json_escape(&self.config.model),
+            tools,
             json_escape(&system_prompt),
             json_escape(&user_prompt)
         );
@@ -80,13 +83,12 @@ impl DeepSeekClient {
         }
 
         let body = String::from_utf8_lossy(&output.stdout);
-        let content = extract_json_string_field(&body, "content")?;
-        parse_plan_json(&content)
+        parse_openai_chat_completion(&body)
     }
 
     fn respond_remote_anthropic(&self, input: &ModelRequest, api_key: &str) -> AppResult<ModelResponse> {
         let endpoint = format!("{}/messages", self.config.base_url.trim_end_matches('/'));
-        let system_prompt = build_remote_system_prompt(&input.system_prompt);
+        let system_prompt = build_anthropic_plan_system_prompt(&input.system_prompt);
         let user_prompt = build_user_prompt(input);
         let body = format!(
             concat!(
@@ -307,7 +309,14 @@ fn api_flavor(base_url: &str) -> ApiFlavor {
     }
 }
 
-fn build_remote_system_prompt(base: &str) -> String {
+fn build_openai_tool_system_prompt(base: &str) -> String {
+    format!(
+        "{}\nUse the provided tools when a tool is needed. If no tool is needed, reply with a short plain-text summary.",
+        base
+    )
+}
+
+fn build_anthropic_plan_system_prompt(base: &str) -> String {
     format!(
         "{}\nReturn json only. Use this exact json schema:\n{{\"action\":\"finish|tool\",\"message\":\"short summary\",\"tool_name\":\"tool name or empty string\",\"arguments\":{{\"key\":\"value\"}}}}\nIf action is finish, set tool_name to an empty string and arguments to {{}}.\nIf action is tool, choose one listed tool and keep all argument values as strings.",
         base
@@ -345,11 +354,88 @@ fn build_user_prompt(input: &ModelRequest) -> String {
     prompt
 }
 
+fn build_openai_tools(names: &[String]) -> String {
+    let tools = names
+        .iter()
+        .filter_map(|name| openai_tool_spec(name))
+        .collect::<Vec<_>>();
+    format!("[{}]", tools.join(","))
+}
+
+fn openai_tool_spec(name: &str) -> Option<String> {
+    match name {
+        "list_files" => Some(r#"{"type":"function","function":{"name":"list_files","description":"List repository files and directories under a root path.","parameters":{"type":"object","properties":{"root":{"type":"string","description":"Root directory to list from, usually `.`."},"max_depth":{"type":"string","description":"Maximum directory depth to traverse, encoded as a string integer."},"limit":{"type":"string","description":"Maximum number of entries to return, encoded as a string integer."}},"required":["root","max_depth","limit"],"additionalProperties":false}}}"#.to_string()),
+        "read_file" => Some(r#"{"type":"function","function":{"name":"read_file","description":"Read a text file and return a numbered excerpt.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Path to the file."},"max_lines":{"type":"string","description":"Maximum number of lines to return, encoded as a string integer."}},"required":["path","max_lines"],"additionalProperties":false}}}"#.to_string()),
+        "search_text" => Some(r#"{"type":"function","function":{"name":"search_text","description":"Search for plain text occurrences in repository files.","parameters":{"type":"object","properties":{"root":{"type":"string","description":"Root directory to search from."},"query":{"type":"string","description":"Plain text query to find."},"limit":{"type":"string","description":"Maximum number of matches to return, encoded as a string integer."}},"required":["root","query","limit"],"additionalProperties":false}}}"#.to_string()),
+        "apply_patch" => Some(r#"{"type":"function","function":{"name":"apply_patch","description":"Apply a text replacement or a unified diff patch to files.","parameters":{"type":"object","properties":{"cwd":{"type":"string","description":"Working directory used when applying a unified diff patch."},"path":{"type":"string","description":"Target file path for direct replacement mode."},"find":{"type":"string","description":"Exact text to find for direct replacement mode."},"replace":{"type":"string","description":"Replacement text for direct replacement mode."},"replace_all":{"type":"string","description":"`true` to replace all occurrences in direct replacement mode, otherwise `false`."},"patch":{"type":"string","description":"Unified diff patch content. When provided, patch mode is used and path/find/replace are optional."}},"required":[],"additionalProperties":false}}}"#.to_string()),
+        "run_shell" => Some(r#"{"type":"function","function":{"name":"run_shell","description":"Run a safe allowlisted shell command in the repository.","parameters":{"type":"object","properties":{"cwd":{"type":"string","description":"Working directory for the command."},"command":{"type":"string","description":"Safe shell command to execute."}},"required":["cwd","command"],"additionalProperties":false}}}"#.to_string()),
+        "git_diff" => Some(r#"{"type":"function","function":{"name":"git_diff","description":"Show the current git diff for the workspace.","parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false}}}"#.to_string()),
+        _ => None,
+    }
+}
+
+fn parse_openai_chat_completion(body: &str) -> AppResult<ModelResponse> {
+    let root = parse_root_object(body)?;
+    let choices = root
+        .get("choices")
+        .and_then(json_as_array)
+        .ok_or_else(|| app_error("chat completion response missing `choices` array"))?;
+    let first_choice = choices
+        .first()
+        .and_then(json_as_object)
+        .ok_or_else(|| app_error("chat completion response missing first choice"))?;
+    let message = first_choice
+        .get("message")
+        .and_then(json_as_object)
+        .ok_or_else(|| app_error("chat completion response missing message object"))?;
+
+    if let Some(tool_calls) = message.get("tool_calls").and_then(json_as_array) {
+        let first_call = tool_calls
+            .first()
+            .and_then(json_as_object)
+            .ok_or_else(|| app_error("tool_calls array was empty"))?;
+        let function = first_call
+            .get("function")
+            .and_then(json_as_object)
+            .ok_or_else(|| app_error("tool call missing function object"))?;
+        let tool_name = function
+            .get("name")
+            .and_then(json_as_string)
+            .ok_or_else(|| app_error("tool call missing function name"))?;
+        let arguments_raw = function
+            .get("arguments")
+            .and_then(json_as_string)
+            .ok_or_else(|| app_error("tool call missing function arguments"))?;
+        let arguments = parse_tool_arguments(arguments_raw)?;
+        let assistant_message = message
+            .get("content")
+            .and_then(json_as_string)
+            .unwrap_or("DeepSeek selected a tool.")
+            .to_string();
+
+        return Ok(ModelResponse {
+            message: assistant_message,
+            action: ModelAction::CallTool {
+                tool_name: tool_name.to_string(),
+                input: ToolInput { args: arguments },
+            },
+        });
+    }
+
+    let message = message
+        .get("content")
+        .and_then(json_as_string)
+        .unwrap_or("DeepSeek returned no content.")
+        .to_string();
+
+    Ok(ModelResponse {
+        message,
+        action: ModelAction::Finish,
+    })
+}
+
 fn parse_plan_json(content: &str) -> AppResult<ModelResponse> {
-    let value = parse_json_value(content.trim())?;
-    let JsonValue::Object(root) = value else {
-        return Err(app_error("planner json must be an object"));
-    };
+    let root = parse_root_object(content)?;
 
     let action = root
         .get("action")
@@ -426,7 +512,10 @@ fn extract_json_string_field(body: &str, field_name: &str) -> AppResult<String> 
 #[derive(Debug, Clone)]
 enum JsonValue {
     Object(BTreeMap<String, JsonValue>),
+    Array(Vec<JsonValue>),
     String(String),
+    Number(String),
+    Bool(bool),
     Null,
 }
 
@@ -444,7 +533,10 @@ fn parse_value(bytes: &[u8], index: &mut usize) -> AppResult<JsonValue> {
 
     match bytes[*index] {
         b'{' => parse_object(bytes, index),
+        b'[' => parse_array(bytes, index),
         b'"' => Ok(JsonValue::String(parse_string(bytes, index)?)),
+        b't' => parse_bool(bytes, index),
+        b'f' => parse_bool(bytes, index),
         b'n' => {
             if bytes.get(*index..*index + 4) == Some(b"null") {
                 *index += 4;
@@ -453,7 +545,8 @@ fn parse_value(bytes: &[u8], index: &mut usize) -> AppResult<JsonValue> {
                 Err(app_error("invalid json token"))
             }
         }
-        _ => Err(app_error("unsupported json value; expected object, string, or null")),
+        b'-' | b'0'..=b'9' => parse_number(bytes, index),
+        _ => Err(app_error("unsupported json value")),
     }
 }
 
@@ -494,6 +587,35 @@ fn parse_object(bytes: &[u8], index: &mut usize) -> AppResult<JsonValue> {
     Ok(JsonValue::Object(map))
 }
 
+fn parse_array(bytes: &[u8], index: &mut usize) -> AppResult<JsonValue> {
+    let mut items = Vec::new();
+    *index += 1;
+
+    loop {
+        skip_ws(bytes, index);
+        if *index >= bytes.len() {
+            return Err(app_error("unterminated json array"));
+        }
+        if bytes[*index] == b']' {
+            *index += 1;
+            break;
+        }
+
+        items.push(parse_value(bytes, index)?);
+        skip_ws(bytes, index);
+        match bytes.get(*index) {
+            Some(b',') => *index += 1,
+            Some(b']') => {
+                *index += 1;
+                break;
+            }
+            _ => return Err(app_error("expected `,` or `]` in json array")),
+        }
+    }
+
+    Ok(JsonValue::Array(items))
+}
+
 fn parse_string(bytes: &[u8], index: &mut usize) -> AppResult<String> {
     if bytes.get(*index) != Some(&b'"') {
         return Err(app_error("expected json string"));
@@ -530,6 +652,30 @@ fn parse_string(bytes: &[u8], index: &mut usize) -> AppResult<String> {
     Err(app_error("unterminated json string"))
 }
 
+fn parse_bool(bytes: &[u8], index: &mut usize) -> AppResult<JsonValue> {
+    if bytes.get(*index..*index + 4) == Some(b"true") {
+        *index += 4;
+        Ok(JsonValue::Bool(true))
+    } else if bytes.get(*index..*index + 5) == Some(b"false") {
+        *index += 5;
+        Ok(JsonValue::Bool(false))
+    } else {
+        Err(app_error("invalid json boolean"))
+    }
+}
+
+fn parse_number(bytes: &[u8], index: &mut usize) -> AppResult<JsonValue> {
+    let start = *index;
+    while *index < bytes.len()
+        && matches!(bytes[*index], b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9')
+    {
+        *index += 1;
+    }
+    let number = std::str::from_utf8(&bytes[start..*index])
+        .map_err(|_| app_error("invalid utf8 in json number"))?;
+    Ok(JsonValue::Number(number.to_string()))
+}
+
 fn skip_ws(bytes: &[u8], index: &mut usize) {
     while *index < bytes.len() && bytes[*index].is_ascii_whitespace() {
         *index += 1;
@@ -539,6 +685,20 @@ fn skip_ws(bytes: &[u8], index: &mut usize) {
 fn json_as_string(value: &JsonValue) -> Option<&str> {
     match value {
         JsonValue::String(value) => Some(value.as_str()),
+        _ => None,
+    }
+}
+
+fn json_as_object(value: &JsonValue) -> Option<&BTreeMap<String, JsonValue>> {
+    match value {
+        JsonValue::Object(value) => Some(value),
+        _ => None,
+    }
+}
+
+fn json_as_array(value: &JsonValue) -> Option<&Vec<JsonValue>> {
+    match value {
+        JsonValue::Array(value) => Some(value),
         _ => None,
     }
 }
@@ -556,6 +716,41 @@ fn json_as_string_map(value: &JsonValue) -> AppResult<BTreeMap<String, String>> 
             )));
         };
         result.insert(key.clone(), value.to_string());
+    }
+    Ok(result)
+}
+
+fn parse_root_object(input: &str) -> AppResult<BTreeMap<String, JsonValue>> {
+    let value = parse_json_value(input.trim())?;
+    let JsonValue::Object(root) = value else {
+        return Err(app_error("json root must be an object"));
+    };
+    Ok(root)
+}
+
+fn parse_tool_arguments(input: &str) -> AppResult<BTreeMap<String, String>> {
+    let root = parse_root_object(input)?;
+    let mut result = BTreeMap::new();
+    for (key, value) in root {
+        match value {
+            JsonValue::String(value) => {
+                result.insert(key, value);
+            }
+            JsonValue::Number(value) => {
+                result.insert(key, value);
+            }
+            JsonValue::Bool(value) => {
+                result.insert(key, if value { "true" } else { "false" }.to_string());
+            }
+            JsonValue::Null => {
+                result.insert(key, "null".to_string());
+            }
+            JsonValue::Object(_) | JsonValue::Array(_) => {
+                return Err(app_error(format!(
+                    "tool argument `{key}` must be a scalar json value"
+                )));
+            }
+        }
     }
     Ok(result)
 }
@@ -659,7 +854,10 @@ fn quoted_segments(task: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{api_flavor, extract_json_string_field, parse_plan_json, ApiFlavor};
+    use super::{
+        api_flavor, build_openai_tools, extract_json_string_field, parse_openai_chat_completion,
+        parse_plan_json, ApiFlavor,
+    };
     use crate::model::protocol::ModelAction;
 
     #[test]
@@ -701,5 +899,48 @@ mod tests {
             api_flavor("https://api.deepseek.com"),
             ApiFlavor::OpenAi
         ));
+    }
+
+    #[test]
+    fn parses_openai_tool_call_response() {
+        let body = r#"{
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": null,
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "read_file",
+                                    "arguments": "{\"path\":\"README.md\",\"max_lines\":\"20\"}"
+                                }
+                            }
+                        ]
+                    },
+                    "finish_reason": "tool_calls",
+                    "index": 0
+                }
+            ]
+        }"#;
+
+        let response = parse_openai_chat_completion(body).unwrap();
+        match response.action {
+            ModelAction::CallTool { tool_name, input } => {
+                assert_eq!(tool_name, "read_file");
+                assert_eq!(input.get("path"), Some("README.md"));
+                assert_eq!(input.get("max_lines"), Some("20"));
+            }
+            ModelAction::Finish => panic!("expected tool call"),
+        }
+    }
+
+    #[test]
+    fn builds_openai_tool_specs_for_known_tools() {
+        let tools = build_openai_tools(&["read_file".to_string(), "git_diff".to_string()]);
+        assert!(tools.contains("\"name\":\"read_file\""));
+        assert!(tools.contains("\"name\":\"git_diff\""));
     }
 }
