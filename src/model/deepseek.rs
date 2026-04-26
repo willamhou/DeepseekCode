@@ -143,6 +143,27 @@ impl DeepSeekClient {
             .iter()
             .map(|observation| observation.tool_name.as_str())
             .collect::<Vec<_>>();
+        let succeeded_tools = input
+            .observations
+            .iter()
+            .filter(|observation| !observation.is_failure())
+            .map(|observation| observation.tool_name.as_str())
+            .collect::<Vec<_>>();
+        let last_apply_patch = input
+            .observations
+            .iter()
+            .rev()
+            .find(|observation| observation.tool_name == "apply_patch");
+        let last_apply_patch_failed = last_apply_patch
+            .map(|observation| observation.is_failure())
+            .unwrap_or(false);
+        let last_apply_patch_used_patch_mode = last_apply_patch
+            .map(|observation| {
+                observation.is_failure() && observation.summary.contains("dry-run")
+                    || observation.is_failure() && observation.summary.contains("hunk")
+                    || observation.is_failure() && observation.summary.contains("patch ")
+            })
+            .unwrap_or(false);
         let search_query = derive_search_query(&task);
         let edit_request = derive_edit_request(&task);
 
@@ -197,22 +218,62 @@ impl DeepSeekClient {
         }
 
         if let Some(edit_request) = edit_request.as_ref() {
-            if !used_tools.contains(&"apply_patch")
-                && input.available_tools.iter().any(|name| name == "apply_patch")
-            {
-                return ModelResponse {
-                    message: format!(
-                        "{} planner is applying a direct text replacement in {}.",
-                        self.config.model, edit_request.path
-                    ),
-                    action: ModelAction::CallTool {
-                        tool_name: "apply_patch".to_string(),
-                        input: ToolInput::new()
-                            .with_arg("path", edit_request.path.clone())
-                            .with_arg("find", edit_request.find.clone())
-                            .with_arg("replace", edit_request.replace.clone()),
-                    },
-                };
+            let apply_patch_available =
+                input.available_tools.iter().any(|name| name == "apply_patch");
+            let already_succeeded = succeeded_tools.contains(&"apply_patch");
+            let already_attempted = used_tools.contains(&"apply_patch");
+
+            if apply_patch_available && !already_succeeded {
+                if !already_attempted {
+                    if let Some(plan) = crate::tools::apply_patch::build_single_line_diff(
+                        &edit_request.path,
+                        &edit_request.find,
+                        &edit_request.replace,
+                    ) {
+                        return ModelResponse {
+                            message: format!(
+                                "{} planner is applying a unified diff patch in {}.",
+                                self.config.model, edit_request.path
+                            ),
+                            action: ModelAction::CallTool {
+                                tool_name: "apply_patch".to_string(),
+                                input: ToolInput::new()
+                                    .with_arg("cwd", plan.cwd)
+                                    .with_arg("patch", plan.patch),
+                            },
+                        };
+                    }
+
+                    return ModelResponse {
+                        message: format!(
+                            "{} planner is applying a direct text replacement in {} (patch mode unavailable for this edit).",
+                            self.config.model, edit_request.path
+                        ),
+                        action: ModelAction::CallTool {
+                            tool_name: "apply_patch".to_string(),
+                            input: ToolInput::new()
+                                .with_arg("path", edit_request.path.clone())
+                                .with_arg("find", edit_request.find.clone())
+                                .with_arg("replace", edit_request.replace.clone()),
+                        },
+                    };
+                }
+
+                if last_apply_patch_failed && last_apply_patch_used_patch_mode {
+                    return ModelResponse {
+                        message: format!(
+                            "{} planner retrying with text replacement after patch-mode failure in {}.",
+                            self.config.model, edit_request.path
+                        ),
+                        action: ModelAction::CallTool {
+                            tool_name: "apply_patch".to_string(),
+                            input: ToolInput::new()
+                                .with_arg("path", edit_request.path.clone())
+                                .with_arg("find", edit_request.find.clone())
+                                .with_arg("replace", edit_request.replace.clone()),
+                        },
+                    };
+                }
             }
         }
 
@@ -232,7 +293,7 @@ impl DeepSeekClient {
             }
         }
 
-        if used_tools.contains(&"apply_patch")
+        if succeeded_tools.contains(&"apply_patch")
             && !used_tools.contains(&"git_diff")
             && input.available_tools.iter().any(|name| name == "git_diff")
         {
@@ -856,9 +917,14 @@ fn quoted_segments(task: &str) -> Vec<String> {
 mod tests {
     use super::{
         api_flavor, build_openai_tools, extract_json_string_field, parse_openai_chat_completion,
-        parse_plan_json, ApiFlavor,
+        parse_plan_json, ApiFlavor, DeepSeekClient,
     };
-    use crate::model::protocol::ModelAction;
+    use crate::config::types::ModelConfig;
+    use crate::model::client::ModelClient;
+    use crate::model::protocol::{ModelAction, ModelRequest, Observation};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn parses_planner_json_tool_response() {
@@ -942,5 +1008,180 @@ mod tests {
         let tools = build_openai_tools(&["read_file".to_string(), "git_diff".to_string()]);
         assert!(tools.contains("\"name\":\"read_file\""));
         assert!(tools.contains("\"name\":\"git_diff\""));
+    }
+
+    fn unique_planner_dir() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!("dscode_planner_test_{nanos}"))
+    }
+
+    fn planner() -> DeepSeekClient {
+        DeepSeekClient {
+            config: ModelConfig {
+                base_url: "https://api.deepseek.com".to_string(),
+                model: "deepseek-coder".to_string(),
+                api_key_env: "DSCODE_TEST_NO_KEY".to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn offline_planner_emits_patch_mode_when_possible() {
+        let dir = unique_planner_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("note.txt");
+        fs::write(&file, "alpha\nbeta gamma\ndelta\n").unwrap();
+        let path = file.to_str().unwrap().to_string();
+
+        let request = ModelRequest {
+            system_prompt: String::new(),
+            task: format!("replace \"gamma\" with \"GAMMA\" in {path}"),
+            profile_name: "generic".to_string(),
+            primary_file: None,
+            suggested_test_command: None,
+            available_tools: vec!["apply_patch".to_string(), "read_file".to_string(), "list_files".to_string()],
+            observations: vec![
+                Observation::ok("list_files", "noop"),
+                Observation::ok("read_file", "noop"),
+            ],
+        };
+
+        let response = planner().respond(request).unwrap();
+        match response.action {
+            ModelAction::CallTool { tool_name, input } => {
+                assert_eq!(tool_name, "apply_patch");
+                let patch = input.get("patch").expect("expected patch arg");
+                assert!(patch.contains("@@ -2,1 +2,1 @@"), "patch: {patch}");
+                assert!(patch.contains("-beta gamma"), "patch: {patch}");
+                assert!(patch.contains("+beta GAMMA"), "patch: {patch}");
+                assert!(patch.contains("--- note.txt"), "patch: {patch}");
+                assert_eq!(input.get("cwd"), Some(dir.to_string_lossy().as_ref()));
+                assert!(input.get("find").is_none());
+            }
+            ModelAction::Finish => panic!("expected tool call"),
+        }
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn offline_planner_falls_back_to_text_replace_when_patch_unavailable() {
+        let dir = unique_planner_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("dup.txt");
+        fs::write(&file, "alpha\nalpha\n").unwrap();
+        let path = file.to_str().unwrap().to_string();
+
+        let request = ModelRequest {
+            system_prompt: String::new(),
+            task: format!("replace \"alpha\" with \"ALPHA\" in {path}"),
+            profile_name: "generic".to_string(),
+            primary_file: None,
+            suggested_test_command: None,
+            available_tools: vec!["apply_patch".to_string(), "read_file".to_string(), "list_files".to_string()],
+            observations: vec![
+                Observation::ok("list_files", "noop"),
+                Observation::ok("read_file", "noop"),
+            ],
+        };
+
+        let response = planner().respond(request).unwrap();
+        match response.action {
+            ModelAction::CallTool { tool_name, input } => {
+                assert_eq!(tool_name, "apply_patch");
+                assert!(input.get("patch").is_none());
+                assert_eq!(input.get("find"), Some("alpha"));
+                assert_eq!(input.get("replace"), Some("ALPHA"));
+            }
+            ModelAction::Finish => panic!("expected tool call"),
+        }
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn offline_planner_retries_with_text_replace_after_patch_failure() {
+        let dir = unique_planner_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("note.txt");
+        fs::write(&file, "alpha\nbeta gamma\ndelta\n").unwrap();
+        let path = file.to_str().unwrap().to_string();
+
+        let request = ModelRequest {
+            system_prompt: String::new(),
+            task: format!("replace \"gamma\" with \"GAMMA\" in {path}"),
+            profile_name: "generic".to_string(),
+            primary_file: None,
+            suggested_test_command: None,
+            available_tools: vec!["apply_patch".to_string(), "read_file".to_string(), "list_files".to_string()],
+            observations: vec![
+                Observation::ok("list_files", "noop"),
+                Observation::ok("read_file", "noop"),
+                Observation::failed(
+                    "apply_patch",
+                    "patch dry-run failed: hunk #1 did not match the target file (the surrounding context drifted)",
+                ),
+            ],
+        };
+
+        let response = planner().respond(request).unwrap();
+        match response.action {
+            ModelAction::CallTool { tool_name, input } => {
+                assert_eq!(tool_name, "apply_patch");
+                assert!(input.get("patch").is_none(), "expected text-replace retry");
+                assert_eq!(input.get("find"), Some("gamma"));
+                assert_eq!(input.get("replace"), Some("GAMMA"));
+            }
+            ModelAction::Finish => panic!("expected retry tool call"),
+        }
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn offline_planner_skips_git_diff_when_apply_patch_failed() {
+        let dir = unique_planner_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("note.txt");
+        fs::write(&file, "alpha\nbeta\n").unwrap();
+        let path = file.to_str().unwrap().to_string();
+
+        let request = ModelRequest {
+            system_prompt: String::new(),
+            task: format!("replace \"missing\" with \"x\" in {path}"),
+            profile_name: "generic".to_string(),
+            primary_file: None,
+            suggested_test_command: None,
+            available_tools: vec![
+                "apply_patch".to_string(),
+                "read_file".to_string(),
+                "list_files".to_string(),
+                "git_diff".to_string(),
+            ],
+            observations: vec![
+                Observation::ok("list_files", "noop"),
+                Observation::ok("read_file", "noop"),
+                Observation::failed(
+                    "apply_patch",
+                    "apply_patch requires a path",
+                ),
+            ],
+        };
+
+        let response = planner().respond(request).unwrap();
+        match response.action {
+            ModelAction::CallTool { tool_name, .. } => {
+                assert_ne!(
+                    tool_name, "git_diff",
+                    "git_diff should not run after a failed apply_patch"
+                );
+            }
+            ModelAction::Finish => {}
+        }
+
+        let _ = fs::remove_dir_all(dir);
     }
 }

@@ -80,11 +80,20 @@ impl AgentLoop {
 
             match response.action {
                 ModelAction::CallTool { tool_name, input } => {
-                    let output = registry.execute_with_policy(&tool_name, input, &policy)?;
-                    let summary = limit_summary(&output.summary, 40);
-                    println!("Tool `{tool_name}` output:");
-                    println!("{summary}");
-                    observations.push(Observation { tool_name, summary });
+                    match registry.execute_with_policy(&tool_name, input, &policy) {
+                        Ok(output) => {
+                            let summary = limit_summary(&output.summary, 40);
+                            println!("Tool `{tool_name}` output:");
+                            println!("{summary}");
+                            observations.push(Observation::ok(tool_name, summary));
+                        }
+                        Err(error) => {
+                            let summary = limit_summary(&error.to_string(), 40);
+                            println!("Tool `{tool_name}` FAILED:");
+                            println!("{summary}");
+                            observations.push(Observation::failed(tool_name, summary));
+                        }
+                    }
                 }
                 ModelAction::Finish => {
                     break;

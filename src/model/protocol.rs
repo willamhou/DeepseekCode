@@ -15,6 +15,35 @@ pub struct ModelRequest {
 pub struct Observation {
     pub tool_name: String,
     pub summary: String,
+    pub status: ObservationStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObservationStatus {
+    Ok,
+    Failed,
+}
+
+impl Observation {
+    pub fn ok(tool_name: impl Into<String>, summary: impl Into<String>) -> Self {
+        Self {
+            tool_name: tool_name.into(),
+            summary: summary.into(),
+            status: ObservationStatus::Ok,
+        }
+    }
+
+    pub fn failed(tool_name: impl Into<String>, summary: impl Into<String>) -> Self {
+        Self {
+            tool_name: tool_name.into(),
+            summary: summary.into(),
+            status: ObservationStatus::Failed,
+        }
+    }
+
+    pub fn is_failure(&self) -> bool {
+        matches!(self.status, ObservationStatus::Failed)
+    }
 }
 
 #[derive(Debug, Clone)]

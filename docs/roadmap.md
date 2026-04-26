@@ -77,9 +77,12 @@
   - 查看工作区 diff
 - `apply_patch`
   - 文本替换模式
-  - unified diff patch 模式
+  - unified diff patch 模式（多文件）
   - patch dry-run 校验
-  - patch 头路径归一化
+  - patch 头路径归一化（支持 git `a/` `b/` 前缀与 `/dev/null`）
+  - cwd 路径范围校验（拒绝 `..` 逃逸与 cwd 外绝对路径）
+  - 失败诊断分类（缺文件 / hunk 失败 / 已应用 / 格式错误）
+  - 成功摘要按 modified / created / deleted / renamed 分项列出
 
 ### Planner / Runtime
 
@@ -91,6 +94,8 @@
   - 最终结束
 - 已支持简单编辑任务：
   - `replace "a" with "b" in path`
+  - 默认走 patch 模式（构造 unified diff，含正确 `cwd` 与基名）
+  - patch 不可构造时（多匹配 / 多行 / 缺文件）回退到文本替换
 - 已支持 skill 提示增强
 - 已支持 session snapshot 保存
 
@@ -129,19 +134,23 @@
 - 当前执行环境无法直接验证外网访问
   - 真实 DeepSeek 在线调用代码已接好，但未在当前会话里做 live API 验证
 - `Anthropic-compatible` 路径还没有升级到正式 tool use
-- `apply_patch` 仍偏最小实现
-  - 还缺更强的多文件 patch 诊断和更严格的路径控制
+- `apply_patch` 多文件 + 路径范围 + 失败诊断已落地
+- planner 编辑路径默认走 patch 模式，不可构造时回退到文本替换
+- 工具失败已转为观察项，agent loop 不再因错误退出
+- patch 应用后自动 git_diff 复核（仅在成功时触发）
+- patch 模式失败可单次回退到文本替换重试
 - 审批还不是交互式 UI
   - 目前主要依赖 policy 和环境变量放行
 - 观测上下文裁剪还比较粗
-- 还没有真实的“失败后重新规划和继续修复”重试策略
+- 失败重试策略仍较窄（仅 apply_patch 单次 patch→text 回退）
+  - 其他工具失败后只是被记录为观察项并继续走启发式
 
 ## 已验证
 
 这些能力已经在当前本地环境里验证过：
 
 - `cargo check --offline`
-- `cargo test --offline`（25 项单测全部通过）
+- `cargo test --offline`（46 项单测全部通过）
 - `cargo run --offline -- doctor` 输出五段诊断（workspace / model / api key / network / hints）
 - `cargo run --offline -- smoke` 与 `cargo run --offline -- smoke --flavor anthropic` 在缺少 key 时给出预检失败
 - `cargo run --offline -- "inspect repository"`
@@ -178,14 +187,20 @@
   - `.dscode/config.example.toml` 含完整 key 注释与两种 base_url 模式说明
   - 通过 `cp .dscode/config.example.toml .dscode/config.toml && dscode doctor` 验证可解析
 
-### P1: 真实编辑能力增强
+### P1: 真实编辑能力增强：已完成
 
-- 扩展 `apply_patch`
-  - 更清晰的 patch 失败诊断
-  - 多文件 patch 支持
-  - 更明确的路径范围限制
-- 让 planner 能生成 patch 模式编辑，而不是只会直接替换
-- 在 patch 应用后自动查看 diff、必要时继续修复
+- 扩展 `apply_patch`：已完成
+  - 失败诊断分类（缺文件 / hunk 失败 / 已应用 / 格式错误）
+  - 多文件 patch 支持，成功摘要按 modified / created / deleted / renamed 分项
+  - cwd 路径范围限制（拒绝 `..` 逃逸与 cwd 外绝对路径）
+  - 支持 git 风格 `a/` `b/` 前缀与 `/dev/null` 创建/删除标记
+- 让 planner 能生成 patch 模式编辑：已完成
+  - 离线 planner 通过 `build_single_line_diff` 构造单行 unified diff，附正确 `cwd` 与基名
+  - patch 不可构造（多匹配 / 多行 / 缺文件）时回退到文本替换
+- 在 patch 应用后自动查看 diff、必要时继续修复：已完成基础版
+  - `Observation` 增加 `Ok` / `Failed` 状态，agent loop 把工具异常转为观察项而非中断
+  - `git_diff` 复核仅在 `apply_patch` 成功后才触发
+  - patch 模式失败 + 同一编辑可文本替换时单次回退重试
 
 ### P2: Anthropic 兼容路径补齐
 
@@ -280,11 +295,11 @@
 
 ### Phase 7: 更强编辑能力
 
-- 多文件 patch
-- 更稳定的 edit-retry loop
-- 更像真实 code agent 的最小步编辑策略
+- 多文件 patch：已完成（含路径范围校验与失败分类）
+- 更稳定的 edit-retry loop：已完成基础版（apply_patch patch→text 单次回退；工具异常变观察项）
+- 更像真实 code agent 的最小步编辑策略：未完成
 
-状态：未完成
+状态：进行中
 
 ### Phase 8: 高级能力
 
@@ -303,9 +318,11 @@
 2. ~~`smoke` 命令~~（已完成）
 3. ~~`.dscode/config.toml` 示例文件~~（已完成）
 4. `Anthropic-compatible` 正式 tool use
-5. `apply_patch` 多文件和失败诊断
-6. 审批交互
-7. observation / context 管理增强
+5. ~~`apply_patch` 多文件和失败诊断~~（已完成）
+6. ~~planner 生成 patch 模式编辑~~（已完成）
+7. ~~patch 应用后自动 git_diff 复核与失败重试~~（已完成基础版）
+8. 审批交互
+9. observation / context 管理增强
 
 ## 最近里程碑
 
