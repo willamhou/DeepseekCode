@@ -98,6 +98,9 @@
   - patch 不可构造时（多匹配 / 多行 / 缺文件）回退到文本替换
 - 已支持 skill 提示增强
 - 已支持 session snapshot 保存
+- Observation 已分类（file_excerpt / listing / search_results / patch / diff / shell_output / other）
+  - 按类裁剪：shell 取尾部、文件/搜索/列表取头部、diff 保留 hunk header
+  - 同类型只保留最新内容，旧观察被替换为 `(superseded ...)` 桩，降低上下文污染
 
 ### Skill / Policy
 
@@ -140,7 +143,6 @@
 - patch 模式失败可单次回退到文本替换重试
 - 审批还不是交互式 UI
   - 目前主要依赖 policy 和环境变量放行
-- 观测上下文裁剪还比较粗
 - 失败重试策略仍较窄（仅 apply_patch 单次 patch→text 回退）
   - 其他工具失败后只是被记录为观察项并继续走启发式
 
@@ -149,7 +151,7 @@
 这些能力已经在当前本地环境里验证过：
 
 - `cargo check --offline`
-- `cargo test --offline`（50 项单测全部通过）
+- `cargo test --offline`（58 项单测全部通过）
 - `cargo run --offline -- doctor` 输出五段诊断（workspace / model / api key / network / hints）
 - `cargo run --offline -- smoke` 与 `cargo run --offline -- smoke --flavor anthropic` 在缺少 key 时给出预检失败
 - `cargo run --offline -- "inspect repository"`
@@ -215,15 +217,11 @@
 - 增加更清晰的错误输出
 - 区分“策略拒绝”和“工具失败”
 
-### P4: 上下文与稳定性
+### P4: 上下文与稳定性：已完成基础版
 
-- 更细的 observation 类型划分
-  - 文件片段
-  - shell 输出
-  - diff
-  - 搜索结果
-- 更稳定的摘要与裁剪策略
-- 降低大输出反复回填造成的上下文污染
+- ~~更细的 observation 类型划分~~（已完成，含 file_excerpt / listing / search_results / patch / diff / shell_output / other 七类）
+- ~~更稳定的摘要与裁剪策略~~（已完成；shell 尾部 / 文件头部 / diff 保留 hunk header）
+- ~~降低大输出反复回填造成的上下文污染~~（已完成；同类只保留最新观察，旧的转为 superseded 桩）
 
 ## 完整 Roadmap
 
@@ -321,7 +319,7 @@
 6. ~~planner 生成 patch 模式编辑~~（已完成）
 7. ~~patch 应用后自动 git_diff 复核与失败重试~~（已完成基础版）
 8. 审批交互
-9. observation / context 管理增强
+9. ~~observation / context 管理增强~~（已完成基础版）
 
 ## 最近里程碑
 

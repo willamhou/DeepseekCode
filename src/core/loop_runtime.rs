@@ -1,13 +1,14 @@
 use crate::config::types::AppConfig;
 use crate::core::context::TaskContext;
 use crate::core::memory::MemoryState;
+use crate::core::observations::{compact_observations, summarize_for_kind};
 use crate::core::session::{SessionSnapshot, SessionStore};
 use crate::error::AppResult;
 use crate::language::detect::detect_profile;
 use crate::language::infer::default_test_command;
 use crate::model::client::ModelClient;
 use crate::model::deepseek::DeepSeekClient;
-use crate::model::protocol::{ModelAction, ModelRequest, Observation};
+use crate::model::protocol::{ModelAction, ModelRequest, Observation, ObservationKind};
 use crate::skills::registry::SkillRegistry;
 use crate::skills::resolver::resolve_skill;
 use crate::skills::schema::SkillSpec;
@@ -71,7 +72,7 @@ impl AgentLoop {
                     .into_iter()
                     .map(str::to_string)
                     .collect(),
-                observations: observations.clone(),
+                observations: compact_observations(&observations),
             };
 
             let response = client.respond(request)?;
@@ -82,14 +83,16 @@ impl AgentLoop {
                 ModelAction::CallTool { tool_name, input } => {
                     match registry.execute_with_policy(&tool_name, input, &policy) {
                         Ok(output) => {
-                            let summary = limit_summary(&output.summary, 40);
-                            println!("Tool `{tool_name}` output:");
+                            let kind = ObservationKind::from_tool_name(&tool_name);
+                            let summary = summarize_for_kind(&output.summary, kind);
+                            println!("Tool `{tool_name}` output [{}]:", kind.label());
                             println!("{summary}");
                             observations.push(Observation::ok(tool_name, summary));
                         }
                         Err(error) => {
-                            let summary = limit_summary(&error.to_string(), 40);
-                            println!("Tool `{tool_name}` FAILED:");
+                            let kind = ObservationKind::from_tool_name(&tool_name);
+                            let summary = summarize_for_kind(&error.to_string(), kind);
+                            println!("Tool `{tool_name}` FAILED [{}]:", kind.label());
                             println!("{summary}");
                             observations.push(Observation::failed(tool_name, summary));
                         }
@@ -142,11 +145,3 @@ fn build_system_prompt(skill_name: Option<&SkillSpec>) -> String {
     prompt
 }
 
-fn limit_summary(summary: &str, max_lines: usize) -> String {
-    let lines = summary.lines().take(max_lines).collect::<Vec<_>>();
-    let mut output = lines.join("\n");
-    if summary.lines().count() > max_lines {
-        output.push_str("\n... truncated ...");
-    }
-    output
-}
