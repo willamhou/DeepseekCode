@@ -20,7 +20,7 @@
 - 可运行离线 planner loop
 - DeepSeek 远端传输层已接入：
   - `OpenAI-compatible` 路径支持正式 `tools` / function-calling
-  - `Anthropic-compatible` 路径保留 JSON plan 回退
+  - `Anthropic-compatible` 路径支持正式 `tool_use` content block，输入支持字符串与数值
 - 工具执行受策略约束：
   - `allowed_tools`
   - `shell_allowlist`
@@ -125,7 +125,7 @@
   - 正式 `tools` / function-calling
 - `Anthropic-compatible` 路径：
   - `/messages`
-  - 当前走 JSON plan 回退
+  - 正式 `tools` 数组 + `tool_use` content block 解析，输入接受字符串/数值/布尔/null
 
 ## 当前限制
 
@@ -133,7 +133,6 @@
 
 - 当前执行环境无法直接验证外网访问
   - 真实 DeepSeek 在线调用代码已接好，但未在当前会话里做 live API 验证
-- `Anthropic-compatible` 路径还没有升级到正式 tool use
 - `apply_patch` 多文件 + 路径范围 + 失败诊断已落地
 - planner 编辑路径默认走 patch 模式，不可构造时回退到文本替换
 - 工具失败已转为观察项，agent loop 不再因错误退出
@@ -150,7 +149,7 @@
 这些能力已经在当前本地环境里验证过：
 
 - `cargo check --offline`
-- `cargo test --offline`（46 项单测全部通过）
+- `cargo test --offline`（50 项单测全部通过）
 - `cargo run --offline -- doctor` 输出五段诊断（workspace / model / api key / network / hints）
 - `cargo run --offline -- smoke` 与 `cargo run --offline -- smoke --flavor anthropic` 在缺少 key 时给出预检失败
 - `cargo run --offline -- "inspect repository"`
@@ -202,11 +201,11 @@
   - `git_diff` 复核仅在 `apply_patch` 成功后才触发
   - patch 模式失败 + 同一编辑可文本替换时单次回退重试
 
-### P2: Anthropic 兼容路径补齐
+### P2: Anthropic 兼容路径补齐：已完成
 
-- 将 Anthropic 路径从 JSON plan 回退升级为正式 tool use
-- 对齐 OpenAI-compatible 路径的能力边界
-- 统一远端结果到同一个 `ModelAction` 抽象
+- ~~将 Anthropic 路径从 JSON plan 回退升级为正式 tool use~~（已完成）
+- ~~对齐 OpenAI-compatible 路径的能力边界~~（已完成；同一组工具描述同时下发）
+- ~~统一远端结果到同一个 `ModelAction` 抽象~~（已完成；两条路径都返回 `ModelAction::CallTool` / `Finish`）
 
 ### P3: 审批与执行体验
 
@@ -273,7 +272,7 @@
 状态：
 
 - OpenAI-compatible：已完成基础版，已接正式 tool-calling
-- Anthropic-compatible：已完成基础版，但仍需升级到正式 tool use
+- Anthropic-compatible：已完成基础版，已接正式 `tool_use` content block
 
 ### Phase 5: 执行策略与安全
 
@@ -317,7 +316,7 @@
 1. ~~`doctor` 扩展~~（已完成）
 2. ~~`smoke` 命令~~（已完成）
 3. ~~`.dscode/config.toml` 示例文件~~（已完成）
-4. `Anthropic-compatible` 正式 tool use
+4. ~~`Anthropic-compatible` 正式 tool use~~（已完成）
 5. ~~`apply_patch` 多文件和失败诊断~~（已完成）
 6. ~~planner 生成 patch 模式编辑~~（已完成）
 7. ~~patch 应用后自动 git_diff 复核与失败重试~~（已完成基础版）

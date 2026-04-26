@@ -88,13 +88,16 @@ impl DeepSeekClient {
 
     fn respond_remote_anthropic(&self, input: &ModelRequest, api_key: &str) -> AppResult<ModelResponse> {
         let endpoint = format!("{}/messages", self.config.base_url.trim_end_matches('/'));
-        let system_prompt = build_anthropic_plan_system_prompt(&input.system_prompt);
+        let system_prompt = build_anthropic_tool_system_prompt(&input.system_prompt);
         let user_prompt = build_user_prompt(input);
+        let tools = build_anthropic_tools(&input.available_tools);
         let body = format!(
             concat!(
                 "{{",
                 "\"model\":\"{}\",",
                 "\"max_tokens\":1024,",
+                "\"tool_choice\":{{\"type\":\"auto\"}},",
+                "\"tools\":{},",
                 "\"system\":\"{}\",",
                 "\"messages\":[",
                 "{{\"role\":\"user\",\"content\":[{{\"type\":\"text\",\"text\":\"{}\"}}]}}",
@@ -102,6 +105,7 @@ impl DeepSeekClient {
                 "}}"
             ),
             json_escape(&self.config.model),
+            tools,
             json_escape(&system_prompt),
             json_escape(&user_prompt)
         );
@@ -131,8 +135,7 @@ impl DeepSeekClient {
         }
 
         let body = String::from_utf8_lossy(&output.stdout);
-        let content = extract_json_string_field(&body, "text")?;
-        parse_plan_json(&content)
+        parse_anthropic_messages(&body)
     }
 
     fn respond_offline(&self, input: ModelRequest) -> ModelResponse {
@@ -377,9 +380,9 @@ fn build_openai_tool_system_prompt(base: &str) -> String {
     )
 }
 
-fn build_anthropic_plan_system_prompt(base: &str) -> String {
+fn build_anthropic_tool_system_prompt(base: &str) -> String {
     format!(
-        "{}\nReturn json only. Use this exact json schema:\n{{\"action\":\"finish|tool\",\"message\":\"short summary\",\"tool_name\":\"tool name or empty string\",\"arguments\":{{\"key\":\"value\"}}}}\nIf action is finish, set tool_name to an empty string and arguments to {{}}.\nIf action is tool, choose one listed tool and keep all argument values as strings.",
+        "{}\nUse the provided tools when a tool is needed. If no tool is needed, reply with a short plain-text summary.",
         base
     )
 }
@@ -431,6 +434,26 @@ fn openai_tool_spec(name: &str) -> Option<String> {
         "apply_patch" => Some(r#"{"type":"function","function":{"name":"apply_patch","description":"Apply a text replacement or a unified diff patch to files.","parameters":{"type":"object","properties":{"cwd":{"type":"string","description":"Working directory used when applying a unified diff patch."},"path":{"type":"string","description":"Target file path for direct replacement mode."},"find":{"type":"string","description":"Exact text to find for direct replacement mode."},"replace":{"type":"string","description":"Replacement text for direct replacement mode."},"replace_all":{"type":"string","description":"`true` to replace all occurrences in direct replacement mode, otherwise `false`."},"patch":{"type":"string","description":"Unified diff patch content. When provided, patch mode is used and path/find/replace are optional."}},"required":[],"additionalProperties":false}}}"#.to_string()),
         "run_shell" => Some(r#"{"type":"function","function":{"name":"run_shell","description":"Run a safe allowlisted shell command in the repository.","parameters":{"type":"object","properties":{"cwd":{"type":"string","description":"Working directory for the command."},"command":{"type":"string","description":"Safe shell command to execute."}},"required":["cwd","command"],"additionalProperties":false}}}"#.to_string()),
         "git_diff" => Some(r#"{"type":"function","function":{"name":"git_diff","description":"Show the current git diff for the workspace.","parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false}}}"#.to_string()),
+        _ => None,
+    }
+}
+
+fn build_anthropic_tools(names: &[String]) -> String {
+    let tools = names
+        .iter()
+        .filter_map(|name| anthropic_tool_spec(name))
+        .collect::<Vec<_>>();
+    format!("[{}]", tools.join(","))
+}
+
+fn anthropic_tool_spec(name: &str) -> Option<String> {
+    match name {
+        "list_files" => Some(r#"{"name":"list_files","description":"List repository files and directories under a root path.","input_schema":{"type":"object","properties":{"root":{"type":"string","description":"Root directory to list from, usually `.`."},"max_depth":{"type":"string","description":"Maximum directory depth to traverse, encoded as a string integer."},"limit":{"type":"string","description":"Maximum number of entries to return, encoded as a string integer."}},"required":["root","max_depth","limit"]}}"#.to_string()),
+        "read_file" => Some(r#"{"name":"read_file","description":"Read a text file and return a numbered excerpt.","input_schema":{"type":"object","properties":{"path":{"type":"string","description":"Path to the file."},"max_lines":{"type":"string","description":"Maximum number of lines to return, encoded as a string integer."}},"required":["path","max_lines"]}}"#.to_string()),
+        "search_text" => Some(r#"{"name":"search_text","description":"Search for plain text occurrences in repository files.","input_schema":{"type":"object","properties":{"root":{"type":"string","description":"Root directory to search from."},"query":{"type":"string","description":"Plain text query to find."},"limit":{"type":"string","description":"Maximum number of matches to return, encoded as a string integer."}},"required":["root","query","limit"]}}"#.to_string()),
+        "apply_patch" => Some(r#"{"name":"apply_patch","description":"Apply a text replacement or a unified diff patch to files.","input_schema":{"type":"object","properties":{"cwd":{"type":"string","description":"Working directory used when applying a unified diff patch."},"path":{"type":"string","description":"Target file path for direct replacement mode."},"find":{"type":"string","description":"Exact text to find for direct replacement mode."},"replace":{"type":"string","description":"Replacement text for direct replacement mode."},"replace_all":{"type":"string","description":"`true` to replace all occurrences in direct replacement mode, otherwise `false`."},"patch":{"type":"string","description":"Unified diff patch content. When provided, patch mode is used and path/find/replace are optional."}},"required":[]}}"#.to_string()),
+        "run_shell" => Some(r#"{"name":"run_shell","description":"Run a safe allowlisted shell command in the repository.","input_schema":{"type":"object","properties":{"cwd":{"type":"string","description":"Working directory for the command."},"command":{"type":"string","description":"Safe shell command to execute."}},"required":["cwd","command"]}}"#.to_string()),
+        "git_diff" => Some(r#"{"name":"git_diff","description":"Show the current git diff for the workspace.","input_schema":{"type":"object","properties":{},"required":[]}}"#.to_string()),
         _ => None,
     }
 }
@@ -495,79 +518,70 @@ fn parse_openai_chat_completion(body: &str) -> AppResult<ModelResponse> {
     })
 }
 
-fn parse_plan_json(content: &str) -> AppResult<ModelResponse> {
-    let root = parse_root_object(content)?;
+fn parse_anthropic_messages(body: &str) -> AppResult<ModelResponse> {
+    let root = parse_root_object(body)?;
 
-    let action = root
-        .get("action")
-        .and_then(json_as_string)
-        .ok_or_else(|| app_error("planner json missing string field `action`"))?;
-    let message = root
-        .get("message")
-        .and_then(json_as_string)
-        .unwrap_or("DeepSeek returned an empty planner message.")
-        .to_string();
-
-    let action = match action {
-        "finish" => ModelAction::Finish,
-        "tool" => {
-            let tool_name = root
-                .get("tool_name")
-                .and_then(json_as_string)
-                .ok_or_else(|| app_error("planner json missing string field `tool_name`"))?;
-            let arguments = root
-                .get("arguments")
-                .map(json_as_string_map)
-                .transpose()?
-                .unwrap_or_default();
-            ModelAction::CallTool {
-                tool_name: tool_name.to_string(),
-                input: ToolInput { args: arguments },
-            }
-        }
-        other => return Err(app_error(format!("unsupported planner action: {other}"))),
-    };
-
-    Ok(ModelResponse { message, action })
-}
-
-fn extract_json_string_field(body: &str, field_name: &str) -> AppResult<String> {
-    let marker = format!("\"{field_name}\":\"");
-    let start = body
-        .find(&marker)
-        .ok_or_else(|| app_error(format!("response missing json string field `{field_name}`")))?
-        + marker.len();
-
-    let bytes = body.as_bytes();
-    let mut index = start;
-    let mut escaped = false;
-    let mut output = String::new();
-
-    while index < bytes.len() {
-        let byte = bytes[index];
-        if escaped {
-            match byte {
-                b'n' => output.push('\n'),
-                b'r' => output.push('\r'),
-                b't' => output.push('\t'),
-                b'\\' => output.push('\\'),
-                b'"' => output.push('"'),
-                _ => output.push(byte as char),
-            }
-            escaped = false;
-        } else if byte == b'\\' {
-            escaped = true;
-        } else if byte == b'"' {
-            return Ok(output);
-        } else {
-            output.push(byte as char);
-        }
-        index += 1;
+    if let Some(error) = root.get("error").and_then(json_as_object) {
+        let message = error
+            .get("message")
+            .and_then(json_as_string)
+            .unwrap_or("anthropic api returned an error");
+        return Err(app_error(format!("anthropic error: {message}")));
     }
 
-    Err(app_error(format!(
-        "unterminated json string field `{field_name}` in response"
-    )))
+    let content = root
+        .get("content")
+        .and_then(json_as_array)
+        .ok_or_else(|| app_error("anthropic response missing `content` array"))?;
+
+    let mut text_chunks = Vec::new();
+    for item in content {
+        let Some(block) = json_as_object(item) else {
+            continue;
+        };
+        let block_type = block.get("type").and_then(json_as_string).unwrap_or("");
+        match block_type {
+            "tool_use" => {
+                let tool_name = block
+                    .get("name")
+                    .and_then(json_as_string)
+                    .ok_or_else(|| app_error("tool_use block missing `name`"))?;
+                let input_obj = block
+                    .get("input")
+                    .ok_or_else(|| app_error("tool_use block missing `input`"))?;
+                let arguments = json_object_to_string_args(input_obj)?;
+                let assistant_message = if text_chunks.is_empty() {
+                    "DeepSeek selected a tool.".to_string()
+                } else {
+                    text_chunks.join("\n")
+                };
+                return Ok(ModelResponse {
+                    message: assistant_message,
+                    action: ModelAction::CallTool {
+                        tool_name: tool_name.to_string(),
+                        input: ToolInput { args: arguments },
+                    },
+                });
+            }
+            "text" => {
+                if let Some(value) = block.get("text").and_then(json_as_string) {
+                    text_chunks.push(value.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let message = if text_chunks.is_empty() {
+        "DeepSeek returned no content.".to_string()
+    } else {
+        text_chunks.join("\n")
+    };
+
+    Ok(ModelResponse {
+        message,
+        action: ModelAction::Finish,
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -764,19 +778,32 @@ fn json_as_array(value: &JsonValue) -> Option<&Vec<JsonValue>> {
     }
 }
 
-fn json_as_string_map(value: &JsonValue) -> AppResult<BTreeMap<String, String>> {
+fn json_object_to_string_args(value: &JsonValue) -> AppResult<BTreeMap<String, String>> {
     let JsonValue::Object(map) = value else {
-        return Err(app_error("planner `arguments` must be a json object"));
+        return Err(app_error("tool input must be a json object"));
     };
 
     let mut result = BTreeMap::new();
     for (key, value) in map {
-        let Some(value) = json_as_string(value) else {
-            return Err(app_error(format!(
-                "planner argument `{key}` must be a string value"
-            )));
-        };
-        result.insert(key.clone(), value.to_string());
+        match value {
+            JsonValue::String(value) => {
+                result.insert(key.clone(), value.clone());
+            }
+            JsonValue::Number(value) => {
+                result.insert(key.clone(), value.clone());
+            }
+            JsonValue::Bool(value) => {
+                result.insert(key.clone(), if *value { "true" } else { "false" }.to_string());
+            }
+            JsonValue::Null => {
+                result.insert(key.clone(), "null".to_string());
+            }
+            JsonValue::Object(_) | JsonValue::Array(_) => {
+                return Err(app_error(format!(
+                    "tool argument `{key}` must be a scalar json value"
+                )));
+            }
+        }
     }
     Ok(result)
 }
@@ -916,8 +943,8 @@ fn quoted_segments(task: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        api_flavor, build_openai_tools, extract_json_string_field, parse_openai_chat_completion,
-        parse_plan_json, ApiFlavor, DeepSeekClient,
+        api_flavor, build_anthropic_tools, build_openai_tools, parse_anthropic_messages,
+        parse_openai_chat_completion, ApiFlavor, DeepSeekClient,
     };
     use crate::config::types::ModelConfig;
     use crate::model::client::ModelClient;
@@ -925,35 +952,6 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
-
-    #[test]
-    fn parses_planner_json_tool_response() {
-        let response = parse_plan_json(
-            r#"{
-                "action":"tool",
-                "message":"inspect file",
-                "tool_name":"read_file",
-                "arguments":{"path":"README.md","max_lines":"20"}
-            }"#,
-        )
-        .unwrap();
-
-        match response.action {
-            ModelAction::CallTool { tool_name, input } => {
-                assert_eq!(tool_name, "read_file");
-                assert_eq!(input.get("path"), Some("README.md"));
-                assert_eq!(input.get("max_lines"), Some("20"));
-            }
-            ModelAction::Finish => panic!("expected tool call"),
-        }
-    }
-
-    #[test]
-    fn extracts_json_string_field_from_response() {
-        let body = r#"{"choices":[{"message":{"role":"assistant","content":"{\"action\":\"finish\",\"message\":\"done\",\"tool_name\":\"\",\"arguments\":{}}"}}]}"#;
-        let content = extract_json_string_field(body, "content").unwrap();
-        assert!(content.contains("\"action\":\"finish\""));
-    }
 
     #[test]
     fn detects_anthropic_base_url() {
@@ -1008,6 +1006,117 @@ mod tests {
         let tools = build_openai_tools(&["read_file".to_string(), "git_diff".to_string()]);
         assert!(tools.contains("\"name\":\"read_file\""));
         assert!(tools.contains("\"name\":\"git_diff\""));
+    }
+
+    #[test]
+    fn builds_anthropic_tool_specs_for_known_tools() {
+        let tools = build_anthropic_tools(&[
+            "read_file".to_string(),
+            "git_diff".to_string(),
+            "apply_patch".to_string(),
+        ]);
+        assert!(tools.contains("\"name\":\"read_file\""));
+        assert!(tools.contains("\"name\":\"git_diff\""));
+        assert!(tools.contains("\"name\":\"apply_patch\""));
+        assert!(tools.contains("\"input_schema\":"));
+        assert!(!tools.contains("\"function\":"));
+    }
+
+    #[test]
+    fn parses_anthropic_tool_use_response() {
+        let body = r#"{
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Reading the file."},
+                {
+                    "type": "tool_use",
+                    "id": "tu_1",
+                    "name": "read_file",
+                    "input": {"path": "README.md", "max_lines": "20"}
+                }
+            ],
+            "stop_reason": "tool_use"
+        }"#;
+
+        let response = parse_anthropic_messages(body).unwrap();
+        match response.action {
+            ModelAction::CallTool { tool_name, input } => {
+                assert_eq!(tool_name, "read_file");
+                assert_eq!(input.get("path"), Some("README.md"));
+                assert_eq!(input.get("max_lines"), Some("20"));
+            }
+            ModelAction::Finish => panic!("expected tool call"),
+        }
+        assert_eq!(response.message, "Reading the file.");
+    }
+
+    #[test]
+    fn parses_anthropic_text_only_response_as_finish() {
+        let body = r#"{
+            "id": "msg_2",
+            "content": [{"type": "text", "text": "All done."}],
+            "stop_reason": "end_turn"
+        }"#;
+
+        let response = parse_anthropic_messages(body).unwrap();
+        assert!(matches!(response.action, ModelAction::Finish));
+        assert_eq!(response.message, "All done.");
+    }
+
+    #[test]
+    fn parses_anthropic_tool_use_with_numeric_input() {
+        let body = r#"{
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "tu_2",
+                    "name": "read_file",
+                    "input": {"path": "README.md", "max_lines": 20}
+                }
+            ]
+        }"#;
+
+        let response = parse_anthropic_messages(body).unwrap();
+        match response.action {
+            ModelAction::CallTool { tool_name, input } => {
+                assert_eq!(tool_name, "read_file");
+                assert_eq!(input.get("max_lines"), Some("20"));
+            }
+            ModelAction::Finish => panic!("expected tool call"),
+        }
+    }
+
+    #[test]
+    fn anthropic_response_surfaces_api_errors() {
+        let body = r#"{"error": {"type": "invalid_request_error", "message": "missing tools"}}"#;
+        let error = parse_anthropic_messages(body).unwrap_err();
+        assert!(error.to_string().contains("missing tools"));
+    }
+
+    #[test]
+    fn anthropic_tool_use_wins_over_text_blocks() {
+        let body = r#"{
+            "content": [
+                {"type": "text", "text": "I will do this."},
+                {"type": "text", "text": "Now using a tool."},
+                {
+                    "type": "tool_use",
+                    "id": "tu_3",
+                    "name": "git_diff",
+                    "input": {}
+                }
+            ]
+        }"#;
+
+        let response = parse_anthropic_messages(body).unwrap();
+        match response.action {
+            ModelAction::CallTool { tool_name, .. } => assert_eq!(tool_name, "git_diff"),
+            ModelAction::Finish => panic!("expected tool call"),
+        }
+        assert!(response.message.contains("I will do this."));
+        assert!(response.message.contains("Now using a tool."));
     }
 
     fn unique_planner_dir() -> PathBuf {
