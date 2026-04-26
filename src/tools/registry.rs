@@ -8,8 +8,9 @@ use crate::tools::read_file::ReadFileTool;
 use crate::tools::run_shell::{is_safe_shell_command, RunShellTool};
 use crate::tools::search_text::SearchTextTool;
 use crate::tools::types::{Tool, ToolInput, ToolOutput};
-use crate::error::{app_error, AppResult};
+use crate::error::{app_error, policy_denied, tool_failure, AppResult};
 use crate::skills::schema::SkillSpec;
+use crate::ui::confirm::confirm;
 
 pub struct ToolRegistry {
     tools: Vec<Box<dyn Tool>>,
@@ -44,25 +45,25 @@ impl ToolRegistry {
         policy: &ExecutionPolicy,
     ) -> AppResult<ToolOutput> {
         if !policy.allows_tool(name) {
-            return Err(app_error(format!("tool blocked by policy: {name}")));
+            return Err(policy_denied(format!("tool blocked by policy: {name}")));
         }
 
         if name == "apply_patch" && policy.require_write_confirmation && !policy.auto_approve_writes {
-            return Err(app_error(
-                "write approval required; set DSCODE_AUTO_APPROVE_WRITES=1 or relax the active policy",
-            ));
+            let target = describe_apply_patch_target(&input);
+            let prompt = format!("Apply patch in {}?", sanitize_for_prompt(&target));
+            if !confirm(&prompt) {
+                return Err(policy_denied(format!(
+                    "write declined for {}; set DSCODE_AUTO_APPROVE_WRITES=1 to skip prompts or relax the active policy",
+                    sanitize_for_prompt(&target)
+                )));
+            }
         }
 
         if name == "run_shell" {
             let command = input
                 .get("command")
                 .ok_or_else(|| app_error("run_shell requires a command"))?;
-
-            if policy.require_shell_confirmation && !policy.auto_approve_shell {
-                return Err(app_error(
-                    "shell approval required; set DSCODE_AUTO_APPROVE_SHELL=1 or relax the active policy",
-                ));
-            }
+            let cwd = input.get("cwd").unwrap_or(".");
 
             if !policy.shell_allowlist.is_empty()
                 && !policy
@@ -70,17 +71,40 @@ impl ToolRegistry {
                     .iter()
                     .any(|prefix| command.trim().starts_with(prefix))
             {
-                return Err(app_error(format!(
-                    "shell command blocked by policy allowlist: {command}"
+                return Err(policy_denied(format!(
+                    "shell command blocked by policy allowlist: {}",
+                    sanitize_for_prompt(command)
                 )));
             }
 
             if !is_safe_shell_command(command) {
-                return Err(app_error(format!("command not allowed: {command}")));
+                return Err(policy_denied(format!(
+                    "command not allowed: {}",
+                    sanitize_for_prompt(command)
+                )));
+            }
+
+            if policy.require_shell_confirmation && !policy.auto_approve_shell {
+                let prompt = format!(
+                    "Run shell command in {}: '{}'?",
+                    sanitize_for_prompt(cwd),
+                    sanitize_for_prompt(command)
+                );
+                if !confirm(&prompt) {
+                    return Err(policy_denied(
+                        "shell command declined; set DSCODE_AUTO_APPROVE_SHELL=1 to skip prompts or relax the active policy",
+                    ));
+                }
             }
         }
 
-        self.execute(name, input)
+        self.execute(name, input).map_err(|error| {
+            if error.downcast_ref::<crate::error::AppError>().is_some() {
+                error
+            } else {
+                tool_failure(error.to_string())
+            }
+        })
     }
 }
 
@@ -132,6 +156,36 @@ fn env_flag(name: &str) -> bool {
     matches!(env::var(name).ok().as_deref(), Some("1") | Some("true") | Some("TRUE"))
 }
 
+fn describe_apply_patch_target(input: &ToolInput) -> String {
+    if let Some(path) = input.get("path") {
+        return path.to_string();
+    }
+    if let Some(cwd) = input.get("cwd") {
+        return format!("{cwd} (unified diff)");
+    }
+    "current workspace".to_string()
+}
+
+const PROMPT_LIMIT: usize = 200;
+
+fn sanitize_for_prompt(value: &str) -> String {
+    let mut out = String::with_capacity(value.len().min(PROMPT_LIMIT) + 1);
+    let mut count = 0usize;
+    for ch in value.chars() {
+        if count >= PROMPT_LIMIT {
+            out.push('…');
+            break;
+        }
+        if ch.is_control() && ch != '\t' {
+            out.push('?');
+        } else {
+            out.push(ch);
+        }
+        count += 1;
+    }
+    out
+}
+
 pub fn default_registry() -> ToolRegistry {
     ToolRegistry {
         tools: vec![
@@ -142,5 +196,97 @@ pub fn default_registry() -> ToolRegistry {
             Box::new(RunShellTool),
             Box::new(GitDiffTool),
         ],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::types::ApprovalConfig;
+    use crate::error::{classify, AppErrorKind};
+
+    fn deny_writes_policy() -> ExecutionPolicy {
+        ExecutionPolicy {
+            allowed_tools: vec!["apply_patch".to_string(), "run_shell".to_string()],
+            require_write_confirmation: true,
+            require_shell_confirmation: true,
+            shell_allowlist: Vec::new(),
+            auto_approve_writes: false,
+            auto_approve_shell: false,
+        }
+    }
+
+    #[test]
+    fn execute_with_policy_returns_policy_denied_for_blocked_tool() {
+        let registry = default_registry();
+        let approval = ApprovalConfig::default();
+        let policy = ExecutionPolicy::new(&approval, None);
+        let blocked_policy = ExecutionPolicy {
+            allowed_tools: vec!["read_file".to_string()],
+            ..policy
+        };
+
+        let error = registry
+            .execute_with_policy("apply_patch", ToolInput::new(), &blocked_policy)
+            .unwrap_err();
+        assert_eq!(classify(error.as_ref()), AppErrorKind::PolicyDenied);
+        assert!(error.to_string().contains("blocked by policy"));
+    }
+
+    #[test]
+    fn execute_with_policy_blocks_non_allowlisted_shell_command() {
+        let registry = default_registry();
+        let policy = ExecutionPolicy {
+            shell_allowlist: vec!["echo".to_string()],
+            ..deny_writes_policy()
+        };
+
+        let input = ToolInput::new()
+            .with_arg("cwd", ".")
+            .with_arg("command", "rm -rf /");
+        let error = registry
+            .execute_with_policy("run_shell", input, &policy)
+            .unwrap_err();
+        assert_eq!(classify(error.as_ref()), AppErrorKind::PolicyDenied);
+        assert!(error.to_string().contains("allowlist"));
+    }
+
+    #[test]
+    fn execute_with_policy_denies_apply_patch_under_non_tty() {
+        let registry = default_registry();
+        let policy = deny_writes_policy();
+
+        let input = ToolInput::new()
+            .with_arg("path", "/tmp/does_not_matter.txt")
+            .with_arg("find", "x")
+            .with_arg("replace", "y");
+        let error = registry
+            .execute_with_policy("apply_patch", input, &policy)
+            .unwrap_err();
+        assert_eq!(classify(error.as_ref()), AppErrorKind::PolicyDenied);
+        assert!(error.to_string().contains("write declined"));
+    }
+
+    #[test]
+    fn sanitize_for_prompt_replaces_ansi_escape_sequences() {
+        let raw = "evil\x1b[2J\x1b[Happroved";
+        let sanitized = sanitize_for_prompt(raw);
+        assert!(!sanitized.contains('\x1b'));
+        assert!(sanitized.contains("approved"));
+    }
+
+    #[test]
+    fn sanitize_for_prompt_caps_length() {
+        let raw = "a".repeat(500);
+        let sanitized = sanitize_for_prompt(&raw);
+        assert!(sanitized.chars().count() <= 201);
+        assert!(sanitized.ends_with('…'));
+    }
+
+    #[test]
+    fn sanitize_for_prompt_keeps_tabs_and_letters() {
+        let raw = "name\twith\ttabs";
+        let sanitized = sanitize_for_prompt(raw);
+        assert_eq!(sanitized, "name\twith\ttabs");
     }
 }

@@ -91,8 +91,12 @@ impl AgentLoop {
                         }
                         Err(error) => {
                             let kind = ObservationKind::from_tool_name(&tool_name);
+                            let label = match crate::error::classify(error.as_ref()) {
+                                crate::error::AppErrorKind::PolicyDenied => "DENIED",
+                                _ => "FAILED",
+                            };
                             let summary = summarize_for_kind(&error.to_string(), kind);
-                            println!("Tool `{tool_name}` FAILED [{}]:", kind.label());
+                            println!("Tool `{tool_name}` {label} [{}]:", kind.label());
                             println!("{summary}");
                             observations.push(Observation::failed(tool_name, summary));
                         }

@@ -24,7 +24,8 @@
 - 工具执行受策略约束：
   - `allowed_tools`
   - `shell_allowlist`
-  - 写入/命令审批要求
+  - 写入/命令审批：交互式 TTY prompt（非 TTY 默认拒绝），env 可放行
+  - 错误分类 `PolicyDenied` / `ToolFailure` / `Other`
 - 本机可验证性已具备：
   - `doctor` 输出 workspace / model / api key / network / hints 五段
   - `smoke` 可对 OpenAI 与 Anthropic 兼容路径单独发起最小远端请求
@@ -141,8 +142,6 @@
 - 工具失败已转为观察项，agent loop 不再因错误退出
 - patch 应用后自动 git_diff 复核（仅在成功时触发）
 - patch 模式失败可单次回退到文本替换重试
-- 审批还不是交互式 UI
-  - 目前主要依赖 policy 和环境变量放行
 - 失败重试策略仍较窄（仅 apply_patch 单次 patch→text 回退）
   - 其他工具失败后只是被记录为观察项并继续走启发式
 
@@ -151,7 +150,7 @@
 这些能力已经在当前本地环境里验证过：
 
 - `cargo check --offline`
-- `cargo test --offline`（58 项单测全部通过）
+- `cargo test --offline`（62 项单测全部通过）
 - `cargo run --offline -- doctor` 输出五段诊断（workspace / model / api key / network / hints）
 - `cargo run --offline -- smoke` 与 `cargo run --offline -- smoke --flavor anthropic` 在缺少 key 时给出预检失败
 - `cargo run --offline -- "inspect repository"`
@@ -209,13 +208,17 @@
 - ~~对齐 OpenAI-compatible 路径的能力边界~~（已完成；同一组工具描述同时下发）
 - ~~统一远端结果到同一个 `ModelAction` 抽象~~（已完成；两条路径都返回 `ModelAction::CallTool` / `Finish`）
 
-### P3: 审批与执行体验
+### P3: 审批与执行体验：已完成基础版
 
-- 增加真正的审批交互
-  - 写入确认
-  - 命令确认
-- 增加更清晰的错误输出
-- 区分“策略拒绝”和“工具失败”
+- ~~增加真正的审批交互~~（已完成）
+  - `apply_patch` 写入前在 stderr 输出 `Apply patch in <path>? [y/N]:` 并读 stdin
+  - `run_shell` 执行前输出 `Run shell command in <cwd>: \`<command>\`? [y/N]:`
+  - 非 TTY 默认拒绝（安全 fallback）；env `DSCODE_AUTO_APPROVE_*=1` 仍可一次性放行
+- ~~区分”策略拒绝”和”工具失败”~~（已完成）
+  - `AppErrorKind` 枚举：`Other / PolicyDenied / ToolFailure`
+  - `policy_denied()` / `tool_failure()` 构造器
+  - agent loop 输出 `Tool 'x' DENIED [kind]:` vs `Tool 'x' FAILED [kind]:`
+- 更清晰的错误输出：进行中（DENIED 与 FAILED 区分已落地）
 
 ### P4: 上下文与稳定性：已完成基础版
 
@@ -318,7 +321,7 @@
 5. ~~`apply_patch` 多文件和失败诊断~~（已完成）
 6. ~~planner 生成 patch 模式编辑~~（已完成）
 7. ~~patch 应用后自动 git_diff 复核与失败重试~~（已完成基础版）
-8. 审批交互
+8. ~~审批交互~~（已完成基础版）
 9. ~~observation / context 管理增强~~（已完成基础版）
 
 ## 最近里程碑
