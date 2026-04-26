@@ -141,36 +141,36 @@ impl DeepSeekClient {
     fn respond_offline(&self, input: ModelRequest) -> ModelResponse {
         let task = input.task.clone();
         let task_lower = task.to_lowercase();
-        let used_tools = input
-            .observations
+        let mut used_tools: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        let mut succeeded_tools: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for observation in &input.observations {
+            used_tools.insert(observation.tool_name.as_str());
+            if !observation.is_failure() {
+                succeeded_tools.insert(observation.tool_name.as_str());
+            }
+        }
+        let available_tools: std::collections::BTreeSet<&str> = input
+            .available_tools
             .iter()
-            .map(|observation| observation.tool_name.as_str())
-            .collect::<Vec<_>>();
-        let succeeded_tools = input
-            .observations
-            .iter()
-            .filter(|observation| !observation.is_failure())
-            .map(|observation| observation.tool_name.as_str())
-            .collect::<Vec<_>>();
+            .map(String::as_str)
+            .collect();
+        let tool_available = |name: &str| available_tools.contains(name);
         let last_apply_patch = input
             .observations
             .iter()
             .rev()
             .find(|observation| observation.tool_name == "apply_patch");
-        let last_apply_patch_failed = last_apply_patch
-            .map(|observation| observation.is_failure())
-            .unwrap_or(false);
-        let last_apply_patch_used_patch_mode = last_apply_patch
+        let last_apply_patch_was_patch_mode_failure = last_apply_patch
             .map(|observation| {
-                observation.is_failure() && observation.summary.contains("dry-run")
-                    || observation.is_failure() && observation.summary.contains("hunk")
-                    || observation.is_failure() && observation.summary.contains("patch ")
+                observation.is_failure()
+                    && (observation.summary.starts_with("patch dry-run failed")
+                        || observation.summary.starts_with("patch apply failed"))
             })
             .unwrap_or(false);
         let search_query = derive_search_query(&task);
         let edit_request = derive_edit_request(&task);
 
-        if !used_tools.contains(&"list_files") && input.available_tools.iter().any(|name| name == "list_files") {
+        if !used_tools.contains("list_files") && tool_available("list_files") {
             return ModelResponse {
                 message: format!(
                     "{} planner is exploring the repository layout first.",
@@ -188,7 +188,7 @@ impl DeepSeekClient {
 
         if edit_request.is_none() {
             if let Some(query) = search_query {
-                if !used_tools.contains(&"search_text") && input.available_tools.iter().any(|name| name == "search_text") {
+                if !used_tools.contains("search_text") && tool_available("search_text") {
                     return ModelResponse {
                         message: format!("{} planner is searching for `{query}`.", self.config.model),
                         action: ModelAction::CallTool {
@@ -204,7 +204,7 @@ impl DeepSeekClient {
         }
 
         if let Some(edit_request) = edit_request.as_ref() {
-            if !used_tools.contains(&"read_file") && input.available_tools.iter().any(|name| name == "read_file") {
+            if !used_tools.contains("read_file") && tool_available("read_file") {
                 return ModelResponse {
                     message: format!(
                         "{} planner is reading the edit target before applying changes.",
@@ -222,9 +222,9 @@ impl DeepSeekClient {
 
         if let Some(edit_request) = edit_request.as_ref() {
             let apply_patch_available =
-                input.available_tools.iter().any(|name| name == "apply_patch");
-            let already_succeeded = succeeded_tools.contains(&"apply_patch");
-            let already_attempted = used_tools.contains(&"apply_patch");
+                tool_available("apply_patch");
+            let already_succeeded = succeeded_tools.contains("apply_patch");
+            let already_attempted = used_tools.contains("apply_patch");
 
             if apply_patch_available && !already_succeeded {
                 if !already_attempted {
@@ -262,7 +262,7 @@ impl DeepSeekClient {
                     };
                 }
 
-                if last_apply_patch_failed && last_apply_patch_used_patch_mode {
+                if last_apply_patch_was_patch_mode_failure {
                     return ModelResponse {
                         message: format!(
                             "{} planner retrying with text replacement after patch-mode failure in {}.",
@@ -282,7 +282,7 @@ impl DeepSeekClient {
 
         if edit_request.is_none() {
             if let Some(primary_file) = input.primary_file.as_deref() {
-                if !used_tools.contains(&"read_file") && input.available_tools.iter().any(|name| name == "read_file") {
+                if !used_tools.contains("read_file") && tool_available("read_file") {
                     return ModelResponse {
                         message: format!("{} planner is reading the primary file.", self.config.model),
                         action: ModelAction::CallTool {
@@ -296,9 +296,9 @@ impl DeepSeekClient {
             }
         }
 
-        if succeeded_tools.contains(&"apply_patch")
-            && !used_tools.contains(&"git_diff")
-            && input.available_tools.iter().any(|name| name == "git_diff")
+        if succeeded_tools.contains("apply_patch")
+            && !used_tools.contains("git_diff")
+            && tool_available("git_diff")
         {
             return ModelResponse {
                 message: format!("{} planner is reviewing the resulting diff.", self.config.model),
@@ -311,8 +311,8 @@ impl DeepSeekClient {
 
         if let Some(test_command) = input.suggested_test_command.as_deref() {
             if wants_validation(&task_lower)
-                && !used_tools.contains(&"run_shell")
-                && input.available_tools.iter().any(|name| name == "run_shell")
+                && !used_tools.contains("run_shell")
+                && tool_available("run_shell")
             {
                 return ModelResponse {
                     message: format!(
@@ -419,44 +419,90 @@ fn build_user_prompt(input: &ModelRequest) -> String {
 }
 
 fn build_openai_tools(names: &[String]) -> String {
-    let tools = names
-        .iter()
-        .filter_map(|name| openai_tool_spec(name))
-        .collect::<Vec<_>>();
-    format!("[{}]", tools.join(","))
-}
-
-fn openai_tool_spec(name: &str) -> Option<String> {
-    match name {
-        "list_files" => Some(r#"{"type":"function","function":{"name":"list_files","description":"List repository files and directories under a root path.","parameters":{"type":"object","properties":{"root":{"type":"string","description":"Root directory to list from, usually `.`."},"max_depth":{"type":"string","description":"Maximum directory depth to traverse, encoded as a string integer."},"limit":{"type":"string","description":"Maximum number of entries to return, encoded as a string integer."}},"required":["root","max_depth","limit"],"additionalProperties":false}}}"#.to_string()),
-        "read_file" => Some(r#"{"type":"function","function":{"name":"read_file","description":"Read a text file and return a numbered excerpt.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Path to the file."},"max_lines":{"type":"string","description":"Maximum number of lines to return, encoded as a string integer."}},"required":["path","max_lines"],"additionalProperties":false}}}"#.to_string()),
-        "search_text" => Some(r#"{"type":"function","function":{"name":"search_text","description":"Search for plain text occurrences in repository files.","parameters":{"type":"object","properties":{"root":{"type":"string","description":"Root directory to search from."},"query":{"type":"string","description":"Plain text query to find."},"limit":{"type":"string","description":"Maximum number of matches to return, encoded as a string integer."}},"required":["root","query","limit"],"additionalProperties":false}}}"#.to_string()),
-        "apply_patch" => Some(r#"{"type":"function","function":{"name":"apply_patch","description":"Apply a text replacement or a unified diff patch to files.","parameters":{"type":"object","properties":{"cwd":{"type":"string","description":"Working directory used when applying a unified diff patch."},"path":{"type":"string","description":"Target file path for direct replacement mode."},"find":{"type":"string","description":"Exact text to find for direct replacement mode."},"replace":{"type":"string","description":"Replacement text for direct replacement mode."},"replace_all":{"type":"string","description":"`true` to replace all occurrences in direct replacement mode, otherwise `false`."},"patch":{"type":"string","description":"Unified diff patch content. When provided, patch mode is used and path/find/replace are optional."}},"required":[],"additionalProperties":false}}}"#.to_string()),
-        "run_shell" => Some(r#"{"type":"function","function":{"name":"run_shell","description":"Run a safe allowlisted shell command in the repository.","parameters":{"type":"object","properties":{"cwd":{"type":"string","description":"Working directory for the command."},"command":{"type":"string","description":"Safe shell command to execute."}},"required":["cwd","command"],"additionalProperties":false}}}"#.to_string()),
-        "git_diff" => Some(r#"{"type":"function","function":{"name":"git_diff","description":"Show the current git diff for the workspace.","parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false}}}"#.to_string()),
-        _ => None,
-    }
+    render_tools(names, openai_envelope)
 }
 
 fn build_anthropic_tools(names: &[String]) -> String {
+    render_tools(names, anthropic_envelope)
+}
+
+fn render_tools(names: &[String], envelope: fn(&ToolSpec) -> String) -> String {
     let tools = names
         .iter()
-        .filter_map(|name| anthropic_tool_spec(name))
+        .filter_map(|name| tool_spec(name).map(envelope))
         .collect::<Vec<_>>();
     format!("[{}]", tools.join(","))
 }
 
-fn anthropic_tool_spec(name: &str) -> Option<String> {
-    match name {
-        "list_files" => Some(r#"{"name":"list_files","description":"List repository files and directories under a root path.","input_schema":{"type":"object","properties":{"root":{"type":"string","description":"Root directory to list from, usually `.`."},"max_depth":{"type":"string","description":"Maximum directory depth to traverse, encoded as a string integer."},"limit":{"type":"string","description":"Maximum number of entries to return, encoded as a string integer."}},"required":["root","max_depth","limit"]}}"#.to_string()),
-        "read_file" => Some(r#"{"name":"read_file","description":"Read a text file and return a numbered excerpt.","input_schema":{"type":"object","properties":{"path":{"type":"string","description":"Path to the file."},"max_lines":{"type":"string","description":"Maximum number of lines to return, encoded as a string integer."}},"required":["path","max_lines"]}}"#.to_string()),
-        "search_text" => Some(r#"{"name":"search_text","description":"Search for plain text occurrences in repository files.","input_schema":{"type":"object","properties":{"root":{"type":"string","description":"Root directory to search from."},"query":{"type":"string","description":"Plain text query to find."},"limit":{"type":"string","description":"Maximum number of matches to return, encoded as a string integer."}},"required":["root","query","limit"]}}"#.to_string()),
-        "apply_patch" => Some(r#"{"name":"apply_patch","description":"Apply a text replacement or a unified diff patch to files.","input_schema":{"type":"object","properties":{"cwd":{"type":"string","description":"Working directory used when applying a unified diff patch."},"path":{"type":"string","description":"Target file path for direct replacement mode."},"find":{"type":"string","description":"Exact text to find for direct replacement mode."},"replace":{"type":"string","description":"Replacement text for direct replacement mode."},"replace_all":{"type":"string","description":"`true` to replace all occurrences in direct replacement mode, otherwise `false`."},"patch":{"type":"string","description":"Unified diff patch content. When provided, patch mode is used and path/find/replace are optional."}},"required":[]}}"#.to_string()),
-        "run_shell" => Some(r#"{"name":"run_shell","description":"Run a safe allowlisted shell command in the repository.","input_schema":{"type":"object","properties":{"cwd":{"type":"string","description":"Working directory for the command."},"command":{"type":"string","description":"Safe shell command to execute."}},"required":["cwd","command"]}}"#.to_string()),
-        "git_diff" => Some(r#"{"name":"git_diff","description":"Show the current git diff for the workspace.","input_schema":{"type":"object","properties":{},"required":[]}}"#.to_string()),
-        _ => None,
-    }
+fn openai_envelope(spec: &ToolSpec) -> String {
+    format!(
+        r#"{{"type":"function","function":{{"name":"{}","description":"{}","parameters":{{"type":"object","properties":{},"required":{},"additionalProperties":false}}}}}}"#,
+        json_escape(spec.name),
+        json_escape(spec.description),
+        spec.properties_json,
+        spec.required_json,
+    )
 }
+
+fn anthropic_envelope(spec: &ToolSpec) -> String {
+    format!(
+        r#"{{"name":"{}","description":"{}","input_schema":{{"type":"object","properties":{},"required":{}}}}}"#,
+        json_escape(spec.name),
+        json_escape(spec.description),
+        spec.properties_json,
+        spec.required_json,
+    )
+}
+
+struct ToolSpec {
+    name: &'static str,
+    description: &'static str,
+    properties_json: &'static str,
+    required_json: &'static str,
+}
+
+fn tool_spec(name: &str) -> Option<&'static ToolSpec> {
+    TOOL_SPECS.iter().find(|spec| spec.name == name)
+}
+
+const TOOL_SPECS: &[ToolSpec] = &[
+    ToolSpec {
+        name: "list_files",
+        description: "List repository files and directories under a root path.",
+        properties_json: r#"{"root":{"type":"string","description":"Root directory to list from, usually `.`."},"max_depth":{"type":"string","description":"Maximum directory depth to traverse, encoded as a string integer."},"limit":{"type":"string","description":"Maximum number of entries to return, encoded as a string integer."}}"#,
+        required_json: r#"["root","max_depth","limit"]"#,
+    },
+    ToolSpec {
+        name: "read_file",
+        description: "Read a text file and return a numbered excerpt.",
+        properties_json: r#"{"path":{"type":"string","description":"Path to the file."},"max_lines":{"type":"string","description":"Maximum number of lines to return, encoded as a string integer."}}"#,
+        required_json: r#"["path","max_lines"]"#,
+    },
+    ToolSpec {
+        name: "search_text",
+        description: "Search for plain text occurrences in repository files.",
+        properties_json: r#"{"root":{"type":"string","description":"Root directory to search from."},"query":{"type":"string","description":"Plain text query to find."},"limit":{"type":"string","description":"Maximum number of matches to return, encoded as a string integer."}}"#,
+        required_json: r#"["root","query","limit"]"#,
+    },
+    ToolSpec {
+        name: "apply_patch",
+        description: "Apply a text replacement or a unified diff patch to files.",
+        properties_json: r#"{"cwd":{"type":"string","description":"Working directory used when applying a unified diff patch."},"path":{"type":"string","description":"Target file path for direct replacement mode."},"find":{"type":"string","description":"Exact text to find for direct replacement mode."},"replace":{"type":"string","description":"Replacement text for direct replacement mode."},"replace_all":{"type":"string","description":"`true` to replace all occurrences in direct replacement mode, otherwise `false`."},"patch":{"type":"string","description":"Unified diff patch content. When provided, patch mode is used and path/find/replace are optional."}}"#,
+        required_json: r#"[]"#,
+    },
+    ToolSpec {
+        name: "run_shell",
+        description: "Run a safe allowlisted shell command in the repository.",
+        properties_json: r#"{"cwd":{"type":"string","description":"Working directory for the command."},"command":{"type":"string","description":"Safe shell command to execute."}}"#,
+        required_json: r#"["cwd","command"]"#,
+    },
+    ToolSpec {
+        name: "git_diff",
+        description: "Show the current git diff for the workspace.",
+        properties_json: r#"{}"#,
+        required_json: r#"[]"#,
+    },
+];
 
 fn parse_openai_chat_completion(body: &str) -> AppResult<ModelResponse> {
     let root = parse_root_object(body)?;
@@ -818,29 +864,7 @@ fn parse_root_object(input: &str) -> AppResult<BTreeMap<String, JsonValue>> {
 
 fn parse_tool_arguments(input: &str) -> AppResult<BTreeMap<String, String>> {
     let root = parse_root_object(input)?;
-    let mut result = BTreeMap::new();
-    for (key, value) in root {
-        match value {
-            JsonValue::String(value) => {
-                result.insert(key, value);
-            }
-            JsonValue::Number(value) => {
-                result.insert(key, value);
-            }
-            JsonValue::Bool(value) => {
-                result.insert(key, if value { "true" } else { "false" }.to_string());
-            }
-            JsonValue::Null => {
-                result.insert(key, "null".to_string());
-            }
-            JsonValue::Object(_) | JsonValue::Array(_) => {
-                return Err(app_error(format!(
-                    "tool argument `{key}` must be a scalar json value"
-                )));
-            }
-        }
-    }
-    Ok(result)
+    json_object_to_string_args(&JsonValue::Object(root))
 }
 
 fn json_escape(value: &str) -> String {

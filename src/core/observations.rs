@@ -22,14 +22,12 @@ pub fn summarize_for_kind(raw: &str, kind: ObservationKind) -> String {
 }
 
 pub fn compact_observations(observations: &[Observation]) -> Vec<Observation> {
-    let mut latest_index_for_kind: std::collections::HashMap<ObservationKind, usize> =
-        std::collections::HashMap::new();
-
+    let mut latest_for_kind: [Option<usize>; KIND_COUNT] = [None; KIND_COUNT];
     for (index, observation) in observations.iter().enumerate() {
         if observation.is_failure() {
             continue;
         }
-        latest_index_for_kind.insert(observation.kind, index);
+        latest_for_kind[kind_index(observation.kind)] = Some(index);
     }
 
     observations
@@ -39,8 +37,7 @@ pub fn compact_observations(observations: &[Observation]) -> Vec<Observation> {
             if observation.is_failure() {
                 return observation.clone();
             }
-            let latest = latest_index_for_kind.get(&observation.kind).copied();
-            if latest != Some(index) {
+            if latest_for_kind[kind_index(observation.kind)] != Some(index) {
                 let mut stub = observation.clone();
                 stub.summary = format!(
                     "{SUPERSEDED_PREFIX} (kind={})",
@@ -51,6 +48,22 @@ pub fn compact_observations(observations: &[Observation]) -> Vec<Observation> {
             observation.clone()
         })
         .collect()
+}
+
+const KIND_COUNT: usize = 7;
+
+fn kind_index(kind: ObservationKind) -> usize {
+    let index = match kind {
+        ObservationKind::FileExcerpt => 0,
+        ObservationKind::Listing => 1,
+        ObservationKind::SearchResults => 2,
+        ObservationKind::Patch => 3,
+        ObservationKind::Diff => 4,
+        ObservationKind::ShellOutput => 5,
+        ObservationKind::Other => 6,
+    };
+    debug_assert!(index < KIND_COUNT);
+    index
 }
 
 fn head_trim(raw: &str, max_lines: usize) -> String {
@@ -99,43 +112,55 @@ fn trim_diff(raw: &str, max_lines: usize) -> String {
         return head_trim(raw, max_lines);
     }
 
+    let header_budget = max_lines.saturating_sub(2).max(1);
     let mut keep = vec![false; lines.len()];
-    for &index in &header_indices {
-        keep[index] = true;
-        for offset in 1..=2 {
-            if index + offset < lines.len() {
-                keep[index + offset] = true;
+    let mut kept_count = 0usize;
+    'outer: for &index in &header_indices {
+        for offset in 0..=2 {
+            let target = index + offset;
+            if target >= lines.len() || keep[target] {
+                continue;
+            }
+            keep[target] = true;
+            kept_count += 1;
+            if kept_count >= header_budget {
+                break 'outer;
             }
         }
     }
 
-    let mut output = String::new();
+    let last_kept_index = keep.iter().rposition(|&kept| kept).unwrap_or(0);
+
+    let mut out_lines: Vec<String> = Vec::with_capacity(max_lines);
     let mut dropped = 0usize;
     let mut last_kept = false;
-    for (index, line) in lines.iter().enumerate() {
+    for (index, line) in lines.iter().enumerate().take(last_kept_index + 1) {
+        if out_lines.len() + 1 >= max_lines {
+            break;
+        }
         if keep[index] {
-            if !last_kept && (dropped > 0 || index > 0) {
-                if !output.is_empty() {
-                    output.push('\n');
-                }
-                if dropped > 0 {
-                    output.push_str(&format!("... dropped {dropped} body lines ...\n"));
-                    dropped = 0;
-                }
-            } else if !output.is_empty() {
-                output.push('\n');
+            if !last_kept && dropped > 0 {
+                out_lines.push(format!("... dropped {dropped} body lines ..."));
+                dropped = 0;
             }
-            output.push_str(line);
+            out_lines.push((*line).to_string());
             last_kept = true;
         } else {
             dropped += 1;
             last_kept = false;
         }
     }
+
+    let unrendered = lines.len() - (last_kept_index + 1);
+    let truncated_in_loop = out_lines.len() + 1 >= max_lines;
     if dropped > 0 {
-        output.push_str(&format!("\n... dropped {dropped} trailing body lines ..."));
+        out_lines.push(format!("... dropped {dropped} trailing lines ..."));
+    } else if unrendered > 0 || truncated_in_loop {
+        let total_remaining = unrendered + dropped;
+        out_lines.push(format!("... {total_remaining} more lines elided ..."));
     }
-    output
+
+    out_lines.join("\n")
 }
 
 #[cfg(test)]
@@ -176,6 +201,21 @@ mod tests {
         let trimmed = summarize_for_kind(&raw, ObservationKind::SearchResults);
         assert!(trimmed.contains("match1"));
         assert!(!trimmed.contains("match100"));
+    }
+
+    #[test]
+    fn diff_trim_honours_max_lines_with_many_hunks() {
+        let mut raw = String::new();
+        for hunk in 0..200 {
+            raw.push_str(&format!(
+                "@@ -{0},1 +{0},1 @@\nbody-{0}-1\nbody-{0}-2\n",
+                hunk
+            ));
+        }
+        let trimmed = trim_diff(&raw, 80);
+        let total_lines = trimmed.lines().count();
+        assert!(total_lines <= 80, "got {total_lines} lines, expected <= 80");
+        assert!(trimmed.contains("@@ -0,1 +0,1 @@"));
     }
 
     #[test]

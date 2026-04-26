@@ -3,6 +3,8 @@ use crate::error::app_error;
 use crate::tools::types::{Tool, ToolInput, ToolOutput};
 use std::collections::BTreeSet;
 use std::fs;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -37,11 +39,16 @@ fn apply_text_replacement(input: &ToolInput) -> AppResult<ToolOutput> {
     let replace_all = input.get("replace_all").unwrap_or("false") == "true";
     let path = Path::new(path);
 
-    if path.is_dir() {
-        return Err(app_error("apply_patch path points to a directory"));
-    }
-
-    let original = fs::read_to_string(path)?;
+    let original = fs::read_to_string(path).map_err(|error| {
+        if path.is_dir() {
+            app_error(format!(
+                "apply_patch path points to a directory: {}",
+                path.display()
+            ))
+        } else {
+            Box::new(error) as Box<dyn std::error::Error>
+        }
+    })?;
     let updated = apply_replacement(&original, find, replace, replace_all)?;
     fs::write(path, updated)?;
 
@@ -82,7 +89,8 @@ fn apply_unified_patch(cwd: &str, patch: &str) -> AppResult<ToolOutput> {
         return Err(app_error("patch content cannot be empty"));
     }
 
-    let patch_body = normalize_patch_paths(cwd, patch);
+    let canonical_cwd = fs::canonicalize(cwd).ok();
+    let patch_body = normalize_patch_paths(canonical_cwd.as_deref(), patch);
     let summary = summarize_patch(&patch_body)?;
 
     if summary.is_empty() {
@@ -91,7 +99,7 @@ fn apply_unified_patch(cwd: &str, patch: &str) -> AppResult<ToolOutput> {
         ));
     }
 
-    let canonical_cwd = fs::canonicalize(cwd).unwrap_or_else(|_| PathBuf::from(cwd));
+    let canonical_cwd = canonical_cwd.unwrap_or_else(|| PathBuf::from(cwd));
     validate_patch_scope(&canonical_cwd, &summary)?;
 
     let temp_path = unique_patch_path();
@@ -126,7 +134,7 @@ fn apply_unified_patch(cwd: &str, patch: &str) -> AppResult<ToolOutput> {
 
 fn run_patch_cli(cwd: &str, patch_path: &Path, dry_run: bool) -> std::io::Result<PatchOutput> {
     let mut command = Command::new("patch");
-    command.args(["--batch", "--forward", "-p0"]);
+    command.args(["--batch", "--forward", "--binary", "-p0"]);
     if dry_run {
         command.arg("--dry-run");
     }
@@ -157,42 +165,51 @@ fn ensure_trailing_newline(value: &str) -> String {
     }
 }
 
-fn normalize_patch_paths(cwd: &str, patch: &str) -> String {
-    let canonical = fs::canonicalize(cwd).ok();
-    patch
-        .lines()
-        .map(|line| normalize_patch_header_line(canonical.as_deref(), line))
-        .collect::<Vec<_>>()
-        .join("\n")
+fn normalize_patch_paths(canonical_cwd: Option<&Path>, patch: &str) -> String {
+    let mut output = String::with_capacity(patch.len() + 8);
+    for (index, line) in patch.split('\n').enumerate() {
+        if index > 0 {
+            output.push('\n');
+        }
+        normalize_patch_header_into(&mut output, canonical_cwd, line);
+    }
+    output
 }
 
-fn normalize_patch_header_line(cwd: Option<&Path>, line: &str) -> String {
+fn normalize_patch_header_into(output: &mut String, cwd: Option<&Path>, line: &str) {
     let Some((prefix, raw_path)) = line
         .strip_prefix("--- ")
         .map(|path| ("--- ", path))
         .or_else(|| line.strip_prefix("+++ ").map(|path| ("+++ ", path)))
     else {
-        return line.to_string();
+        output.push_str(line);
+        return;
     };
 
     let path_token = raw_path.split_whitespace().next().unwrap_or(raw_path);
     if path_token == "/dev/null" {
-        return format!("{prefix}{path_token}");
+        output.push_str(prefix);
+        output.push_str(path_token);
+        return;
     }
 
     let stripped = strip_git_prefix(path_token);
-
     let path = Path::new(stripped);
     if path.is_absolute() {
         if let Some(cwd) = cwd {
             if let Ok(relative) = path.strip_prefix(cwd) {
-                return format!("{prefix}{}", relative.display());
+                output.push_str(prefix);
+                output.push_str(&relative.display().to_string());
+                return;
             }
         }
-        return format!("{prefix}{}", path.display());
+        output.push_str(prefix);
+        output.push_str(&path.display().to_string());
+        return;
     }
 
-    format!("{prefix}{stripped}")
+    output.push_str(prefix);
+    output.push_str(stripped);
 }
 
 fn strip_git_prefix(path: &str) -> &str {
@@ -490,21 +507,32 @@ pub fn build_single_line_diff(path: &str, find: &str, replace: &str) -> Option<U
         return None;
     }
 
-    let content = fs::read_to_string(path).ok()?;
-    let lines: Vec<&str> = content.split('\n').collect();
-    let mut matching = lines
-        .iter()
-        .enumerate()
-        .filter(|(_, line)| line.contains(find));
+    let file = File::open(path).ok()?;
+    let mut reader = BufReader::new(file);
+    let mut buffer = String::new();
+    let mut first_match: Option<(usize, String)> = None;
+    let mut index = 0usize;
 
-    let (first_index, first_line) = matching.next()?;
-    if matching.next().is_some() {
-        return None;
-    }
-    if first_line.matches(find).count() != 1 {
-        return None;
+    loop {
+        buffer.clear();
+        let bytes = reader.read_line(&mut buffer).ok()?;
+        if bytes == 0 {
+            break;
+        }
+        let line = buffer.strip_suffix('\n').unwrap_or(buffer.as_str());
+        if line.contains(find) {
+            if first_match.is_some() {
+                return None;
+            }
+            if line.matches(find).count() != 1 {
+                return None;
+            }
+            first_match = Some((index, line.to_string()));
+        }
+        index += 1;
     }
 
+    let (first_index, first_line) = first_match?;
     let line_number = first_index + 1;
     let new_line = first_line.replacen(find, replace, 1);
 
@@ -781,6 +809,23 @@ mod tests {
 
         let patch = build_single_line_diff(file.to_str().unwrap(), "alpha", "x");
         assert!(patch.is_none());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn build_single_line_diff_round_trips_for_crlf_files() {
+        let dir = unique_test_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("note.txt");
+        fs::write(&file, "alpha\r\nbeta gamma\r\ndelta\r\n").unwrap();
+
+        let plan = build_single_line_diff(file.to_str().unwrap(), "gamma", "GAMMA").unwrap();
+        apply_unified_patch(&plan.cwd, &plan.patch).unwrap();
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "alpha\r\nbeta GAMMA\r\ndelta\r\n"
+        );
 
         let _ = fs::remove_dir_all(dir);
     }
