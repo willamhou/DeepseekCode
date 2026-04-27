@@ -305,8 +305,16 @@ pub fn fetch_first_failed_job(
     pr: &PrContext,
     job_filter: Option<&str>,
 ) -> AppResult<Option<CiFailure>> {
-    let target = format!("{}#{}", pr.repo, pr.number);
-    let checks = run_gh(&["pr", "checks", &target, "--json", "name,state,link"])?;
+    let number_str = pr.number.to_string();
+    let checks = run_gh(&[
+        "pr",
+        "checks",
+        &number_str,
+        "--repo",
+        &pr.repo,
+        "--json",
+        "name,state,link",
+    ])?;
     let Some((run_id, job_name)) = parse_first_failed_check(&checks, job_filter)? else {
         return Ok(None);
     };
@@ -350,7 +358,12 @@ pub fn post_pr_comment(repo: &str, number: u64, body: &str) -> AppResult<()> {
         .unwrap_or_default()
         .as_nanos();
     path.push(format!("dscode_pr_comment_{stamp}.md"));
-    let mut file = std::fs::File::create(&path)?;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(&path)?;
     file.write_all(body.as_bytes())?;
     file.flush()?;
     drop(file);
