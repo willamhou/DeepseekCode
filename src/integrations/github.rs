@@ -1,4 +1,7 @@
 use crate::error::{app_error, AppResult};
+use crate::util::json::{
+    json_as_array, json_as_object, json_as_string, parse_root_object, JsonValue,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrRef {
@@ -51,6 +54,76 @@ pub fn parse_pr_ref(input: &str) -> AppResult<PrRef> {
     Ok(PrRef::Number(number))
 }
 
+#[derive(Debug, Clone)]
+pub struct PrContext {
+    pub number: u64,
+    pub repo: String,
+    pub title: String,
+    pub branch: String,
+    pub base_branch: String,
+    pub diff: String,
+    pub changed_files: Vec<String>,
+}
+
+pub fn parse_pr_view_json(body: &str) -> AppResult<PrContext> {
+    let root = parse_root_object(body)?;
+
+    let number = root
+        .get("number")
+        .and_then(|value| match value {
+            JsonValue::Number(text) => text.parse().ok(),
+            _ => None,
+        })
+        .ok_or_else(|| app_error("pr view: missing or non-numeric `number`"))?;
+    let title = root
+        .get("title")
+        .and_then(json_as_string)
+        .ok_or_else(|| app_error("pr view: missing string `title`"))?
+        .to_string();
+    let branch = root
+        .get("headRefName")
+        .and_then(json_as_string)
+        .ok_or_else(|| app_error("pr view: missing string `headRefName`"))?
+        .to_string();
+    let base_branch = root
+        .get("baseRefName")
+        .and_then(json_as_string)
+        .ok_or_else(|| app_error("pr view: missing string `baseRefName`"))?
+        .to_string();
+    let repo = root
+        .get("headRepository")
+        .and_then(json_as_object)
+        .and_then(|map| map.get("nameWithOwner"))
+        .and_then(json_as_string)
+        .ok_or_else(|| app_error("pr view: missing string `headRepository.nameWithOwner`"))?
+        .to_string();
+    let changed_files = root
+        .get("files")
+        .and_then(json_as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    json_as_object(item)
+                        .and_then(|map| map.get("path"))
+                        .and_then(json_as_string)
+                        .map(str::to_string)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    Ok(PrContext {
+        number,
+        repo,
+        title,
+        branch,
+        base_branch,
+        diff: String::new(),
+        changed_files,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,5 +171,39 @@ mod tests {
     #[test]
     fn rejects_non_numeric_id() {
         assert!(parse_pr_ref("owner/repo#abc").is_err());
+    }
+
+    #[test]
+    fn parse_pr_view_extracts_metadata() {
+        let body = r#"{
+            "number": 12,
+            "title": "Add CRLF round-trip",
+            "headRefName": "feat/crlf",
+            "baseRefName": "main",
+            "headRepository": {"nameWithOwner": "willamhou/DeepseekCode"},
+            "files": [
+                {"path": "src/tools/apply_patch.rs"},
+                {"path": "docs/roadmap.md"}
+            ]
+        }"#;
+        let parsed = parse_pr_view_json(body).unwrap();
+        assert_eq!(parsed.number, 12);
+        assert_eq!(parsed.title, "Add CRLF round-trip");
+        assert_eq!(parsed.branch, "feat/crlf");
+        assert_eq!(parsed.base_branch, "main");
+        assert_eq!(parsed.repo, "willamhou/DeepseekCode");
+        assert_eq!(
+            parsed.changed_files,
+            vec![
+                "src/tools/apply_patch.rs".to_string(),
+                "docs/roadmap.md".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_pr_view_rejects_missing_required_fields() {
+        let body = r#"{"number": 1}"#;
+        assert!(parse_pr_view_json(body).is_err());
     }
 }
