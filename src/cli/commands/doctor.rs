@@ -14,6 +14,7 @@ pub fn run(_args: DoctorArgs) -> AppResult<()> {
     print_model_section(&config);
     print_api_key_section(&config);
     print_network_section(&config);
+    print_github_section();
     print_hints_section(&config);
     Ok(())
 }
@@ -90,6 +91,42 @@ fn print_network_section(config: &AppConfig) {
         }
         ProbeOutcome::CurlError { message } => {
             println!("  curl HEAD {host}: failed ({message})");
+        }
+    }
+}
+
+fn print_github_section() {
+    println!();
+    println!("[github]");
+    let version = std::process::Command::new("gh")
+        .args(["--version"])
+        .output();
+    match version {
+        Ok(out) if out.status.success() => {
+            let first_line = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            println!("  gh CLI: {first_line}");
+            let auth = std::process::Command::new("gh")
+                .args(["auth", "status"])
+                .output();
+            match auth {
+                Ok(auth_out) if auth_out.status.success() => {
+                    println!("  gh auth: ok");
+                }
+                Ok(_) => {
+                    println!("  gh auth: not authenticated (run `gh auth login`)");
+                }
+                Err(error) => {
+                    println!("  gh auth: could not check ({error})");
+                }
+            }
+        }
+        Ok(_) | Err(_) => {
+            println!("  gh CLI: not installed (install from https://cli.github.com/ for `dscode pr` commands)");
         }
     }
 }
