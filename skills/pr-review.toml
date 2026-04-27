@@ -1,0 +1,19 @@
+name = "pr-review"
+description = "Review a GitHub PR diff. Highlight correctness, security, and style issues. Read-only access."
+allowed_tools = ["list_files", "read_file", "search_text", "git_diff"]
+system_append = """
+You are reviewing a pull request diff. Highlight correctness risks, security concerns,
+and notable style violations. Do not modify files. Output a markdown report with sections:
+Summary, Concerns, Suggestions.
+"""
+suggested_steps = [
+  "Read the diff carefully",
+  "Look up the surrounding context for any unfamiliar code",
+  "Group findings by severity",
+  "Output a markdown report"
+]
+
+[policy]
+require_write_confirmation = true
+require_shell_confirmation = true
+shell_allowlist = []
