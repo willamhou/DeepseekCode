@@ -303,12 +303,18 @@
 
 ### Phase 8: 高级能力
 
-- PR/CI 集成
-- 更强语言特化
-- IDE 集成
-- 多 agent
+- PR/CI 集成（v1，已完成基础版）
+  - `dscode pr review <pr>` —— 只读 review，输出 markdown 到 stdout / 文件 / `gh pr comment`
+  - `dscode pr fix <pr>` —— 抓首个失败 CI job，本地复现并迭代修复（12 步预算）
+  - `dscode pr patch <pr>` —— 提改动到工作区；`--commit` 在干净工作区时自动 commit（不 push）
+  - 三命令共享 `gh auth` 检查、PR 上下文获取、prefilled observations 注入
+  - 所有写入与 shell 仍走 P3 confirm
+  - `dscode doctor` 新增 `[github]` 段，显示 `gh` 版本与 auth 状态
+- 更强语言特化：未开始
+- IDE 集成：未开始
+- 多 agent：未开始
 
-状态：未开始
+状态：进行中（PR/CI 一项基础版完成）
 
 ## 建议的下一个顺序
 

@@ -55,3 +55,11 @@ workspace.config_dir = ".dscode"
 # 会话快照目录
 # `dscode resume` 会从此目录读取上次会话
 workspace.session_dir = ".dscode/sessions"
+
+# -----------------------------------------------------------------------------
+# pr: GitHub PR integration (Phase 8a)
+# -----------------------------------------------------------------------------
+
+# v1 has no PR-specific config keys; this section is reserved for future use
+# (e.g. default --max-attempts, default reviewer skill name).
+# Run `dscode doctor` and check the [github] section to verify gh CLI auth.
