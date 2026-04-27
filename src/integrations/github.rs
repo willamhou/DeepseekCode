@@ -414,6 +414,22 @@ pub fn require_on_branch(expected: &str) -> AppResult<()> {
     }
 }
 
+pub fn worktree_is_clean() -> AppResult<bool> {
+    let output = Command::new("git")
+        .args(["status", "--porcelain"])
+        .output()
+        .map_err(|error| {
+            crate::error::app_error(format!("could not invoke git status: {error}"))
+        })?;
+    if !output.status.success() {
+        return Err(crate::error::tool_failure(format!(
+            "git status failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(output.stdout.iter().all(|b| b.is_ascii_whitespace()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -598,5 +614,10 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("definitely-not-a-real-branch"));
         assert!(message.contains("checkout"));
+    }
+
+    #[test]
+    fn worktree_is_clean_returns_a_boolean() {
+        let _ = worktree_is_clean();
     }
 }

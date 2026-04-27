@@ -16,9 +16,7 @@ pub fn run(action: PrAction) -> AppResult<()> {
             run_review(&reference, post, out.as_deref())
         }
         PrAction::Fix { reference, job } => run_fix(&reference, job.as_deref()),
-        PrAction::Patch { .. } => Err(crate::error::app_error(
-            "pr patch is implemented in a later task",
-        )),
+        PrAction::Patch { reference, commit } => run_patch(&reference, commit),
     }
 }
 
@@ -182,5 +180,86 @@ mod fix_tests {
         assert!(text.contains("test-rust"));
         assert!(text.contains("cargo test"));
         assert!(text.contains("PR #12"));
+    }
+}
+
+use crate::integrations::github::worktree_is_clean;
+
+fn run_patch(reference: &str, commit: bool) -> AppResult<()> {
+    ensure_gh_auth()?;
+    let pr_ref = parse_pr_ref(reference)?;
+    let pr = fetch_pr(&pr_ref)?;
+    require_on_branch(&pr.branch)?;
+    if commit && !worktree_is_clean()? {
+        return Err(crate::error::policy_denied(
+            "working tree has uncommitted changes; commit or stash before --commit",
+        ));
+    }
+
+    let task = build_patch_task_text(&pr);
+    let context = TaskContext::new(task, None);
+    let observations = vec![Observation::ok("git_diff", pr.diff.clone())];
+
+    let config = load_or_default()?;
+    let mut agent = Agent::new(config);
+    agent.run_with(
+        context,
+        AgentLoopOptions {
+            steps: 4,
+            initial_observations: observations,
+        },
+    )?;
+
+    if commit {
+        run_git(&["add", "-A"])?;
+        let message = format!("dscode: fix PR #{}", pr.number);
+        run_git(&["commit", "-m", &message])?;
+        println!("committed staged changes (no push)");
+    } else {
+        println!("changes left in worktree; run `git diff` to inspect, then commit manually");
+    }
+    Ok(())
+}
+
+fn build_patch_task_text(pr: &PrContext) -> String {
+    format!(
+        "Address review feedback or apply the requested change in PR #{} '{}'. PR diff is the current head; propose minimal additional changes.",
+        pr.number, pr.title
+    )
+}
+
+fn run_git(args: &[&str]) -> AppResult<()> {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .output()
+        .map_err(|error| crate::error::app_error(format!("could not invoke git: {error}")))?;
+    if !output.status.success() {
+        return Err(crate::error::tool_failure(format!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod patch_tests {
+    use super::*;
+
+    #[test]
+    fn patch_task_text_mentions_pr_number_and_title() {
+        let pr = PrContext {
+            number: 9,
+            repo: "o/r".to_string(),
+            title: "Tighten retry loop".to_string(),
+            branch: "feat/retry".to_string(),
+            base_branch: "main".to_string(),
+            diff: String::new(),
+            changed_files: Vec::new(),
+        };
+        let text = build_patch_task_text(&pr);
+        assert!(text.contains("#9"));
+        assert!(text.contains("Tighten retry loop"));
     }
 }
