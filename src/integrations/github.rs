@@ -233,6 +233,146 @@ pub fn parse_failed_job_from_run(
     )))
 }
 
+use std::process::Command;
+
+pub fn ensure_gh_auth() -> AppResult<()> {
+    let output = Command::new("gh")
+        .args(["auth", "status"])
+        .output()
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                app_error("gh CLI not found; install from https://cli.github.com/")
+            } else {
+                app_error(format!("failed to invoke gh: {error}"))
+            }
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(crate::error::policy_denied(format!(
+            "gh not authenticated; run `gh auth login` (gh said: {})",
+            stderr.trim()
+        )));
+    }
+    Ok(())
+}
+
+fn run_gh(args: &[&str]) -> AppResult<String> {
+    let output = Command::new("gh")
+        .args(args)
+        .output()
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                app_error("gh CLI not found; install from https://cli.github.com/")
+            } else {
+                app_error(format!("failed to invoke gh: {error}"))
+            }
+        })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(crate::error::tool_failure(format!(
+            "gh {} failed: {}",
+            args.first().copied().unwrap_or(""),
+            stderr.trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn pr_ref_arg(reference: &PrRef) -> String {
+    match reference {
+        PrRef::Number(n) => n.to_string(),
+        PrRef::Qualified { repo, number } => format!("{repo}#{number}"),
+    }
+}
+
+pub fn fetch_pr(reference: &PrRef) -> AppResult<PrContext> {
+    let view = run_gh(&[
+        "pr",
+        "view",
+        &pr_ref_arg(reference),
+        "--json",
+        "number,title,headRefName,baseRefName,headRepository,files",
+    ])?;
+    let mut context = parse_pr_view_json(&view)?;
+
+    let diff = run_gh(&["pr", "diff", &pr_ref_arg(reference)])?;
+    context.diff = diff;
+    Ok(context)
+}
+
+pub fn fetch_first_failed_job(
+    pr: &PrContext,
+    job_filter: Option<&str>,
+) -> AppResult<Option<CiFailure>> {
+    let target = format!("{}#{}", pr.repo, pr.number);
+    let checks = run_gh(&["pr", "checks", &target, "--json", "name,state,link"])?;
+    let Some((run_id, job_name)) = parse_first_failed_check(&checks, job_filter)? else {
+        return Ok(None);
+    };
+
+    let run_view = run_gh(&[
+        "run",
+        "view",
+        &run_id.to_string(),
+        "--repo",
+        &pr.repo,
+        "--json",
+        "jobs",
+    ])?;
+    let (job_id, failed_step) = parse_failed_job_from_run(&run_view, &job_name)?;
+
+    let log = run_gh(&[
+        "run",
+        "view",
+        "--repo",
+        &pr.repo,
+        "--job",
+        &job_id.to_string(),
+        "--log-failed",
+    ])?;
+    let log_tail = tail_lines(&log, 200);
+
+    Ok(Some(CiFailure {
+        run_id,
+        job_name,
+        job_id,
+        log_tail,
+        failed_step,
+    }))
+}
+
+pub fn post_pr_comment(repo: &str, number: u64, body: &str) -> AppResult<()> {
+    use std::io::Write;
+    let mut path = std::env::temp_dir();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    path.push(format!("dscode_pr_comment_{stamp}.md"));
+    let mut file = std::fs::File::create(&path)?;
+    file.write_all(body.as_bytes())?;
+    file.flush()?;
+    drop(file);
+
+    let target = format!("{repo}#{number}");
+    let path_str = path.to_string_lossy().into_owned();
+    let result = run_gh(&["pr", "comment", &target, "--body-file", &path_str])
+        .and_then(|_| Ok(()));
+    let _ = std::fs::remove_file(&path);
+    result
+}
+
+fn tail_lines(text: &str, max: usize) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.len() <= max {
+        return text.trim_end_matches('\n').to_string();
+    }
+    let dropped = lines.len() - max;
+    let tail = lines[dropped..].join("\n");
+    format!("... truncated {dropped} earlier lines ...\n{tail}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,5 +509,31 @@ mod tests {
     fn parse_run_jobs_errors_when_job_name_missing() {
         let body = r#"{"jobs": []}"#;
         assert!(parse_failed_job_from_run(body, "test").is_err());
+    }
+
+    #[test]
+    fn tail_lines_keeps_short_input_intact() {
+        let raw = "one\ntwo\nthree";
+        assert_eq!(tail_lines(raw, 200), "one\ntwo\nthree");
+    }
+
+    #[test]
+    fn tail_lines_truncates_when_over_limit() {
+        let raw: String = (1..=300).map(|n| format!("line{n}\n")).collect();
+        let trimmed = tail_lines(&raw, 100);
+        assert!(trimmed.starts_with("... truncated 200 earlier lines ..."));
+        assert!(trimmed.contains("line300"));
+        assert!(!trimmed.contains("\nline100\n"));
+    }
+
+    #[test]
+    fn extracts_run_id_from_actions_link() {
+        let link = "https://github.com/o/r/actions/runs/12345/jobs/678";
+        assert_eq!(extract_run_id_from_link(link), Some(12345));
+    }
+
+    #[test]
+    fn extract_run_id_returns_none_for_unrelated_link() {
+        assert_eq!(extract_run_id_from_link("https://example.com/foo"), None);
     }
 }
