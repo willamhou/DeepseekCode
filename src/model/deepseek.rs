@@ -173,7 +173,36 @@ impl DeepSeekClient {
         let search_query = derive_search_query(&task);
         let edit_request = derive_edit_request(&task);
 
-        if !used_tools.contains("list_files") && tool_available("list_files") {
+        if let Some(edit_request) = edit_request.as_ref() {
+            if !succeeded_tools.contains("apply_patch")
+                && !used_tools.contains("apply_patch")
+                && tool_available("apply_patch")
+            {
+                if let Some(plan) = crate::tools::apply_patch::build_single_line_diff(
+                    &edit_request.path,
+                    &edit_request.find,
+                    &edit_request.replace,
+                ) {
+                    return ModelResponse {
+                        message: format!(
+                            "{} planner skipped inspection; applying a unified diff patch directly in {}.",
+                            self.config.model, edit_request.path
+                        ),
+                        action: ModelAction::CallTool {
+                            tool_name: "apply_patch".to_string(),
+                            input: ToolInput::new()
+                                .with_arg("cwd", plan.cwd)
+                                .with_arg("patch", plan.patch),
+                        },
+                    };
+                }
+            }
+        }
+
+        if !used_tools.contains("list_files")
+            && tool_available("list_files")
+            && !succeeded_tools.contains("apply_patch")
+        {
             return ModelResponse {
                 message: format!(
                     "{} planner is exploring the repository layout first.",
@@ -207,7 +236,10 @@ impl DeepSeekClient {
         }
 
         if let Some(edit_request) = edit_request.as_ref() {
-            if !used_tools.contains("read_file") && tool_available("read_file") {
+            if !used_tools.contains("read_file")
+                && tool_available("read_file")
+                && !succeeded_tools.contains("apply_patch")
+            {
                 return ModelResponse {
                     message: format!(
                         "{} planner is reading the edit target before applying changes.",
@@ -997,6 +1029,41 @@ mod tests {
             }
             ModelAction::Finish => panic!("expected tool call"),
         }
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn offline_planner_skips_inspection_when_patch_can_be_built_directly() {
+        let dir = unique_planner_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("note.txt");
+        fs::write(&file, "alpha\nbeta gamma\ndelta\n").unwrap();
+        let path = file.to_str().unwrap().to_string();
+
+        let request = ModelRequest {
+            system_prompt: String::new(),
+            task: format!("replace \"gamma\" with \"GAMMA\" in {path}"),
+            profile_name: "generic".to_string(),
+            primary_file: None,
+            suggested_test_command: None,
+            available_tools: vec!["apply_patch".to_string(), "read_file".to_string(), "list_files".to_string()],
+            observations: vec![],
+        };
+
+        let response = planner().respond(request).unwrap();
+        match response.action {
+            ModelAction::CallTool { tool_name, input } => {
+                assert_eq!(tool_name, "apply_patch");
+                assert!(input.get("patch").is_some(), "expected patch-mode shortcut");
+            }
+            ModelAction::Finish => panic!("expected tool call"),
+        }
+        assert!(
+            response.message.contains("skipped inspection"),
+            "message: {}",
+            response.message
+        );
 
         let _ = fs::remove_dir_all(dir);
     }
