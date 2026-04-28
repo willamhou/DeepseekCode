@@ -285,21 +285,27 @@
 
 ### Phase 6: 体验打磨
 
-- doctor：已完成扩展版（workspace / model / api key / network / hints 五段输出）
+- doctor：已完成扩展版（workspace / model / api key / network / hints / github 六段输出）
 - smoke：已完成（OpenAI 与 Anthropic 兼容路径独立验证）
 - diff 展示：基础版已具备
-- 更好的报错：进行中
-- 更好的上下文摘要：未开始
+- 更好的报错：已完成基础版
+  - `AppError` 增加 `hint` 与 `source` 字段
+  - 关键失败模式自动附 actionable 提示（gh auth / branch mismatch / non-TTY 拒绝 / 等 9 类）
+  - 因果链通过 `<dyn Error>::source()` 暴露给下游
+- 更好的上下文摘要：已完成基础版
+  - superseded 观察保留首行 + 行数（截 80 字符）而非通用桩，给 planner 留弱信号
 
-状态：进行中
+状态：基础版完成
 
 ### Phase 7: 更强编辑能力
 
 - 多文件 patch：已完成（含路径范围校验与失败分类）
 - 更稳定的 edit-retry loop：已完成基础版（apply_patch patch→text 单次回退；工具异常变观察项）
-- 更像真实 code agent 的最小步编辑策略：未完成
+- 更像真实 code agent 的最小步编辑策略：已完成基础版
+  - `build_single_line_diff` 直接成功时 planner 跳过 list_files / read_file
+  - 简单 `replace "X" with "Y" in path` 任务 4 步压到 2 步（apply_patch + git_diff）
 
-状态：进行中
+状态：基础版完成
 
 ### Phase 8: 高级能力
 
