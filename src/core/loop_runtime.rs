@@ -15,6 +15,20 @@ use crate::skills::schema::SkillSpec;
 use crate::tools::registry::{default_registry, ExecutionPolicy};
 use crate::ui::render::print_banner;
 
+pub struct AgentLoopOptions {
+    pub steps: usize,
+    pub initial_observations: Vec<Observation>,
+}
+
+impl Default for AgentLoopOptions {
+    fn default() -> Self {
+        Self {
+            steps: 4,
+            initial_observations: Vec::new(),
+        }
+    }
+}
+
 pub struct AgentLoop {
     config: AppConfig,
 }
@@ -25,6 +39,10 @@ impl AgentLoop {
     }
 
     pub fn run(&self, context: TaskContext) -> AppResult<()> {
+        self.run_with(context, AgentLoopOptions::default())
+    }
+
+    pub fn run_with(&self, context: TaskContext, options: AgentLoopOptions) -> AppResult<()> {
         print_banner("DeepseekCode");
 
         let profile = detect_profile(".")?;
@@ -59,8 +77,8 @@ impl AgentLoop {
 
         println!("Memory summary: {}", memory.summary());
 
-        let mut observations = Vec::new();
-        for step in 0..4 {
+        let mut observations = options.initial_observations.clone();
+        for step in 0..options.steps {
             let request = ModelRequest {
                 system_prompt: build_system_prompt(skill),
                 task: context.task.clone(),

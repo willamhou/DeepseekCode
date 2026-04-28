@@ -16,4 +16,13 @@ impl Agent {
         let runtime = AgentLoop::new(self.config.clone());
         runtime.run(context)
     }
+
+    pub fn run_with(
+        &mut self,
+        context: TaskContext,
+        options: crate::core::loop_runtime::AgentLoopOptions,
+    ) -> AppResult<()> {
+        let runtime = crate::core::loop_runtime::AgentLoop::new(self.config.clone());
+        runtime.run_with(context, options)
+    }
 }

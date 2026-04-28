@@ -5,6 +5,97 @@ pub struct Cli {
     pub command: Option<Command>,
 }
 
+#[derive(Debug)]
+pub enum PrAction {
+    Review {
+        reference: String,
+        post: bool,
+        out: Option<String>,
+    },
+    Fix {
+        reference: String,
+        job: Option<String>,
+    },
+    Patch {
+        reference: String,
+        commit: bool,
+    },
+}
+
+pub fn parse_pr_subcommand(args: Vec<String>) -> Result<PrAction, String> {
+    let mut iter = args.into_iter();
+    let action = iter
+        .next()
+        .ok_or_else(|| "pr requires a sub-action: review|fix|patch".to_string())?;
+    let reference = iter
+        .next()
+        .ok_or_else(|| format!("pr {action} requires a PR reference"))?;
+    let rest: Vec<String> = iter.collect();
+
+    match action.as_str() {
+        "review" => {
+            let mut post = false;
+            let mut out = None;
+            let mut index = 0;
+            while index < rest.len() {
+                match rest[index].as_str() {
+                    "--post" => {
+                        post = true;
+                        index += 1;
+                    }
+                    "--out" if index + 1 < rest.len() => {
+                        out = Some(rest[index + 1].clone());
+                        index += 2;
+                    }
+                    other => {
+                        return Err(format!("unknown flag for `pr review`: {other}"));
+                    }
+                }
+            }
+            Ok(PrAction::Review {
+                reference,
+                post,
+                out,
+            })
+        }
+        "fix" => {
+            let mut job = None;
+            let mut index = 0;
+            while index < rest.len() {
+                match rest[index].as_str() {
+                    "--job" if index + 1 < rest.len() => {
+                        job = Some(rest[index + 1].clone());
+                        index += 2;
+                    }
+                    other => {
+                        return Err(format!("unknown flag for `pr fix`: {other}"));
+                    }
+                }
+            }
+            Ok(PrAction::Fix { reference, job })
+        }
+        "patch" => {
+            let mut commit = false;
+            let mut index = 0;
+            while index < rest.len() {
+                match rest[index].as_str() {
+                    "--commit" => {
+                        commit = true;
+                        index += 1;
+                    }
+                    other => {
+                        return Err(format!("unknown flag for `pr patch`: {other}"));
+                    }
+                }
+            }
+            Ok(PrAction::Patch { reference, commit })
+        }
+        other => Err(format!(
+            "unknown pr sub-action `{other}`; expected review|fix|patch"
+        )),
+    }
+}
+
 impl Cli {
     pub fn parse() -> Self {
         let mut args = env::args().skip(1).collect::<Vec<_>>();
@@ -31,6 +122,13 @@ impl Cli {
             }),
             "doctor" => Command::Doctor(DoctorArgs {}),
             "smoke" => Command::Smoke(parse_smoke_args(args)),
+            "pr" => match parse_pr_subcommand(args) {
+                Ok(action) => Command::Pr(action),
+                Err(message) => {
+                    eprintln!("error: {message}");
+                    std::process::exit(2);
+                }
+            },
             _ => {
                 let mut combined = vec![first];
                 combined.extend(args);
@@ -56,6 +154,7 @@ pub enum Command {
     Config(ConfigArgs),
     Doctor(DoctorArgs),
     Smoke(SmokeArgs),
+    Pr(PrAction),
 }
 
 impl Default for Command {
@@ -155,4 +254,60 @@ fn parse_common_flags(args: Vec<String>) -> (Option<String>, Vec<String>) {
     }
 
     (skill, positional)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_pr_review_with_post_flag() {
+        let args = vec!["review".to_string(), "42".to_string(), "--post".to_string()];
+        let parsed = parse_pr_subcommand(args).unwrap();
+        assert!(matches!(
+            parsed,
+            PrAction::Review {
+                ref reference,
+                post: true,
+                out: None,
+            } if reference == "42"
+        ));
+    }
+
+    #[test]
+    fn parses_pr_fix_with_job_flag() {
+        let args = vec![
+            "fix".to_string(),
+            "owner/repo#7".to_string(),
+            "--job".to_string(),
+            "test-rust".to_string(),
+        ];
+        let parsed = parse_pr_subcommand(args).unwrap();
+        match parsed {
+            PrAction::Fix { reference, job } => {
+                assert_eq!(reference, "owner/repo#7");
+                assert_eq!(job.as_deref(), Some("test-rust"));
+            }
+            _ => panic!("expected fix"),
+        }
+    }
+
+    #[test]
+    fn parses_pr_patch_with_commit_flag() {
+        let args = vec!["patch".to_string(), "5".to_string(), "--commit".to_string()];
+        let parsed = parse_pr_subcommand(args).unwrap();
+        assert!(matches!(
+            parsed,
+            PrAction::Patch {
+                commit: true,
+                ref reference,
+            } if reference == "5"
+        ));
+    }
+
+    #[test]
+    fn rejects_unknown_pr_subaction() {
+        let args = vec!["delete".to_string(), "5".to_string()];
+        assert!(parse_pr_subcommand(args).is_err());
+    }
 }
