@@ -1,9 +1,8 @@
 use crate::cli::app::PrAction;
 use crate::config::load::load_or_default;
 use crate::config::types::AppConfig;
-use crate::core::agent::Agent;
 use crate::core::context::TaskContext;
-use crate::core::loop_runtime::AgentLoopOptions;
+use crate::core::loop_runtime::{AgentLoop, AgentLoopOptions};
 use crate::error::AppResult;
 use crate::integrations::github::{
     ensure_gh_auth, fetch_first_failed_job, fetch_pr, parse_pr_ref, post_pr_comment,
@@ -48,8 +47,8 @@ fn run_review(config: AppConfig, reference: &str, post: bool, out: Option<&str>)
         Observation::ok("list_files", pr.changed_files.join("\n")),
     ];
 
-    let mut agent = Agent::new(config);
-    agent.run_with(
+    let runtime = AgentLoop::new(config);
+    runtime.run_with(
         context,
         AgentLoopOptions {
             steps: 4,
@@ -87,30 +86,6 @@ fn deliver_review(pr: &PrContext, body: &str, post: bool, out: Option<&str>) -> 
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn fixture_pr() -> PrContext {
-        PrContext {
-            number: 12,
-            repo: "owner/repo".to_string(),
-            title: "Add feature X".to_string(),
-            branch: "feat/x".to_string(),
-            base_branch: "main".to_string(),
-            diff: String::new(),
-            changed_files: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn review_task_text_mentions_number_and_title() {
-        let text = build_review_task_text(&fixture_pr());
-        assert!(text.contains("#12"));
-        assert!(text.contains("Add feature X"));
-        assert!(text.contains("owner/repo"));
-    }
-}
 
 fn run_fix(config: AppConfig, reference: &str, job_filter: Option<&str>) -> AppResult<()> {
     ensure_gh_auth()?;
@@ -130,8 +105,8 @@ fn run_fix(config: AppConfig, reference: &str, job_filter: Option<&str>) -> AppR
     let context = TaskContext::new(task, None);
     let observations = vec![Observation::ok("run_shell", failure.log_tail.clone())];
 
-    let mut agent = Agent::new(config);
-    agent.run_with(
+    let runtime = AgentLoop::new(config);
+    runtime.run_with(
         context,
         AgentLoopOptions {
             steps: 12,
@@ -160,41 +135,6 @@ fn build_fix_task_text(pr: &PrContext, failure: &CiFailure) -> String {
     )
 }
 
-#[cfg(test)]
-mod fix_tests {
-    use super::*;
-
-    fn fixture_pr() -> PrContext {
-        PrContext {
-            number: 12,
-            repo: "owner/repo".to_string(),
-            title: "Some PR".to_string(),
-            branch: "feat/x".to_string(),
-            base_branch: "main".to_string(),
-            diff: String::new(),
-            changed_files: Vec::new(),
-        }
-    }
-
-    fn fixture_failure() -> CiFailure {
-        CiFailure {
-            run_id: 555,
-            job_name: "test-rust".to_string(),
-            job_id: 7,
-            log_tail: "FAILED at line 42".to_string(),
-            failed_step: Some("cargo test".to_string()),
-        }
-    }
-
-    #[test]
-    fn fix_task_text_includes_run_id_and_step() {
-        let text = build_fix_task_text(&fixture_pr(), &fixture_failure());
-        assert!(text.contains("run #555"));
-        assert!(text.contains("test-rust"));
-        assert!(text.contains("cargo test"));
-        assert!(text.contains("PR #12"));
-    }
-}
 
 fn run_patch(config: AppConfig, reference: &str, commit: bool) -> AppResult<()> {
     ensure_gh_auth()?;
@@ -211,8 +151,8 @@ fn run_patch(config: AppConfig, reference: &str, commit: bool) -> AppResult<()> 
     let context = TaskContext::new(task, None);
     let observations = vec![Observation::ok("git_diff", pr.diff.clone())];
 
-    let mut agent = Agent::new(config);
-    agent.run_with(
+    let runtime = AgentLoop::new(config);
+    runtime.run_with(
         context,
         AgentLoopOptions {
             steps: 4,
@@ -243,21 +183,51 @@ fn run_git(args: &[&str]) -> AppResult<()> {
 }
 
 #[cfg(test)]
-mod patch_tests {
+mod tests {
     use super::*;
 
-    #[test]
-    fn patch_task_text_mentions_pr_number_and_title() {
-        let pr = PrContext {
-            number: 9,
-            repo: "o/r".to_string(),
-            title: "Tighten retry loop".to_string(),
-            branch: "feat/retry".to_string(),
+    fn fixture_pr(number: u64, title: &str) -> PrContext {
+        PrContext {
+            number,
+            repo: "owner/repo".to_string(),
+            title: title.to_string(),
+            branch: "feat/x".to_string(),
             base_branch: "main".to_string(),
             diff: String::new(),
             changed_files: Vec::new(),
-        };
-        let text = build_patch_task_text(&pr);
+        }
+    }
+
+    fn fixture_failure() -> CiFailure {
+        CiFailure {
+            run_id: 555,
+            job_name: "test-rust".to_string(),
+            job_id: 7,
+            log_tail: "FAILED at line 42".to_string(),
+            failed_step: Some("cargo test".to_string()),
+        }
+    }
+
+    #[test]
+    fn review_task_text_mentions_number_and_title() {
+        let text = build_review_task_text(&fixture_pr(12, "Add feature X"));
+        assert!(text.contains("#12"));
+        assert!(text.contains("Add feature X"));
+        assert!(text.contains("owner/repo"));
+    }
+
+    #[test]
+    fn fix_task_text_includes_run_id_and_step() {
+        let text = build_fix_task_text(&fixture_pr(12, "Some PR"), &fixture_failure());
+        assert!(text.contains("run #555"));
+        assert!(text.contains("test-rust"));
+        assert!(text.contains("cargo test"));
+        assert!(text.contains("PR #12"));
+    }
+
+    #[test]
+    fn patch_task_text_mentions_pr_number_and_title() {
+        let text = build_patch_task_text(&fixture_pr(9, "Tighten retry loop"));
         assert!(text.contains("#9"));
         assert!(text.contains("Tighten retry loop"));
     }
