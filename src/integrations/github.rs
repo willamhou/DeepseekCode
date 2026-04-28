@@ -24,7 +24,11 @@ pub fn parse_pr_ref(input: &str) -> AppResult<PrRef> {
         if kind != "pull" || owner.is_empty() || repo.is_empty() {
             return Err(app_error(format!("malformed GitHub PR URL: {input}")));
         }
-        let number: u64 = number
+        let number_token = number
+            .split(['?', '#'])
+            .next()
+            .unwrap_or("");
+        let number: u64 = number_token
             .parse()
             .map_err(|_| app_error(format!("PR URL has non-numeric ID: {input}")))?;
         return Ok(PrRef::Qualified {
@@ -437,6 +441,45 @@ mod tests {
     #[test]
     fn rejects_non_numeric_id() {
         assert!(parse_pr_ref("owner/repo#abc").is_err());
+    }
+
+    #[test]
+    fn parses_url_with_query_string() {
+        let parsed = parse_pr_ref("https://github.com/willamhou/DeepseekCode/pull/5?diff=split")
+            .unwrap();
+        assert_eq!(
+            parsed,
+            PrRef::Qualified {
+                repo: "willamhou/DeepseekCode".to_string(),
+                number: 5,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_url_with_fragment() {
+        let parsed = parse_pr_ref("https://github.com/willamhou/DeepseekCode/pull/5#discussion")
+            .unwrap();
+        assert_eq!(
+            parsed,
+            PrRef::Qualified {
+                repo: "willamhou/DeepseekCode".to_string(),
+                number: 5,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_url_with_files_suffix() {
+        let parsed = parse_pr_ref("https://github.com/willamhou/DeepseekCode/pull/5/files")
+            .unwrap();
+        assert_eq!(
+            parsed,
+            PrRef::Qualified {
+                repo: "willamhou/DeepseekCode".to_string(),
+                number: 5,
+            }
+        );
     }
 
     #[test]
