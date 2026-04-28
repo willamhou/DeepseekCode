@@ -239,18 +239,7 @@ fn build_patch_task_text(pr: &PrContext) -> String {
 }
 
 fn run_git(args: &[&str]) -> AppResult<()> {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .output()
-        .map_err(|error| crate::error::app_error(format!("could not invoke git: {error}")))?;
-    if !output.status.success() {
-        return Err(crate::error::tool_failure(format!(
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    Ok(())
+    crate::util::process::run_capture_stdout("git", args).map(|_| ())
 }
 
 #[cfg(test)]

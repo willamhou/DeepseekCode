@@ -239,50 +239,21 @@ pub fn parse_failed_job_from_run(
     )))
 }
 
-use std::process::Command;
+use crate::util::process::{run_capture, run_capture_stdout};
 
 pub fn ensure_gh_auth() -> AppResult<()> {
-    let output = Command::new("gh")
-        .args(["auth", "status"])
-        .output()
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                app_error("gh CLI not found; install from https://cli.github.com/")
-            } else {
-                app_error(format!("failed to invoke gh: {error}"))
-            }
-        })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    let captured = run_capture("gh", &["auth", "status"])?;
+    if !captured.success {
         return Err(crate::error::policy_denied(format!(
             "gh not authenticated; run `gh auth login` (gh said: {})",
-            stderr.trim()
+            captured.stderr.trim()
         )));
     }
     Ok(())
 }
 
 fn run_gh(args: &[&str]) -> AppResult<String> {
-    let output = Command::new("gh")
-        .args(args)
-        .output()
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                app_error("gh CLI not found; install from https://cli.github.com/")
-            } else {
-                app_error(format!("failed to invoke gh: {error}"))
-            }
-        })?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(crate::error::tool_failure(format!(
-            "gh {} failed: {}",
-            args.first().copied().unwrap_or(""),
-            stderr.trim()
-        )));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    run_capture_stdout("gh", args)
 }
 
 fn pr_ref_arg(reference: &PrRef) -> String {
@@ -384,14 +355,11 @@ pub fn post_pr_comment(repo: &str, number: u64, body: &str) -> AppResult<()> {
 
 
 pub fn current_branch() -> Option<String> {
-    let output = Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
+    let captured = run_capture("git", &["rev-parse", "--abbrev-ref", "HEAD"]).ok()?;
+    if !captured.success {
         return None;
     }
-    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let name = captured.stdout.trim().to_string();
     if name.is_empty() {
         None
     } else {
@@ -412,19 +380,14 @@ pub fn require_on_branch(expected: &str) -> AppResult<()> {
 }
 
 pub fn worktree_is_clean() -> AppResult<bool> {
-    let output = Command::new("git")
-        .args(["status", "--porcelain"])
-        .output()
-        .map_err(|error| {
-            crate::error::app_error(format!("could not invoke git status: {error}"))
-        })?;
-    if !output.status.success() {
+    let captured = run_capture("git", &["status", "--porcelain"])?;
+    if !captured.success {
         return Err(crate::error::tool_failure(format!(
             "git status failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            captured.stderr.trim()
         )));
     }
-    Ok(output.stdout.iter().all(|b| b.is_ascii_whitespace()))
+    Ok(captured.stdout.chars().all(char::is_whitespace))
 }
 
 #[cfg(test)]

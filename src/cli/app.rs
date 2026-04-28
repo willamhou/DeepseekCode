@@ -97,12 +97,16 @@ pub fn parse_pr_subcommand(args: Vec<String>) -> Result<PrAction, String> {
 }
 
 impl Cli {
-    pub fn parse() -> Self {
-        let mut args = env::args().skip(1).collect::<Vec<_>>();
+    pub fn parse() -> Result<Self, String> {
+        let argv = env::args().skip(1).collect::<Vec<_>>();
+        Self::from_argv(argv)
+    }
+
+    pub fn from_argv(mut args: Vec<String>) -> Result<Self, String> {
         if args.is_empty() {
-            return Self {
+            return Ok(Self {
                 command: Some(Command::Chat(ChatArgs::default())),
-            };
+            });
         }
 
         let first = args.remove(0);
@@ -122,13 +126,7 @@ impl Cli {
             }),
             "doctor" => Command::Doctor(DoctorArgs {}),
             "smoke" => Command::Smoke(parse_smoke_args(args)),
-            "pr" => match parse_pr_subcommand(args) {
-                Ok(action) => Command::Pr(action),
-                Err(message) => {
-                    eprintln!("error: {message}");
-                    std::process::exit(2);
-                }
-            },
+            "pr" => Command::Pr(parse_pr_subcommand(args)?),
             _ => {
                 let mut combined = vec![first];
                 combined.extend(args);
@@ -139,9 +137,9 @@ impl Cli {
             }
         };
 
-        Self {
+        Ok(Self {
             command: Some(command),
-        }
+        })
     }
 }
 
@@ -309,5 +307,43 @@ mod tests {
     fn rejects_unknown_pr_subaction() {
         let args = vec!["delete".to_string(), "5".to_string()];
         assert!(parse_pr_subcommand(args).is_err());
+    }
+
+    #[test]
+    fn cli_from_argv_routes_pr_subcommand_to_command_pr() {
+        let argv = vec![
+            "pr".to_string(),
+            "review".to_string(),
+            "42".to_string(),
+            "--post".to_string(),
+        ];
+        let cli = Cli::from_argv(argv).expect("parse should succeed");
+        match cli.command {
+            Some(Command::Pr(PrAction::Review { reference, post, out: _ })) => {
+                assert_eq!(reference, "42");
+                assert!(post);
+            }
+            other => panic!("expected Command::Pr(Review), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn cli_from_argv_propagates_pr_parse_error() {
+        let argv = vec!["pr".to_string(), "delete".to_string(), "5".to_string()];
+        let result = Cli::from_argv(argv);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("unknown pr sub-action"));
+    }
+
+    #[test]
+    fn cli_from_argv_falls_back_to_chat_for_unknown_first_arg() {
+        let argv = vec!["explore".to_string(), "the".to_string(), "repo".to_string()];
+        let cli = Cli::from_argv(argv).expect("parse should succeed");
+        match cli.command {
+            Some(Command::Chat(args)) => {
+                assert_eq!(args.task.as_deref(), Some("explore the repo"));
+            }
+            other => panic!("expected Command::Chat, got {:?}", other),
+        }
     }
 }

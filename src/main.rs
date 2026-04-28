@@ -13,6 +13,12 @@ mod util;
 use error::AppResult;
 
 fn main() -> AppResult<()> {
-    let cli = cli::app::Cli::parse();
+    let cli = match cli::app::Cli::parse() {
+        Ok(cli) => cli,
+        Err(message) => {
+            eprintln!("error: {message}");
+            std::process::exit(2);
+        }
+    };
     cli::run(cli)
 }
