@@ -17,10 +17,6 @@ pub struct ToolRegistry {
 }
 
 impl ToolRegistry {
-    pub fn names(&self) -> Vec<&'static str> {
-        self.tools.iter().map(|tool| tool.name()).collect()
-    }
-
     pub fn names_for_policy(&self, policy: &ExecutionPolicy) -> Vec<&'static str> {
         self.tools
             .iter()

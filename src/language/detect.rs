@@ -45,10 +45,7 @@ fn rust_profile(root: &Path) -> LanguageProfile {
             "src/lib.rs".to_string(),
             "tests/".to_string(),
         ],
-        ignore_patterns: vec![".git/".to_string(), "target/".to_string()],
         test_commands: vec!["cargo test".to_string()],
-        lint_commands: vec!["cargo clippy --all-targets --all-features".to_string()],
-        build_commands: vec!["cargo build".to_string()],
         hints,
     }
 }
@@ -59,8 +56,6 @@ fn node_profile(root: &Path) -> LanguageProfile {
     let name = if has_typescript { "typescript" } else { "javascript" };
 
     let test = format!("{} test", manager.test_runner());
-    let lint = format!("{} lint", manager.script_runner());
-    let build = format!("{} build", manager.script_runner());
 
     let mut file_priority = vec!["package.json".to_string()];
     if has_typescript {
@@ -77,15 +72,7 @@ fn node_profile(root: &Path) -> LanguageProfile {
     LanguageProfile {
         name: name.to_string(),
         file_priority,
-        ignore_patterns: vec![
-            ".git/".to_string(),
-            "node_modules/".to_string(),
-            "dist/".to_string(),
-            "build/".to_string(),
-        ],
         test_commands: vec![test],
-        lint_commands: vec![lint],
-        build_commands: vec![build],
         hints,
     }
 }
@@ -93,8 +80,6 @@ fn node_profile(root: &Path) -> LanguageProfile {
 fn python_profile(root: &Path) -> LanguageProfile {
     let manager = detect_python_package_manager(root);
     let test = manager.test_command();
-    let lint = manager.lint_command();
-    let build = manager.build_command();
 
     let mut hints = vec![
         "Prefer minimal runtime-safe changes and rerun only relevant tests.".to_string(),
@@ -110,14 +95,7 @@ fn python_profile(root: &Path) -> LanguageProfile {
             "src/".to_string(),
             "tests/".to_string(),
         ],
-        ignore_patterns: vec![
-            ".git/".to_string(),
-            ".venv/".to_string(),
-            "__pycache__/".to_string(),
-        ],
         test_commands: vec![test],
-        lint_commands: vec![lint],
-        build_commands: vec![build],
         hints,
     }
 }
@@ -131,10 +109,7 @@ fn go_profile() -> LanguageProfile {
             "pkg/".to_string(),
             "internal/".to_string(),
         ],
-        ignore_patterns: vec![".git/".to_string(), "vendor/".to_string()],
         test_commands: vec!["go test ./...".to_string()],
-        lint_commands: vec!["go vet ./...".to_string()],
-        build_commands: vec!["go build ./...".to_string()],
         hints: vec![
             "Preserve package boundaries and prefer direct fixes over abstractions.".to_string(),
             "Run `go test -race ./...` when concurrency is involved.".to_string(),
@@ -145,11 +120,6 @@ fn go_profile() -> LanguageProfile {
 fn java_profile(root: &Path) -> LanguageProfile {
     let uses_maven = root.join("pom.xml").exists();
     let test = if uses_maven { "mvn test" } else { "gradle test" };
-    let build = if uses_maven {
-        "mvn package -DskipTests"
-    } else {
-        "gradle build -x test"
-    };
     let manager = if uses_maven { "Maven" } else { "Gradle" };
 
     LanguageProfile {
@@ -161,14 +131,7 @@ fn java_profile(root: &Path) -> LanguageProfile {
             "src/main/".to_string(),
             "src/test/".to_string(),
         ],
-        ignore_patterns: vec![
-            ".git/".to_string(),
-            "target/".to_string(),
-            "build/".to_string(),
-        ],
         test_commands: vec![test.to_string()],
-        lint_commands: Vec::new(),
-        build_commands: vec![build.to_string()],
         hints: vec![
             format!("Detected build tool: {manager}; respect its layout."),
             "Minimize package-level churn and avoid renaming public APIs.".to_string(),
@@ -184,15 +147,7 @@ fn generic_profile() -> LanguageProfile {
             "docs/".to_string(),
             "src/".to_string(),
         ],
-        ignore_patterns: vec![
-            ".git/".to_string(),
-            "node_modules/".to_string(),
-            "target/".to_string(),
-            "dist/".to_string(),
-        ],
         test_commands: Vec::new(),
-        lint_commands: Vec::new(),
-        build_commands: Vec::new(),
         hints: vec!["Start with repository structure and the smallest relevant files.".to_string()],
     }
 }
@@ -210,14 +165,6 @@ impl NodePackageManager {
             Self::Pnpm => "pnpm",
             Self::Yarn => "yarn",
             Self::Npm => "npm",
-        }
-    }
-
-    fn script_runner(self) -> &'static str {
-        match self {
-            Self::Pnpm => "pnpm",
-            Self::Yarn => "yarn",
-            Self::Npm => "npm run",
         }
     }
 
@@ -253,22 +200,6 @@ impl PythonPackageManager {
             Self::Uv => "uv run pytest".to_string(),
             Self::Poetry => "poetry run pytest".to_string(),
             Self::Pip => "pytest".to_string(),
-        }
-    }
-
-    fn lint_command(self) -> String {
-        match self {
-            Self::Uv => "uv run ruff check .".to_string(),
-            Self::Poetry => "poetry run ruff check .".to_string(),
-            Self::Pip => "ruff check .".to_string(),
-        }
-    }
-
-    fn build_command(self) -> String {
-        match self {
-            Self::Uv => "uv build".to_string(),
-            Self::Poetry => "poetry build".to_string(),
-            Self::Pip => "python -m build".to_string(),
         }
     }
 
@@ -316,7 +247,6 @@ mod tests {
         let profile = detect_profile(dir.to_str().unwrap()).unwrap();
         assert_eq!(profile.name, "typescript");
         assert_eq!(profile.test_commands, vec!["pnpm test"]);
-        assert_eq!(profile.lint_commands, vec!["pnpm lint"]);
 
         let _ = fs::remove_dir_all(dir);
     }
@@ -331,7 +261,6 @@ mod tests {
         let profile = detect_profile(dir.to_str().unwrap()).unwrap();
         assert_eq!(profile.name, "javascript");
         assert_eq!(profile.test_commands, vec!["npm test"]);
-        assert_eq!(profile.lint_commands, vec!["npm run lint"]);
 
         let _ = fs::remove_dir_all(dir);
     }
@@ -359,7 +288,6 @@ mod tests {
         let profile = detect_profile(dir.to_str().unwrap()).unwrap();
         assert_eq!(profile.name, "python");
         assert_eq!(profile.test_commands, vec!["uv run pytest"]);
-        assert_eq!(profile.lint_commands, vec!["uv run ruff check ."]);
 
         let _ = fs::remove_dir_all(dir);
     }
@@ -385,7 +313,6 @@ mod tests {
 
         let profile = detect_profile(dir.to_str().unwrap()).unwrap();
         assert_eq!(profile.test_commands, vec!["pytest"]);
-        assert_eq!(profile.lint_commands, vec!["ruff check ."]);
 
         let _ = fs::remove_dir_all(dir);
     }
