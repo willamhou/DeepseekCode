@@ -24,15 +24,20 @@ impl ModelClient for DeepSeekClient {
     fn respond(
         &self,
         input: ModelRequest,
-        events: &mut dyn StreamEvents,
+        events: &mut dyn crate::ui::stream::StreamEvents,
     ) -> AppResult<(ModelResponse, Option<TokenUsage>)> {
-        if let Ok(api_key) = env::var(&self.config.api_key_env) {
-            if !api_key.trim().is_empty() {
-                if let Ok(pair) = self.respond_remote(&input, &api_key, events) {
-                    return Ok(pair);
-                }
-            }
+        let api_key = env::var(&self.config.api_key_env)
+            .ok()
+            .filter(|key| !key.trim().is_empty());
+
+        if let Some(api_key) = api_key {
+            // Remote stream attempted: surface success or error directly.
+            // Stream errors propagate so partial text isn't double-rendered
+            // by the offline fallback (per StreamEvents "exactly once" contract).
+            return self.respond_remote(&input, &api_key, events);
         }
+
+        // No API key configured → run offline planner and drive events.
         let response = self.respond_offline(input);
         events.on_text_delta(&response.message);
         events.on_assistant_done(&response.message);
@@ -1761,5 +1766,37 @@ mod tests {
         assert_eq!(events.done.borrow().len(), 1);
         let chunks = events.chunks.borrow();
         assert_eq!(*chunks, vec!["hi".to_string()]);
+    }
+
+    #[test]
+    fn respond_offline_fallback_only_runs_when_api_key_missing() {
+        // Ensure no DSCODE_TEST_NO_KEY is exported (planner() uses this env var name).
+        let original = std::env::var("DSCODE_TEST_NO_KEY").ok();
+        std::env::remove_var("DSCODE_TEST_NO_KEY");
+
+        let request = ModelRequest {
+            system_prompt: String::new(),
+            task: "say hi".to_string(),
+            profile_name: "generic".to_string(),
+            profile_hints: Vec::new(),
+            primary_file: None,
+            suggested_test_command: None,
+            available_tools: vec![],
+            observations: vec![],
+        };
+
+        let mut events = CapturingEvents::default();
+        let (_resp, _usage) = planner().respond(request, &mut events).unwrap();
+
+        // Trait contract: exactly one on_assistant_done in the offline path.
+        assert_eq!(
+            events.done.borrow().len(),
+            1,
+            "expected exactly one on_assistant_done call in offline fallback"
+        );
+
+        if let Some(value) = original {
+            std::env::set_var("DSCODE_TEST_NO_KEY", value);
+        }
     }
 }

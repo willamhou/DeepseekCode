@@ -143,7 +143,12 @@ impl AgentLoop {
                         Ok(output) => {
                             let kind = ObservationKind::from_tool_name(&tool_name);
                             let summary = summarize_for_kind(&output.summary, kind);
-                            renderer.paint_tool_result(true, &tool_name, &summary);
+                            renderer.paint_tool_result(
+                                crate::ui::stream::ToolResultKind::Ok,
+                                &tool_name,
+                                kind.label(),
+                                &summary,
+                            );
                             let event_output = summary.clone();
                             let event_name = tool_name.clone();
                             observations.push(Observation::ok(tool_name, summary));
@@ -157,7 +162,18 @@ impl AgentLoop {
                         Err(error) => {
                             let kind = ObservationKind::from_tool_name(&tool_name);
                             let summary = summarize_for_kind(&error.to_string(), kind);
-                            renderer.paint_tool_result(false, &tool_name, &summary);
+                            let result_kind = match crate::error::classify(error.as_ref()) {
+                                crate::error::AppErrorKind::PolicyDenied => {
+                                    crate::ui::stream::ToolResultKind::Denied
+                                }
+                                _ => crate::ui::stream::ToolResultKind::Failed,
+                            };
+                            renderer.paint_tool_result(
+                                result_kind,
+                                &tool_name,
+                                kind.label(),
+                                &summary,
+                            );
                             let event_output = summary.clone();
                             let event_name = tool_name.clone();
                             observations.push(Observation::failed(tool_name, summary));

@@ -13,7 +13,6 @@ pub enum AppErrorKind {
 #[derive(Debug)]
 pub struct AppError {
     pub message: String,
-    #[allow(dead_code)] // read by classify() + tests; reserved for future error consumers
     pub kind: AppErrorKind,
     pub hint: Option<String>,
     pub source: Option<Box<dyn Error + Send + Sync>>,
@@ -79,7 +78,6 @@ pub fn tool_failure(message: impl Into<String>) -> Box<dyn Error> {
     .into_box()
 }
 
-#[allow(dead_code)] // tested + reserved for future error-handling consumers
 pub fn classify(error: &(dyn Error + 'static)) -> AppErrorKind {
     error
         .downcast_ref::<AppError>()

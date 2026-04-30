@@ -217,7 +217,7 @@
 - ~~区分”策略拒绝”和”工具失败”~~（已完成）
   - `AppErrorKind` 枚举：`Other / PolicyDenied / ToolFailure`
   - `policy_denied()` / `tool_failure()` 构造器
-  - agent loop 输出 `Tool 'x' DENIED [kind]:` vs `Tool 'x' FAILED [kind]:`
+  - agent loop renderer 输出 `✓/✗/⊘ name [observation_kind]`（TTY）或 `OK:/ERR:/DENIED: name [observation_kind]`（非 TTY），区分 PolicyDenied 与 ToolFailure
 - 更清晰的错误输出：进行中（DENIED 与 FAILED 区分已落地）
 
 ### P4: 上下文与稳定性：已完成基础版

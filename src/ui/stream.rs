@@ -16,6 +16,14 @@ pub trait StreamEvents {
     fn on_tool_call(&mut self, name: &str, input: &BTreeMap<String, String>);
 }
 
+/// Tri-state outcome for a tool execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolResultKind {
+    Ok,
+    Failed,
+    Denied,
+}
+
 #[allow(dead_code)] // useful no-op impl for tests / future callers
 pub struct NoopStreamEvents;
 
@@ -48,17 +56,27 @@ impl<W: Write> TtyRenderer<W> {
         }
     }
 
-    pub fn paint_tool_result(&mut self, ok: bool, label: &str, body: &str) {
+    pub fn paint_tool_result(
+        &mut self,
+        kind: ToolResultKind,
+        label: &str,
+        observation_kind: &str,
+        body: &str,
+    ) {
         if self.use_ansi {
-            let mark = if ok {
-                "\x1b[32m✓\x1b[0m"
-            } else {
-                "\x1b[31m✗\x1b[0m"
+            let mark = match kind {
+                ToolResultKind::Ok => "\x1b[32m✓\x1b[0m",
+                ToolResultKind::Failed => "\x1b[31m✗\x1b[0m",
+                ToolResultKind::Denied => "\x1b[33m⊘\x1b[0m",
             };
-            let _ = writeln!(self.out, "{mark} {label}");
+            let _ = writeln!(self.out, "{mark} {label} [{observation_kind}]");
         } else {
-            let prefix = if ok { "OK" } else { "ERR" };
-            let _ = writeln!(self.out, "{prefix}: {label}");
+            let prefix = match kind {
+                ToolResultKind::Ok => "OK",
+                ToolResultKind::Failed => "ERR",
+                ToolResultKind::Denied => "DENIED",
+            };
+            let _ = writeln!(self.out, "{prefix}: {label} [{observation_kind}]");
         }
         for line in body.lines() {
             let _ = writeln!(self.out, "  {line}");
@@ -203,13 +221,30 @@ mod tests {
 
     #[test]
     fn paint_tool_result_uses_check_or_cross() {
-        let ok = render(true, |r| r.paint_tool_result(true, "read_file", "1: foo"));
-        let bad = render(true, |r| r.paint_tool_result(false, "read_file", "denied"));
+        let ok = render(true, |r| r.paint_tool_result(ToolResultKind::Ok, "read_file", "file_excerpt", "1: foo"));
+        let bad = render(true, |r| r.paint_tool_result(ToolResultKind::Failed, "read_file", "file_excerpt", "denied"));
         assert!(ok.contains("✓"));
         assert!(ok.contains("read_file"));
         assert!(ok.contains("  1: foo"));
+        assert!(ok.contains("[file_excerpt]"));
         assert!(bad.contains("✗"));
         assert!(bad.contains("  denied"));
+        assert!(bad.contains("[file_excerpt]"));
+    }
+
+    #[test]
+    fn paint_tool_result_denied_uses_yellow_circle_or_text() {
+        let on = render(true, |r| {
+            r.paint_tool_result(ToolResultKind::Denied, "run_shell", "shell_output", "policy")
+        });
+        let off = render(false, |r| {
+            r.paint_tool_result(ToolResultKind::Denied, "run_shell", "shell_output", "policy")
+        });
+        assert!(on.contains("\x1b[33m⊘\x1b[0m"), "ANSI denied: {on:?}");
+        assert!(on.contains("run_shell"));
+        assert!(on.contains("[shell_output]"));
+        assert!(off.contains("DENIED: run_shell [shell_output]"));
+        assert!(off.contains("  policy"));
     }
 
     #[test]
