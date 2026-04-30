@@ -54,7 +54,8 @@ impl AgentLoop {
     }
 
     pub fn run(&self, context: TaskContext) -> AppResult<()> {
-        self.run_with(context, AgentLoopOptions::default()).map(|_| ())
+        self.run_with(context, AgentLoopOptions::default())
+            .map(|_| ())
     }
 
     pub fn run_with(
@@ -110,6 +111,7 @@ impl AgentLoop {
         let mut last_message = String::new();
         let mut tool_events: Vec<ToolEvent> = Vec::new();
         let mut total_usage = crate::model::protocol::TokenUsage::default();
+        let mut renderer = crate::ui::stream::TtyRenderer::from_stdout();
         for step in 0..steps {
             let request = ModelRequest {
                 system_prompt: build_system_prompt(skill),
@@ -126,14 +128,12 @@ impl AgentLoop {
                 observations: compact_observations(&observations),
             };
 
-            let mut events = crate::ui::stream::NoopStreamEvents;
-            let (response, step_usage) = client.respond(request, &mut events)?;
+            renderer.paint_step_divider(step + 1);
+            let (response, step_usage) = client.respond(request, &mut renderer)?;
             if let Some(usage) = step_usage {
                 total_usage.prompt += usage.prompt;
                 total_usage.completion += usage.completion;
             }
-            println!();
-            println!("Step {}: {}", step + 1, response.message);
             last_message = response.message.clone();
 
             match response.action {
@@ -143,8 +143,7 @@ impl AgentLoop {
                         Ok(output) => {
                             let kind = ObservationKind::from_tool_name(&tool_name);
                             let summary = summarize_for_kind(&output.summary, kind);
-                            println!("Tool `{tool_name}` output [{}]:", kind.label());
-                            println!("{summary}");
+                            renderer.paint_tool_result(true, &tool_name, &summary);
                             let event_output = summary.clone();
                             let event_name = tool_name.clone();
                             observations.push(Observation::ok(tool_name, summary));
@@ -157,13 +156,8 @@ impl AgentLoop {
                         }
                         Err(error) => {
                             let kind = ObservationKind::from_tool_name(&tool_name);
-                            let label = match crate::error::classify(error.as_ref()) {
-                                crate::error::AppErrorKind::PolicyDenied => "DENIED",
-                                _ => "FAILED",
-                            };
                             let summary = summarize_for_kind(&error.to_string(), kind);
-                            println!("Tool `{tool_name}` {label} [{}]:", kind.label());
-                            println!("{summary}");
+                            renderer.paint_tool_result(false, &tool_name, &summary);
                             let event_output = summary.clone();
                             let event_name = tool_name.clone();
                             observations.push(Observation::failed(tool_name, summary));
@@ -226,4 +220,3 @@ fn build_system_prompt(skill_name: Option<&SkillSpec>) -> String {
     }
     prompt
 }
-

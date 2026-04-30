@@ -1,5 +1,3 @@
-#![allow(dead_code)] // remove when M5 wires up TtyRenderer::from_stdout
-
 use std::collections::BTreeMap;
 use std::io::Write;
 
@@ -18,6 +16,7 @@ pub trait StreamEvents {
     fn on_tool_call(&mut self, name: &str, input: &BTreeMap<String, String>);
 }
 
+#[allow(dead_code)] // useful no-op impl for tests / future callers
 pub struct NoopStreamEvents;
 
 impl StreamEvents for NoopStreamEvents {
