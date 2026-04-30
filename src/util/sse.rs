@@ -1,5 +1,3 @@
-#![allow(dead_code)] // remove when M4 lands the streaming consumers
-
 use std::io::BufRead;
 
 /// One SSE frame produced by [`read_frame`].

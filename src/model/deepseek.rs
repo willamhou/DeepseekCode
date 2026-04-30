@@ -1,17 +1,20 @@
 use std::collections::BTreeMap;
 use std::env;
-use std::process::Command;
+use std::io::BufRead;
 
 use crate::config::types::ModelConfig;
 use crate::error::AppResult;
 use crate::error::app_error;
+use crate::error::tool_failure;
 use crate::model::client::ModelClient;
 use crate::model::protocol::{ModelAction, ModelRequest, ModelResponse, TokenUsage};
 use crate::tools::types::ToolInput;
+use crate::ui::stream::StreamEvents;
 use crate::util::json::{
     json_as_array, json_as_object, json_as_string, json_as_u64, json_escape, parse_root_object,
     JsonValue,
 };
+use crate::util::sse::read_frame;
 
 pub struct DeepSeekClient {
     pub config: ModelConfig,
@@ -21,28 +24,44 @@ impl ModelClient for DeepSeekClient {
     fn respond(
         &self,
         input: ModelRequest,
-        _events: &mut dyn crate::ui::stream::StreamEvents,
+        events: &mut dyn StreamEvents,
     ) -> AppResult<(ModelResponse, Option<TokenUsage>)> {
         if let Ok(api_key) = env::var(&self.config.api_key_env) {
             if !api_key.trim().is_empty() {
-                if let Ok(pair) = self.respond_remote(&input, &api_key) {
+                if let Ok(pair) = self.respond_remote(&input, &api_key, events) {
                     return Ok(pair);
                 }
             }
         }
-        Ok((self.respond_offline(input), None))
+        let response = self.respond_offline(input);
+        events.on_text_delta(&response.message);
+        events.on_assistant_done(&response.message);
+        if let ModelAction::CallTool { tool_name, input } = &response.action {
+            events.on_tool_call(tool_name, &input.args);
+        }
+        Ok((response, None))
     }
 }
 
 impl DeepSeekClient {
-    fn respond_remote(&self, input: &ModelRequest, api_key: &str) -> AppResult<(ModelResponse, Option<TokenUsage>)> {
+    fn respond_remote(
+        &self,
+        input: &ModelRequest,
+        api_key: &str,
+        events: &mut dyn StreamEvents,
+    ) -> AppResult<(ModelResponse, Option<TokenUsage>)> {
         match api_flavor(&self.config.base_url) {
-            ApiFlavor::OpenAi => self.respond_remote_openai(input, api_key),
-            ApiFlavor::Anthropic => self.respond_remote_anthropic(input, api_key),
+            ApiFlavor::OpenAi => self.respond_remote_openai(input, api_key, events),
+            ApiFlavor::Anthropic => self.respond_remote_anthropic(input, api_key, events),
         }
     }
 
-    fn respond_remote_openai(&self, input: &ModelRequest, api_key: &str) -> AppResult<(ModelResponse, Option<TokenUsage>)> {
+    fn respond_remote_openai(
+        &self,
+        input: &ModelRequest,
+        api_key: &str,
+        events: &mut dyn StreamEvents,
+    ) -> AppResult<(ModelResponse, Option<TokenUsage>)> {
         let endpoint = format!("{}/chat/completions", self.config.base_url.trim_end_matches('/'));
         let system_prompt = build_openai_tool_system_prompt(&input.system_prompt);
         let user_prompt = build_user_prompt(input);
@@ -53,6 +72,8 @@ impl DeepSeekClient {
                 "\"model\":\"{}\",",
                 "\"temperature\":0,",
                 "\"max_tokens\":1024,",
+                "\"stream\":true,",
+                "\"stream_options\":{{\"include_usage\":true}},",
                 "\"tool_choice\":\"auto\",",
                 "\"tools\":{},",
                 "\"messages\":[",
@@ -67,35 +88,44 @@ impl DeepSeekClient {
             json_escape(&user_prompt)
         );
 
-        let output = Command::new("curl")
-            .args([
-                "-sS",
-                "-X",
-                "POST",
-                &endpoint,
-                "-H",
-                &format!("Authorization: Bearer {api_key}"),
-                "-H",
-                "Content-Type: application/json",
-                "--data-binary",
-                &body,
-            ])
-            .output()?;
+        let auth = format!("Authorization: Bearer {api_key}");
+        let args = [
+            "-sS",
+            "-N",
+            "--max-time",
+            "60",
+            "-X",
+            "POST",
+            endpoint.as_str(),
+            "-H",
+            auth.as_str(),
+            "-H",
+            "Content-Type: application/json",
+            "-H",
+            "Accept: text/event-stream",
+            "--data-binary",
+            body.as_str(),
+        ];
 
-        if !output.status.success() {
-            return Err(app_error(format!(
-                "deepseek openai request failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
+        let mut process = crate::util::process::spawn_streaming("curl", &args)?;
+        let parsed = parse_openai_stream(&mut process.stdout, events);
+        let (status, stderr_tail) = process.finish()?;
+        if !status.success() {
+            return Err(tool_failure(format!(
+                "deepseek openai stream failed (exit {:?}): {}",
+                status.code(),
+                stderr_tail.trim()
             )));
         }
-
-        let body_str = String::from_utf8_lossy(&output.stdout);
-        let response = parse_openai_chat_completion(&body_str)?;
-        let usage = parse_openai_usage(&body_str);
-        Ok((response, usage))
+        parsed
     }
 
-    fn respond_remote_anthropic(&self, input: &ModelRequest, api_key: &str) -> AppResult<(ModelResponse, Option<TokenUsage>)> {
+    fn respond_remote_anthropic(
+        &self,
+        input: &ModelRequest,
+        api_key: &str,
+        events: &mut dyn StreamEvents,
+    ) -> AppResult<(ModelResponse, Option<TokenUsage>)> {
         let endpoint = format!("{}/messages", self.config.base_url.trim_end_matches('/'));
         let system_prompt = build_anthropic_tool_system_prompt(&input.system_prompt);
         let user_prompt = build_user_prompt(input);
@@ -105,6 +135,7 @@ impl DeepSeekClient {
                 "{{",
                 "\"model\":\"{}\",",
                 "\"max_tokens\":1024,",
+                "\"stream\":true,",
                 "\"tool_choice\":{{\"type\":\"auto\"}},",
                 "\"tools\":{},",
                 "\"system\":\"{}\",",
@@ -119,34 +150,38 @@ impl DeepSeekClient {
             json_escape(&user_prompt)
         );
 
-        let output = Command::new("curl")
-            .args([
-                "-sS",
-                "-X",
-                "POST",
-                &endpoint,
-                "-H",
-                &format!("x-api-key: {api_key}"),
-                "-H",
-                "anthropic-version: 2023-06-01",
-                "-H",
-                "Content-Type: application/json",
-                "--data-binary",
-                &body,
-            ])
-            .output()?;
+        let api_header = format!("x-api-key: {api_key}");
+        let args = [
+            "-sS",
+            "-N",
+            "--max-time",
+            "60",
+            "-X",
+            "POST",
+            endpoint.as_str(),
+            "-H",
+            api_header.as_str(),
+            "-H",
+            "anthropic-version: 2023-06-01",
+            "-H",
+            "Content-Type: application/json",
+            "-H",
+            "Accept: text/event-stream",
+            "--data-binary",
+            body.as_str(),
+        ];
 
-        if !output.status.success() {
-            return Err(app_error(format!(
-                "deepseek anthropic request failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
+        let mut process = crate::util::process::spawn_streaming("curl", &args)?;
+        let parsed = parse_anthropic_stream(&mut process.stdout, events);
+        let (status, stderr_tail) = process.finish()?;
+        if !status.success() {
+            return Err(tool_failure(format!(
+                "deepseek anthropic stream failed (exit {:?}): {}",
+                status.code(),
+                stderr_tail.trim()
             )));
         }
-
-        let body_str = String::from_utf8_lossy(&output.stdout);
-        let response = parse_anthropic_messages(&body_str)?;
-        let usage = parse_anthropic_usage(&body_str);
-        Ok((response, usage))
+        parsed
     }
 
     fn respond_offline(&self, input: ModelRequest) -> ModelResponse {
@@ -553,6 +588,281 @@ const TOOL_SPECS: &[ToolSpec] = &[
     },
 ];
 
+#[derive(Default, Debug)]
+struct OpenAiToolAssembly {
+    #[allow(dead_code)]
+    id: Option<String>,
+    name: Option<String>,
+    arguments: String,
+}
+
+pub(crate) fn parse_openai_stream<R: BufRead>(
+    reader: &mut R,
+    events: &mut dyn StreamEvents,
+) -> AppResult<(ModelResponse, Option<TokenUsage>)> {
+    let mut full_text = String::new();
+    let result = parse_openai_stream_inner(reader, events, &mut full_text);
+    if result.is_err() {
+        events.on_assistant_done(&full_text);
+    }
+    result
+}
+
+fn parse_openai_stream_inner<R: BufRead>(
+    reader: &mut R,
+    events: &mut dyn StreamEvents,
+    full_text: &mut String,
+) -> AppResult<(ModelResponse, Option<TokenUsage>)> {
+    let mut usage: Option<TokenUsage> = None;
+    let mut tool_assembly: Option<OpenAiToolAssembly> = None;
+
+    while let Some(frame) = read_frame(reader).map_err(|e| app_error(format!("sse read failed: {e}")))? {
+        let data = frame.data.trim();
+        if data.is_empty() {
+            continue;
+        }
+        if data == "[DONE]" {
+            break;
+        }
+        let root = parse_root_object(data)
+            .map_err(|e| tool_failure(format!("malformed openai sse frame: {e}")))?;
+
+        if let Some(error) = root.get("error").and_then(json_as_object) {
+            let message = error
+                .get("message")
+                .and_then(json_as_string)
+                .unwrap_or("openai stream error");
+            return Err(tool_failure(format!("openai api error: {message}")));
+        }
+
+        if let Some(usage_obj) = root.get("usage").and_then(json_as_object) {
+            if let (Some(p), Some(c)) = (
+                usage_obj.get("prompt_tokens").and_then(json_as_u64),
+                usage_obj.get("completion_tokens").and_then(json_as_u64),
+            ) {
+                usage = Some(TokenUsage { prompt: p, completion: c });
+            }
+        }
+
+        let Some(choices) = root.get("choices").and_then(json_as_array) else {
+            continue;
+        };
+        let Some(choice) = choices.first().and_then(json_as_object) else {
+            continue;
+        };
+        if let Some(delta) = choice.get("delta").and_then(json_as_object) {
+            if let Some(content) = delta.get("content").and_then(json_as_string) {
+                if !content.is_empty() {
+                    events.on_text_delta(content);
+                    full_text.push_str(content);
+                }
+            }
+            if let Some(tool_calls) = delta.get("tool_calls").and_then(json_as_array) {
+                for call in tool_calls {
+                    let Some(call_obj) = json_as_object(call) else { continue };
+                    let assembly = tool_assembly.get_or_insert_with(OpenAiToolAssembly::default);
+                    if assembly.id.is_none() {
+                        if let Some(id) = call_obj.get("id").and_then(json_as_string) {
+                            assembly.id = Some(id.to_string());
+                        }
+                    }
+                    if let Some(function) = call_obj.get("function").and_then(json_as_object) {
+                        if assembly.name.is_none() {
+                            if let Some(name) = function.get("name").and_then(json_as_string) {
+                                assembly.name = Some(name.to_string());
+                            }
+                        }
+                        if let Some(args) = function.get("arguments").and_then(json_as_string) {
+                            assembly.arguments.push_str(args);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    events.on_assistant_done(full_text.as_str());
+
+    let action = if let Some(assembly) = tool_assembly {
+        let name = assembly
+            .name
+            .ok_or_else(|| tool_failure("openai tool call missing function.name"))?;
+        let arguments = parse_tool_arguments(&assembly.arguments)?;
+        events.on_tool_call(&name, &arguments);
+        ModelAction::CallTool {
+            tool_name: name,
+            input: ToolInput { args: arguments },
+        }
+    } else {
+        ModelAction::Finish
+    };
+
+    let message = if full_text.is_empty() && matches!(action, ModelAction::CallTool { .. }) {
+        "DeepSeek selected a tool.".to_string()
+    } else if full_text.is_empty() {
+        "DeepSeek returned no content.".to_string()
+    } else {
+        std::mem::take(full_text)
+    };
+
+    Ok((ModelResponse { message, action }, usage))
+}
+
+#[derive(Default, Debug)]
+struct AnthropicToolAssembly {
+    #[allow(dead_code)]
+    id: Option<String>,
+    name: Option<String>,
+    partial_json: String,
+}
+
+pub(crate) fn parse_anthropic_stream<R: BufRead>(
+    reader: &mut R,
+    events: &mut dyn StreamEvents,
+) -> AppResult<(ModelResponse, Option<TokenUsage>)> {
+    let mut full_text = String::new();
+    let result = parse_anthropic_stream_inner(reader, events, &mut full_text);
+    if result.is_err() {
+        events.on_assistant_done(&full_text);
+    }
+    result
+}
+
+fn parse_anthropic_stream_inner<R: BufRead>(
+    reader: &mut R,
+    events: &mut dyn StreamEvents,
+    full_text: &mut String,
+) -> AppResult<(ModelResponse, Option<TokenUsage>)> {
+    let mut tool_assembly: Option<AnthropicToolAssembly> = None;
+    let mut usage_prompt: Option<u64> = None;
+    let mut usage_completion: Option<u64> = None;
+
+    while let Some(frame) = read_frame(reader).map_err(|e| app_error(format!("sse read failed: {e}")))? {
+        let event_kind = frame.event.as_deref().unwrap_or("");
+        let data = frame.data.trim();
+        if data.is_empty() {
+            if event_kind == "message_stop" {
+                break;
+            }
+            continue;
+        }
+        let root = parse_root_object(data)
+            .map_err(|e| tool_failure(format!("malformed anthropic sse frame: {e}")))?;
+
+        match event_kind {
+            "message_start" => {
+                if let Some(message) = root.get("message").and_then(json_as_object) {
+                    if let Some(usage_obj) = message.get("usage").and_then(json_as_object) {
+                        if let Some(p) = usage_obj.get("input_tokens").and_then(json_as_u64) {
+                            usage_prompt = Some(p);
+                        }
+                        if let Some(c) = usage_obj.get("output_tokens").and_then(json_as_u64) {
+                            usage_completion = Some(c);
+                        }
+                    }
+                }
+            }
+            "content_block_start" => {
+                if let Some(block) = root.get("content_block").and_then(json_as_object) {
+                    if block.get("type").and_then(json_as_string) == Some("tool_use") {
+                        let id = block
+                            .get("id")
+                            .and_then(json_as_string)
+                            .map(str::to_string);
+                        let name = block
+                            .get("name")
+                            .and_then(json_as_string)
+                            .map(str::to_string);
+                        tool_assembly = Some(AnthropicToolAssembly {
+                            id,
+                            name,
+                            partial_json: String::new(),
+                        });
+                    }
+                }
+            }
+            "content_block_delta" => {
+                if let Some(delta) = root.get("delta").and_then(json_as_object) {
+                    let delta_type = delta.get("type").and_then(json_as_string).unwrap_or("");
+                    match delta_type {
+                        "text_delta" => {
+                            if let Some(text) = delta.get("text").and_then(json_as_string) {
+                                if !text.is_empty() {
+                                    events.on_text_delta(text);
+                                    full_text.push_str(text);
+                                }
+                            }
+                        }
+                        "input_json_delta" => {
+                            if let Some(partial) = delta.get("partial_json").and_then(json_as_string) {
+                                if let Some(assembly) = tool_assembly.as_mut() {
+                                    assembly.partial_json.push_str(partial);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            "message_delta" => {
+                if let Some(usage_obj) = root.get("usage").and_then(json_as_object) {
+                    if let Some(c) = usage_obj.get("output_tokens").and_then(json_as_u64) {
+                        usage_completion = Some(c);
+                    }
+                    if let Some(p) = usage_obj.get("input_tokens").and_then(json_as_u64) {
+                        usage_prompt = Some(p);
+                    }
+                }
+            }
+            "message_stop" => {
+                break;
+            }
+            "error" => {
+                let message = root
+                    .get("error")
+                    .and_then(json_as_object)
+                    .and_then(|e| e.get("message"))
+                    .and_then(json_as_string)
+                    .unwrap_or("anthropic stream error");
+                return Err(tool_failure(format!("anthropic api error: {message}")));
+            }
+            _ => {}
+        }
+    }
+
+    events.on_assistant_done(full_text.as_str());
+
+    let action = if let Some(assembly) = tool_assembly {
+        let name = assembly
+            .name
+            .ok_or_else(|| tool_failure("anthropic tool_use missing name"))?;
+        let arguments = parse_tool_arguments(&assembly.partial_json)?;
+        events.on_tool_call(&name, &arguments);
+        ModelAction::CallTool {
+            tool_name: name,
+            input: ToolInput { args: arguments },
+        }
+    } else {
+        ModelAction::Finish
+    };
+
+    let usage = match (usage_prompt, usage_completion) {
+        (Some(p), Some(c)) => Some(TokenUsage { prompt: p, completion: c }),
+        _ => None,
+    };
+
+    let message = if full_text.is_empty() && matches!(action, ModelAction::CallTool { .. }) {
+        "DeepSeek selected a tool.".to_string()
+    } else if full_text.is_empty() {
+        "DeepSeek returned no content.".to_string()
+    } else {
+        std::mem::take(full_text)
+    };
+
+    Ok((ModelResponse { message, action }, usage))
+}
+
+#[allow(dead_code)]
 fn parse_openai_chat_completion(body: &str) -> AppResult<ModelResponse> {
     let root = parse_root_object(body)?;
     let choices = root
@@ -613,6 +923,7 @@ fn parse_openai_chat_completion(body: &str) -> AppResult<ModelResponse> {
     })
 }
 
+#[allow(dead_code)]
 fn parse_openai_usage(body: &str) -> Option<TokenUsage> {
     let root = parse_root_object(body).ok()?;
     let usage = json_as_object(root.get("usage")?)?;
@@ -621,6 +932,7 @@ fn parse_openai_usage(body: &str) -> Option<TokenUsage> {
     Some(TokenUsage { prompt, completion })
 }
 
+#[allow(dead_code)]
 fn parse_anthropic_messages(body: &str) -> AppResult<ModelResponse> {
     let root = parse_root_object(body)?;
 
@@ -687,6 +999,7 @@ fn parse_anthropic_messages(body: &str) -> AppResult<ModelResponse> {
     })
 }
 
+#[allow(dead_code)]
 fn parse_anthropic_usage(body: &str) -> Option<TokenUsage> {
     let root = parse_root_object(body).ok()?;
     let usage = json_as_object(root.get("usage")?)?;
@@ -1233,5 +1546,220 @@ mod tests {
         let usage = parse_anthropic_usage(body).unwrap();
         assert_eq!(usage.prompt, 30);
         assert_eq!(usage.completion, 11);
+    }
+
+    use crate::ui::stream::{NoopStreamEvents, StreamEvents};
+    use std::cell::RefCell;
+    use std::collections::BTreeMap;
+    use std::io::Cursor;
+
+    #[derive(Default)]
+    struct CapturingEvents {
+        chunks: RefCell<Vec<String>>,
+        done: RefCell<Vec<String>>,
+        tool_calls: RefCell<Vec<(String, BTreeMap<String, String>)>>,
+    }
+
+    impl StreamEvents for CapturingEvents {
+        fn on_text_delta(&mut self, chunk: &str) {
+            self.chunks.borrow_mut().push(chunk.to_string());
+        }
+        fn on_assistant_done(&mut self, full_text: &str) {
+            self.done.borrow_mut().push(full_text.to_string());
+        }
+        fn on_tool_call(&mut self, name: &str, input: &BTreeMap<String, String>) {
+            self.tool_calls
+                .borrow_mut()
+                .push((name.to_string(), input.clone()));
+        }
+    }
+
+    #[test]
+    fn parse_openai_stream_emits_text_deltas_and_finishes() {
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: {\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let mut cur = Cursor::new(body.as_bytes().to_vec());
+        let mut events = CapturingEvents::default();
+        let (resp, usage) = super::parse_openai_stream(&mut cur, &mut events).unwrap();
+        assert_eq!(resp.message, "Hello");
+        assert!(matches!(resp.action, super::ModelAction::Finish));
+        let usage = usage.expect("usage");
+        assert_eq!(usage.prompt, 3);
+        assert_eq!(usage.completion, 2);
+        let chunks = events.chunks.borrow();
+        assert_eq!(*chunks, vec!["Hel".to_string(), "lo".to_string()]);
+        assert_eq!(events.done.borrow().len(), 1);
+        assert!(events.tool_calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn parse_openai_stream_assembles_tool_call_across_chunks() {
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"pa\"}}]},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"th\\\":\\\"a.rs\\\"}\"}}]},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let mut cur = Cursor::new(body.as_bytes().to_vec());
+        let mut events = CapturingEvents::default();
+        let (resp, _usage) = super::parse_openai_stream(&mut cur, &mut events).unwrap();
+        match resp.action {
+            super::ModelAction::CallTool { tool_name, input } => {
+                assert_eq!(tool_name, "read_file");
+                assert_eq!(input.get("path"), Some("a.rs"));
+            }
+            super::ModelAction::Finish => panic!("expected tool call"),
+        }
+        let calls = events.tool_calls.borrow();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "read_file");
+        assert_eq!(calls[0].1.get("path").map(String::as_str), Some("a.rs"));
+    }
+
+    #[test]
+    fn parse_openai_stream_returns_none_usage_when_omitted() {
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let mut cur = Cursor::new(body.as_bytes().to_vec());
+        let mut events = NoopStreamEvents;
+        let (_resp, usage) = super::parse_openai_stream(&mut cur, &mut events).unwrap();
+        assert!(usage.is_none());
+    }
+
+    #[test]
+    fn parse_openai_stream_errors_on_malformed_tool_arguments() {
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"x\",\"type\":\"function\",\"function\":{\"name\":\"git_diff\",\"arguments\":\"{not_json\"}}]},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let mut cur = Cursor::new(body.as_bytes().to_vec());
+        let mut events = NoopStreamEvents;
+        let result = super::parse_openai_stream(&mut cur, &mut events);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_anthropic_stream_emits_text_deltas_and_message_stop() {
+        let body = concat!(
+            "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n",
+            "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi \"}}\n\n",
+            "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"there\"}}\n\n",
+            "event: content_block_stop\ndata: {\"index\":0}\n\n",
+            "event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n",
+            "event: message_stop\ndata: {}\n\n",
+        );
+        let mut cur = Cursor::new(body.as_bytes().to_vec());
+        let mut events = CapturingEvents::default();
+        let (resp, usage) = super::parse_anthropic_stream(&mut cur, &mut events).unwrap();
+        assert_eq!(resp.message, "hi there");
+        assert!(matches!(resp.action, super::ModelAction::Finish));
+        let usage = usage.expect("usage");
+        assert_eq!(usage.prompt, 10);
+        assert_eq!(usage.completion, 2);
+        let chunks = events.chunks.borrow();
+        assert_eq!(*chunks, vec!["hi ".to_string(), "there".to_string()]);
+    }
+
+    #[test]
+    fn parse_anthropic_stream_assembles_tool_use_input_json() {
+        let body = concat!(
+            "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n",
+            "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_1\",\"name\":\"read_file\",\"input\":{}}}\n\n",
+            "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\"}}\n\n",
+            "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\"a.rs\\\"}\"}}\n\n",
+            "event: content_block_stop\ndata: {\"index\":0}\n\n",
+            "event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":2}}\n\n",
+            "event: message_stop\ndata: {}\n\n",
+        );
+        let mut cur = Cursor::new(body.as_bytes().to_vec());
+        let mut events = CapturingEvents::default();
+        let (resp, _usage) = super::parse_anthropic_stream(&mut cur, &mut events).unwrap();
+        match resp.action {
+            super::ModelAction::CallTool { tool_name, input } => {
+                assert_eq!(tool_name, "read_file");
+                assert_eq!(input.get("path"), Some("a.rs"));
+            }
+            super::ModelAction::Finish => panic!("expected tool call"),
+        }
+        let calls = events.tool_calls.borrow();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "read_file");
+    }
+
+    #[test]
+    fn parse_anthropic_stream_keeps_initial_usage_when_message_delta_missing_input() {
+        let body = concat!(
+            "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":7,\"output_tokens\":0}}}\n\n",
+            "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"x\"}}\n\n",
+            "event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":4}}\n\n",
+            "event: message_stop\ndata: {}\n\n",
+        );
+        let mut cur = Cursor::new(body.as_bytes().to_vec());
+        let mut events = NoopStreamEvents;
+        let (_resp, usage) = super::parse_anthropic_stream(&mut cur, &mut events).unwrap();
+        let usage = usage.expect("usage");
+        assert_eq!(usage.prompt, 7);
+        assert_eq!(usage.completion, 4);
+    }
+
+    #[test]
+    fn parse_anthropic_stream_errors_on_malformed_tool_input() {
+        let body = concat!(
+            "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n",
+            "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu\",\"name\":\"read_file\",\"input\":{}}}\n\n",
+            "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"not_json\"}}\n\n",
+            "event: content_block_stop\ndata: {\"index\":0}\n\n",
+            "event: message_stop\ndata: {}\n\n",
+        );
+        let mut cur = Cursor::new(body.as_bytes().to_vec());
+        let mut events = NoopStreamEvents;
+        let result = super::parse_anthropic_stream(&mut cur, &mut events);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_openai_stream_calls_on_assistant_done_on_error() {
+        // After streaming partial text, malformed JSON should still trigger on_assistant_done.
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hi \"},\"finish_reason\":null}]}\n\n",
+            "data: {garbage_not_json}\n\n",
+        );
+        let mut cur = Cursor::new(body.as_bytes().to_vec());
+        let mut events = CapturingEvents::default();
+        let result = super::parse_openai_stream(&mut cur, &mut events);
+        assert!(result.is_err(), "expected malformed-frame error");
+        // Trait contract: on_assistant_done called exactly once even on error.
+        assert_eq!(events.done.borrow().len(), 1, "on_assistant_done not called on error");
+        // Partial text should still have been streamed before error.
+        let chunks = events.chunks.borrow();
+        assert_eq!(*chunks, vec!["hi ".to_string()]);
+    }
+
+    #[test]
+    fn parse_anthropic_stream_calls_on_assistant_done_on_error() {
+        let body = concat!(
+            "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n",
+            "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n",
+            "event: content_block_delta\ndata: {garbage_not_json}\n\n",
+        );
+        let mut cur = Cursor::new(body.as_bytes().to_vec());
+        let mut events = CapturingEvents::default();
+        let result = super::parse_anthropic_stream(&mut cur, &mut events);
+        assert!(result.is_err());
+        assert_eq!(events.done.borrow().len(), 1);
+        let chunks = events.chunks.borrow();
+        assert_eq!(*chunks, vec!["hi".to_string()]);
     }
 }
