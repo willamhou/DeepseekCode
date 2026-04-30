@@ -48,7 +48,7 @@ pub fn serialize_session(name: &str, repl: &Repl) -> String {
     let mut out = String::from("{");
     write_kv_u64(&mut out, "version", SESSION_VERSION as u64, false);
     write_kv_string(&mut out, "name", name, true);
-    write_kv_string(&mut out, "saved_at", &current_rfc3339(), true);
+    write_kv_string(&mut out, "saved_at", &current_epoch_label(), true);
     match &repl.skill {
         Some(s) => write_kv_string(&mut out, "skill", s, true),
         None => write_kv_null(&mut out, "skill", true),
@@ -106,7 +106,7 @@ fn write_turn(out: &mut String, turn: &crate::repl::transcript::Turn) {
     out.push('}');
 }
 
-fn current_rfc3339() -> String {
+fn current_epoch_label() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -287,6 +287,27 @@ mod tests {
         r.tokens_prompt = 12;
         r.tokens_completion = 5;
         r
+    }
+
+    #[test]
+    fn save_load_round_trip_preserves_render_for_prompt() {
+        let (cfg, _tmp) = config_with_temp_session_dir();
+        let mut original = fixture_repl();
+        original.config = cfg.clone();
+        let original_render = original.transcript.render_for_prompt();
+        save("e2e-render", &original).unwrap();
+
+        let loaded = load("e2e-render", &cfg).unwrap();
+        let loaded_render = loaded.transcript.render_for_prompt();
+
+        assert_eq!(
+            original_render, loaded_render,
+            "render_for_prompt must be byte-identical across save/load"
+        );
+        assert!(loaded_render.contains("[user 1]: hello"));
+        assert!(loaded_render.contains("[assistant 1]: world"));
+        assert!(loaded_render.contains("[tool] read_file(path=x.rs) -> ok"));
+        assert_eq!(loaded.tokens_prompt + loaded.tokens_completion, 17);
     }
 
     #[test]
