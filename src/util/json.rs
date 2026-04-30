@@ -226,14 +226,12 @@ pub fn json_escape(value: &str) -> String {
     output
 }
 
-#[allow(dead_code)]
 pub fn write_quoted(out: &mut String, value: &str) {
     out.push('"');
     out.push_str(&json_escape(value));
     out.push('"');
 }
 
-#[allow(dead_code)]
 pub fn write_kv_string(out: &mut String, key: &str, value: &str, leading_comma: bool) {
     if leading_comma {
         out.push(',');
@@ -243,7 +241,6 @@ pub fn write_kv_string(out: &mut String, key: &str, value: &str, leading_comma: 
     write_quoted(out, value);
 }
 
-#[allow(dead_code)]
 pub fn write_kv_u64(out: &mut String, key: &str, value: u64, leading_comma: bool) {
     if leading_comma {
         out.push(',');
@@ -253,7 +250,6 @@ pub fn write_kv_u64(out: &mut String, key: &str, value: u64, leading_comma: bool
     out.push_str(&value.to_string());
 }
 
-#[allow(dead_code)]
 pub fn write_kv_null(out: &mut String, key: &str, leading_comma: bool) {
     if leading_comma {
         out.push(',');

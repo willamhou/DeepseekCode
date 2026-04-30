@@ -9,6 +9,7 @@ pub enum ControlFlow {
     Quit,
 }
 
+#[derive(Debug)]
 pub struct Repl {
     pub config: AppConfig,
     pub transcript: Transcript,

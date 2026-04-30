@@ -49,6 +49,14 @@ pub fn try_handle_slash(repl: &mut Repl, line: &str) -> AppResult<SlashOutcome> 
             handle_cost(repl);
             Ok(SlashOutcome::Continue)
         }
+        "/save" => {
+            handle_save(repl, &args);
+            Ok(SlashOutcome::Continue)
+        }
+        "/load" => {
+            handle_load(repl, &args);
+            Ok(SlashOutcome::Continue)
+        }
         other => {
             println!("unknown slash command `{other}`; type /help for the list");
             Ok(SlashOutcome::Continue)
@@ -64,8 +72,8 @@ fn print_help() {
     println!("  /budget [N]                   show or set per-turn step budget (1..200)");
     println!("  /skill [name|-]               show, switch, or clear the active skill");
     println!("  /diff                         show pending git diff");
-    println!("  /save <name>                  save the session (later task)");
-    println!("  /load <name>                  restore a saved session (later task)");
+    println!("  /save <name>                  save the session to .dscode/sessions/<name>.json");
+    println!("  /load <name>                  restore a saved session");
     println!("  /cost                         show prompt/completion token totals");
 }
 
@@ -158,6 +166,42 @@ fn handle_cost(repl: &Repl) {
         "prompt: {}, completion: {}, total: {}",
         repl.tokens_prompt, repl.tokens_completion, total
     );
+}
+
+fn handle_save(repl: &mut Repl, args: &[&str]) {
+    let name = match args {
+        [name] => *name,
+        _ => {
+            println!("usage: /save <name>");
+            return;
+        }
+    };
+    match crate::repl::session::save(name, repl) {
+        Ok(path) => println!("saved -> {}", path.display()),
+        Err(error) => println!("save failed: {error}"),
+    }
+}
+
+fn handle_load(repl: &mut Repl, args: &[&str]) {
+    let name = match args {
+        [name] => *name,
+        _ => {
+            println!("usage: /load <name>");
+            return;
+        }
+    };
+    match crate::repl::session::load(name, &repl.config) {
+        Ok(loaded) => {
+            *repl = loaded;
+            println!(
+                "loaded {name} (transcript: {} turns, tokens: {} / {})",
+                repl.transcript.turns.len(),
+                repl.tokens_prompt,
+                repl.tokens_completion,
+            );
+        }
+        Err(error) => println!("load failed: {error}"),
+    }
 }
 
 pub fn validate_session_name(name: &str) -> Result<(), String> {
