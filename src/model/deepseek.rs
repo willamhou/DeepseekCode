@@ -112,7 +112,13 @@ impl DeepSeekClient {
             body.as_str(),
         ];
 
-        let mut process = crate::util::process::spawn_streaming("curl", &args)?;
+        let mut process = match crate::util::process::spawn_streaming("curl", &args) {
+            Ok(p) => p,
+            Err(error) => {
+                events.on_assistant_done("");
+                return Err(error);
+            }
+        };
         let parsed = parse_openai_stream(&mut process.stdout, events);
         let (status, stderr_tail) = process.finish()?;
         if !status.success() {
@@ -176,7 +182,13 @@ impl DeepSeekClient {
             body.as_str(),
         ];
 
-        let mut process = crate::util::process::spawn_streaming("curl", &args)?;
+        let mut process = match crate::util::process::spawn_streaming("curl", &args) {
+            Ok(p) => p,
+            Err(error) => {
+                events.on_assistant_done("");
+                return Err(error);
+            }
+        };
         let parsed = parse_anthropic_stream(&mut process.stdout, events);
         let (status, stderr_tail) = process.finish()?;
         if !status.success() {
@@ -619,6 +631,7 @@ fn parse_openai_stream_inner<R: BufRead>(
 ) -> AppResult<(ModelResponse, Option<TokenUsage>)> {
     let mut usage: Option<TokenUsage> = None;
     let mut tool_assembly: Option<OpenAiToolAssembly> = None;
+    let mut done_seen = false;
 
     while let Some(frame) = read_frame(reader).map_err(|e| app_error(format!("sse read failed: {e}")))? {
         let data = frame.data.trim();
@@ -626,7 +639,9 @@ fn parse_openai_stream_inner<R: BufRead>(
             continue;
         }
         if data == "[DONE]" {
-            break;
+            // Continue draining frames in case the server emits a trailing usage frame.
+            done_seen = true;
+            continue;
         }
         let root = parse_root_object(data)
             .map_err(|e| tool_failure(format!("malformed openai sse frame: {e}")))?;
@@ -655,50 +670,49 @@ fn parse_openai_stream_inner<R: BufRead>(
             continue;
         };
         if let Some(delta) = choice.get("delta").and_then(json_as_object) {
-            if let Some(content) = delta.get("content").and_then(json_as_string) {
-                if !content.is_empty() {
-                    events.on_text_delta(content);
-                    full_text.push_str(content);
+            if !done_seen {
+                if let Some(content) = delta.get("content").and_then(json_as_string) {
+                    if !content.is_empty() {
+                        events.on_text_delta(content);
+                        full_text.push_str(content);
+                    }
                 }
-            }
-            if let Some(tool_calls) = delta.get("tool_calls").and_then(json_as_array) {
-                for call in tool_calls {
-                    let Some(call_obj) = json_as_object(call) else { continue };
-                    // OpenAI streams tool calls indexed by `index`. We support exactly one
-                    // tool call per turn; any other distinct index is an error.
-                    let observed_index = call_obj
-                        .get("index")
-                        .and_then(json_as_u64)
-                        .unwrap_or(0);
-                    match tool_assembly.as_mut() {
-                        Some(existing) if existing.index != observed_index => {
-                            return Err(tool_failure(format!(
-                                "openai stream emitted multiple parallel tool calls (indices {} and {}); only one is supported per turn",
-                                existing.index, observed_index
-                            )));
-                        }
-                        Some(_) => {}
-                        None => {
-                            tool_assembly = Some(OpenAiToolAssembly {
-                                index: observed_index,
-                                ..OpenAiToolAssembly::default()
-                            });
-                        }
-                    }
-                    let assembly = tool_assembly.as_mut().expect("assembly seeded above");
-                    if assembly.id.is_none() {
-                        if let Some(id) = call_obj.get("id").and_then(json_as_string) {
-                            assembly.id = Some(id.to_string());
-                        }
-                    }
-                    if let Some(function) = call_obj.get("function").and_then(json_as_object) {
-                        if assembly.name.is_none() {
-                            if let Some(name) = function.get("name").and_then(json_as_string) {
-                                assembly.name = Some(name.to_string());
+                if let Some(tool_calls) = delta.get("tool_calls").and_then(json_as_array) {
+                    for call in tool_calls {
+                        let Some(call_obj) = json_as_object(call) else { continue };
+                        // OpenAI streams tool calls indexed by `index`. We support exactly one
+                        // tool call per turn; any other distinct index is an error.
+                        let observed_index = call_obj.get("index").and_then(json_as_u64);
+                        match (tool_assembly.as_mut(), observed_index) {
+                            (Some(existing), Some(idx)) if existing.index != idx => {
+                                return Err(tool_failure(format!(
+                                    "openai stream emitted multiple parallel tool calls (indices {} and {}); only one is supported per turn",
+                                    existing.index, idx
+                                )));
+                            }
+                            (Some(_), _) => {}
+                            (None, _) => {
+                                tool_assembly = Some(OpenAiToolAssembly {
+                                    index: observed_index.unwrap_or(0),
+                                    ..OpenAiToolAssembly::default()
+                                });
                             }
                         }
-                        if let Some(args) = function.get("arguments").and_then(json_as_string) {
-                            assembly.arguments.push_str(args);
+                        let assembly = tool_assembly.as_mut().expect("assembly seeded above");
+                        if assembly.id.is_none() {
+                            if let Some(id) = call_obj.get("id").and_then(json_as_string) {
+                                assembly.id = Some(id.to_string());
+                            }
+                        }
+                        if let Some(function) = call_obj.get("function").and_then(json_as_object) {
+                            if assembly.name.is_none() {
+                                if let Some(name) = function.get("name").and_then(json_as_string) {
+                                    assembly.name = Some(name.to_string());
+                                }
+                            }
+                            if let Some(args) = function.get("arguments").and_then(json_as_string) {
+                                assembly.arguments.push_str(args);
+                            }
                         }
                     }
                 }
@@ -710,7 +724,11 @@ fn parse_openai_stream_inner<R: BufRead>(
         let name = assembly
             .name
             .ok_or_else(|| tool_failure("openai tool call missing function.name"))?;
-        let arguments = parse_tool_arguments(&assembly.arguments)?;
+        let arguments = if assembly.arguments.trim().is_empty() {
+            std::collections::BTreeMap::new()
+        } else {
+            parse_tool_arguments(&assembly.arguments)?
+        };
         events.on_tool_call(&name, &arguments);
         ModelAction::CallTool {
             tool_name: name,
@@ -792,12 +810,16 @@ fn parse_anthropic_stream_inner<R: BufRead>(
                             .and_then(json_as_u64)
                             .unwrap_or(0);
                         if let Some(existing) = tool_assembly.as_ref() {
-                            if existing.index != block_index {
+                            if existing.index == block_index {
                                 return Err(tool_failure(format!(
-                                    "anthropic stream emitted multiple parallel tool_use blocks (indices {} and {}); only one is supported per turn",
-                                    existing.index, block_index
+                                    "anthropic stream re-emitted content_block_start for tool_use at index {} (server bug)",
+                                    block_index
                                 )));
                             }
+                            return Err(tool_failure(format!(
+                                "anthropic stream emitted multiple parallel tool_use blocks (indices {} and {}); only one is supported per turn",
+                                existing.index, block_index
+                            )));
                         } else {
                             let id = block
                                 .get("id")
@@ -831,12 +853,13 @@ fn parse_anthropic_stream_inner<R: BufRead>(
                         }
                         "input_json_delta" => {
                             if let Some(partial) = delta.get("partial_json").and_then(json_as_string) {
-                                let delta_index = root
-                                    .get("index")
-                                    .and_then(json_as_u64)
-                                    .unwrap_or(0);
+                                let delta_index = root.get("index").and_then(json_as_u64);
                                 if let Some(assembly) = tool_assembly.as_mut() {
-                                    if assembly.index == delta_index {
+                                    let matches_assembly = match delta_index {
+                                        Some(idx) => assembly.index == idx,
+                                        None => true, // continue current assembly when index absent
+                                    };
+                                    if matches_assembly {
                                         assembly.partial_json.push_str(partial);
                                     }
                                 }
@@ -876,7 +899,11 @@ fn parse_anthropic_stream_inner<R: BufRead>(
         let name = assembly
             .name
             .ok_or_else(|| tool_failure("anthropic tool_use missing name"))?;
-        let arguments = parse_tool_arguments(&assembly.partial_json)?;
+        let arguments = if assembly.partial_json.trim().is_empty() {
+            std::collections::BTreeMap::new()
+        } else {
+            parse_tool_arguments(&assembly.partial_json)?
+        };
         events.on_tool_call(&name, &arguments);
         ModelAction::CallTool {
             tool_name: name,
@@ -1928,6 +1955,106 @@ mod tests {
             }
             super::ModelAction::Finish => panic!("expected tool call"),
         }
+    }
+
+    #[test]
+    fn parse_openai_stream_handles_missing_index_on_followup_chunk() {
+        // First chunk has index=1, follow-up omits index. Should NOT trigger
+        // the parallel-tool-calls error (continue current assembly).
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"x\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"pa\"}}]},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"th\\\":\\\"a.rs\\\"}\"}}]},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let mut cur = Cursor::new(body.as_bytes().to_vec());
+        let mut events = NoopStreamEvents;
+        let (resp, _usage) = super::parse_openai_stream(&mut cur, &mut events).unwrap();
+        match resp.action {
+            super::ModelAction::CallTool { tool_name, input } => {
+                assert_eq!(tool_name, "read_file");
+                assert_eq!(input.get("path"), Some("a.rs"));
+            }
+            super::ModelAction::Finish => panic!("expected tool call"),
+        }
+    }
+
+    #[test]
+    fn parse_anthropic_stream_errors_on_repeated_content_block_start_at_same_index() {
+        let body = concat!(
+            "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n",
+            "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"a\",\"name\":\"read_file\",\"input\":{}}}\n\n",
+            "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"b\",\"name\":\"git_diff\",\"input\":{}}}\n\n",
+            "event: message_stop\ndata: {}\n\n",
+        );
+        let mut cur = Cursor::new(body.as_bytes().to_vec());
+        let mut events = NoopStreamEvents;
+        let result = super::parse_anthropic_stream(&mut cur, &mut events);
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("re-emitted content_block_start"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_openai_stream_handles_empty_tool_arguments() {
+        // Tool with required:[] schema (e.g. git_diff) — model may emit no
+        // function.arguments at all, leaving assembly.arguments empty.
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"x\",\"type\":\"function\",\"function\":{\"name\":\"git_diff\"}}]},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let mut cur = Cursor::new(body.as_bytes().to_vec());
+        let mut events = NoopStreamEvents;
+        let (resp, _usage) = super::parse_openai_stream(&mut cur, &mut events).unwrap();
+        match resp.action {
+            super::ModelAction::CallTool { tool_name, input } => {
+                assert_eq!(tool_name, "git_diff");
+                assert!(input.args.is_empty());
+            }
+            super::ModelAction::Finish => panic!("expected tool call"),
+        }
+    }
+
+    #[test]
+    fn parse_anthropic_stream_handles_empty_tool_input_partial_json() {
+        // tool_use with no input_json_delta events emits an empty partial_json.
+        let body = concat!(
+            "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n",
+            "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"a\",\"name\":\"git_diff\",\"input\":{}}}\n\n",
+            "event: content_block_stop\ndata: {\"index\":0}\n\n",
+            "event: message_stop\ndata: {}\n\n",
+        );
+        let mut cur = Cursor::new(body.as_bytes().to_vec());
+        let mut events = NoopStreamEvents;
+        let (resp, _usage) = super::parse_anthropic_stream(&mut cur, &mut events).unwrap();
+        match resp.action {
+            super::ModelAction::CallTool { tool_name, input } => {
+                assert_eq!(tool_name, "git_diff");
+                assert!(input.args.is_empty());
+            }
+            super::ModelAction::Finish => panic!("expected tool call"),
+        }
+    }
+
+    #[test]
+    fn parse_openai_stream_collects_usage_frame_after_done_marker() {
+        // Some compatible servers emit usage AFTER [DONE]. We continue
+        // draining and capture it.
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+            "data: {\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":2}}\n\n",
+        );
+        let mut cur = Cursor::new(body.as_bytes().to_vec());
+        let mut events = NoopStreamEvents;
+        let (_resp, usage) = super::parse_openai_stream(&mut cur, &mut events).unwrap();
+        let usage = usage.expect("expected usage from trailing frame");
+        assert_eq!(usage.prompt, 11);
+        assert_eq!(usage.completion, 2);
     }
 
     #[test]
