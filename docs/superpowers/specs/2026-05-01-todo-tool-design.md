@@ -1,6 +1,6 @@
 # TodoTool — Phase 10a 设计
 
-最后更新：`2026-05-01` (rev 3 — 吸收第二轮 codex review 反馈)
+最后更新：`2026-05-01` (rev 4 — 吸收第三轮 codex review 反馈)
 状态：`spec` (未实现)
 关联 Phase：10a (LLM-driven planner — Claude Code 风格 todos-as-tool)
 
@@ -404,6 +404,18 @@ tool_events.push(ToolEvent {
 
 Err 分支同样解耦（`paint_tool_result(Failed, …, &output_text)` 完整；observation 走 trim）。
 
+**`ToolEvent.output` 语义变更**（IM-C 显式记录）：rev 3 之前 `ToolEvent.output` 与
+user-facing display 共享同一个 `summary` 变量，rev 4 后 `ToolEvent.output` 是 **trim
+版本**（observation summary），与 `repl/transcript.rs::render_for_prompt` 走 LLM
+context 一致。下游消费者校验：
+- `repl/repl.rs:93-99` `transcript.push_tool(event.output, ...)`：trim 喂给 LLM replay，**正确**
+- `cli/commands/run.rs::AgentLoop::run`：`.map(|_| ())` 丢弃 `RunResult.tool_events`，**无关**
+- `cli/commands/pr.rs:53/123/169`：仅读 `result.final_message`，丢弃 `tool_events`，**无关**
+- 当前没有任何代码消费完整 `output.summary` 后续路径
+
+如未来引入"transcript export"或"agent history view"等需要原始 user-facing 输出的功能，
+需要扩 `ToolEvent` 加 `display_summary: Option<String>` 字段（YAGNI 不做）。
+
 **对其他工具无回归**：现有 6 个 `ObservationKind` 在 `summarize_for_kind` 中本来就裁剪
 （shell 取尾、文件取头等）。把它们的"裁剪输出 = user 显示"改成"裁剪输出 = observation；
 完整输出 = user 显示"是**普遍改进**——之前用户看到的 shell 输出也只是被 summarize 过的尾巴，
@@ -473,6 +485,11 @@ let input_repr = if name == "todo_write" {
     /* 现有逻辑 */
 };
 ```
+
+**`<malformed>` 语义**：覆盖两种情况——(a) `parse_json_value` 解析失败（truly malformed JSON）；
+(b) JSON 合法但顶层不是数组（如 `null` / `42` / `"string"`）。这两种都属于 LLM 输出有问题，
+统一标签是合适 UX；上层不需要分辨原因（实际产生 tool_failure 的是 `TodoWriteTool::execute`，
+有更详细错误信息）。
 
 `trimmed_output` 也走 `summarize_for_kind`（现已对 Todos 走紧凑摘要），双层防泄漏。
 
@@ -545,18 +562,30 @@ pub struct Repl {
 ```
 
 **IM-2: 现有 `AgentLoopOptions { steps, initial_observations }` struct literal**
-（在 `repl/repl.rs:85-88` 与可能的 `cli/commands/run.rs`）必须**同步**改为：
+共 **4 个调用点**，M3 PR 必须**原子**全部更新，否则编译失败：
+
+| 文件 | 行 | 上下文 | `todos` 字段值 |
+|------|----|--------|----------------|
+| `src/repl/repl.rs` | 85 | `Repl::handle_line` 调 `AgentLoop::run_with` | `self.todos.clone()` (`Rc::clone`，与 Repl 共享) |
+| `src/cli/commands/pr.rs` | 53 | `pr review` 一次性流 | `Rc::new(RefCell::new(TodoList::default()))` (one-shot 自建) |
+| `src/cli/commands/pr.rs` | 123 | `pr fix` 一次性流 | 同上 |
+| `src/cli/commands/pr.rs` | 169 | `pr patch` 一次性流 | 同上 |
+
+`cli/commands/run.rs` **无** struct literal（用 `AgentLoop::run` → `AgentLoopOptions::default()`），无需改动。
+
+每个站点改为：
 
 ```rust
 AgentLoopOptions {
-    steps: self.budget,
-    initial_observations: Vec::new(),
-    todos: self.todos.clone(),    // 新增字段
+    steps: ...,
+    initial_observations: ...,
+    todos: <见上表>,
 }
 ```
 
-或者用 `..AgentLoopOptions::default()` spread。M3 PR 必须**原子**完成（结构体字段
-变更 + 所有 literal 站点更新），否则编译失败。M3 land 条件加：必须 grep 确认无残留旧 literal。
+或用 `..AgentLoopOptions::default()` spread（仅当 todos 想用空 list 时方便）。
+
+M3 land 条件：必须 `grep -rn "AgentLoopOptions {"` 确认 4 站点全部更新。
 
 `Repl::handle_line` 调 `AgentLoop::run_with` 时，把 `todos.clone()`（**`Rc::clone`**：
 浅复制 Rc 指针，共享内部 TodoList — 不是深复制 list 内容）传进 `AgentLoopOptions`。
@@ -564,10 +593,10 @@ AgentLoopOptions {
 `/clear` 同时重置：transcript / tokens / **todos**。budget 与 skill 不动（与现有规则一致）。
 
 **`/load` 机制澄清**（NEW-3）：`handle_load` 在 `repl/slash.rs:185-205` 当前实现
-是 `*repl = loaded;` —— **整体替换 Repl**，含其 `Rc<RefCell<TodoList>>`。Rc 身份
-变化但 `AgentLoop` 每次 `handle_line` 重建并从新 Repl 拿 Rc，行为正确。spec 的伪
-代码（用 `*todos.borrow_mut() = ...`）是**示意逻辑**而非字面实现——选择 `*repl = loaded;`
-是为了与现有 v1 加载路径同形。
+是 `*repl = loaded;` —— **整体替换 Repl 实例**（含其 `Rc<RefCell<TodoList>>`）。
+新 Rc 身份与旧的不同，但 `AgentLoop` 每次 `handle_line` 调用时都从（新的）Repl 拿
+当前 Rc，所以行为正确。M4 实现保持现有 `*repl = loaded;` 模式 —— 不引入手写
+`*todos.borrow_mut() = ...` 之类的赋值。
 
 #### `repl/slash.rs::/todos`
 
@@ -657,13 +686,13 @@ dscode 全同步、单线程（无 tokio、无 async fn）—— `Rc<RefCell<>>`
 
 | PR | 工作 | 估时 | 测试增量 | Land 条件 |
 |----|------|------|----------|-----------|
-| M1 | `core/todos.rs` 数据类型 + render + validate + `util/json::json_value_to_string` + `model/deepseek.rs::json_object_to_string_args` 嵌套值修复 | 0.5d | +11 | 221 → 232；零 warnings；C1 fix 单测覆盖（嵌套数组 round-trip）|
-| M2 | `model/protocol.rs` ObservationKind::Todos + `core/observations.rs` KIND_COUNT 7→8 + summarize_for_kind 紧凑摘要 + `tools/todo.rs` TodoWriteTool + `tools/registry.rs::default_registry_with_todos` | 0.75d | +9 | 232 → 241；4 错误路径覆盖；KIND_COUNT 一致性测试 |
-| M3 | `model/deepseek.rs` TOOL_SPECS + build_user_prompt Todos block + system prompt nudge + `core/loop_runtime.rs` AgentLoopOptions.todos + 注入 ModelRequest + **解耦 user-display vs observation summary** + `repl/repl.rs` 同步更新 struct literal | 1.0d | +8 | 241 → 249；user 看完整 list 回归测试；tool_choice="auto" 单测；端到端 LLM 模拟 todo_write 更新 list；grep 确认无残留旧 literal |
-| M4 | `repl/session.rs` schema v2 + v1→v2 migration（含集成 round-trip）+ `repl/repl.rs::Repl.todos` + /clear 同步重置 + /save/load 走 v2 + `repl/transcript.rs` todo_write input 缩略（含 malformed fallback）| 0.5d | +6 | 249 → 255；v1→v2 集成 round-trip 测试 + transcript malformed fallback |
-| M5 | `repl/slash.rs::/todos` 命令 + `docs/todos.md` + `docs/roadmap.md` Phase 10a 标完成 + dogfood | 0.5d | +4 | 255 → 259；slash 4 测试 + 手测 LLM 主动调 todo_write |
+| M1 | `core/todos.rs` 数据类型 + render + validate + `util/json::json_value_to_string` + `model/deepseek.rs::json_object_to_string_args` 嵌套值修复 | 0.5d | +12 | 221 → 233；零 warnings；C1 fix 单测覆盖（嵌套数组 round-trip）；NEW-1 first-line 契约 pin |
+| M2 | `model/protocol.rs` ObservationKind::Todos + `core/observations.rs` KIND_COUNT 7→8 + summarize_for_kind 紧凑摘要 + `tools/todo.rs` TodoWriteTool + `tools/registry.rs::default_registry_with_todos` | 0.75d | +9 | 233 → 242；分布: tools/todo 5（成功 + 4 错误路径），protocol+observations 4（含 `kind_index(Todos)==7` 与 `KIND_COUNT==8` 一致性、`from_tool_name`/`label` 映射、`compact_observations` supersede）|
+| M3 | `model/deepseek.rs` TOOL_SPECS + build_user_prompt Todos block + system prompt nudge + `core/loop_runtime.rs` AgentLoopOptions.todos + 注入 ModelRequest + **解耦 user-display vs observation summary** + `repl/repl.rs:85` + `cli/commands/pr.rs:53/123/169` 共 4 站点 struct literal 同步更新 | 1.0d | +8 | 242 → 250；CR-1 回归测试 (mock harness 验证 user-display vs observation 解耦)；tool_choice="auto" 单测；端到端 LLM 模拟 todo_write 更新 list；`grep -rn "AgentLoopOptions {"` 确认 4 站点全部更新 |
+| M4 | `repl/session.rs` schema v2 + v1→v2 migration（含集成 round-trip）+ `repl/repl.rs::Repl.todos` + /clear 同步重置 + /save/load 走 v2 + `repl/transcript.rs` todo_write input 缩略（含 malformed fallback）| 0.5d | +6 | 250 → 256；v1→v2 集成 round-trip 测试 + transcript malformed fallback |
+| M5 | `repl/slash.rs::/todos` 命令 + `docs/todos.md` + `docs/roadmap.md` Phase 10a 标完成 + dogfood | 0.5d | +4 | 256 → 260；slash 4 测试 + 手测 LLM 主动调 todo_write |
 
-总：5 PR、+38 测试（221 → 259）、~3-4 天。
+总：5 PR、+39 测试（221 → 260）、~3-4 天。
 
 阶段化 land：
 - **M1**：基础类型 + parser fix。LLM 此时即便被诱导调 todo_write 也能编译通过，但还没接入 prompt nudge / AgentLoop —— 隐性可用
@@ -683,7 +712,8 @@ dscode 全同步、单线程（无 tokio、无 async fn）—— `Rc<RefCell<>>`
 - `TodoList::replace` 完全覆写旧 items（不追加）
 - `TodoList::render_for_prompt` 输出格式 `- [status] content` per line
 - `TodoList::render_for_display` 混合状态格式（in_progress 用 active_form）
-- `TodoList::render_compact_summary` 计数正确（NEW-1: 与 render_for_display 第一行一致）
+- `TodoList::render_compact_summary` 计数正确（"5 todos: 2 completed, 1 in_progress, 2 pending"）
+- **NEW-1 契约 pin**：`render_for_display(...).lines().next()` 字面等于 `render_compact_summary(...)`（不论 list 内容）
 - `TodoList::is_empty` 状态切换
 
 `util/json.rs::json_value_to_string` × 2（M1）：
@@ -716,9 +746,9 @@ dscode 全同步、单线程（无 tokio、无 async fn）—— `Rc<RefCell<>>`
 - `respond_remote_openai` / `respond_remote_anthropic` 的 body JSON 包含 `"tool_choice":"auto"`（防 future PR 误改）
 
 `core/loop_runtime.rs` × 3（M3）：
-- 端到端：单步循环 LLM 调 `todo_write` 后 `Rc<RefCell<TodoList>>` 状态被更新
+- 端到端：单步循环 LLM 调 `todo_write` 后 `Rc<RefCell<TodoList>>` 状态被更新（mock ModelClient harness）
 - `AgentLoopOptions::default()` 给空 TodoList
-- **CR-1 回归**：`paint_tool_result` body 是完整 list（含 3+ 行明细）；observation summary 仅 1 行紧凑摘要
+- **CR-1 回归** (复用上面同款 mock ModelClient 端到端 harness)：单次 `run_with` 后断言 (a) 用 `&mut Vec<u8>` 注入 TtyRenderer 捕获到的输出 body 含 3+ 行明细; (b) `RunResult.tool_events[0].output` 仅 1 行紧凑摘要 ——验证 user-display 与 observation summary 真正解耦
 
 `repl/session.rs` × 5（M4）：
 - v2 round-trip（写 + 读 + 校验 todos 字段）
@@ -736,8 +766,9 @@ dscode 全同步、单线程（无 tokio、无 async fn）—— `Rc<RefCell<>>`
 - `/clear` 同时重置 transcript + todos + tokens
 - `/save` /  `/load` round-trip 保留 todos
 
-**总计**：8 + 2 + 1 + 4 + 5 + 4 + 1 + 3 + 5 + 1 + 4 = **38**
-**对账**：M1: 8+2+1=11；M2: 4+5=9；M3: 4+1+3=8；M4: 5+1=6；M5: 4 → 11+9+8+6+4 = **38** ✓
+**总计**：9 + 2 + 1 + 4 + 5 + 4 + 1 + 3 + 5 + 1 + 4 = **39**
+**对账**：M1: 9+2+1=12；M2: 4+5=9；M3: 4+1+3=8；M4: 5+1=6；M5: 4 → 12+9+8+6+4 = **39** ✓
+（M1 包含 NEW-1 的两个独立断言：`render_compact_summary` 计数正确 + `render_for_display` 首行 == `render_compact_summary` 输出）
 
 ### 集成 / 手测（M5）
 
