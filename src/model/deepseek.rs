@@ -607,9 +607,7 @@ pub(crate) fn parse_openai_stream<R: BufRead>(
 ) -> AppResult<(ModelResponse, Option<TokenUsage>)> {
     let mut full_text = String::new();
     let result = parse_openai_stream_inner(reader, events, &mut full_text);
-    if result.is_err() {
-        events.on_assistant_done(&full_text);
-    }
+    events.on_assistant_done(&full_text);
     result
 }
 
@@ -686,8 +684,6 @@ fn parse_openai_stream_inner<R: BufRead>(
         }
     }
 
-    events.on_assistant_done(full_text.as_str());
-
     let action = if let Some(assembly) = tool_assembly {
         let name = assembly
             .name
@@ -727,9 +723,7 @@ pub(crate) fn parse_anthropic_stream<R: BufRead>(
 ) -> AppResult<(ModelResponse, Option<TokenUsage>)> {
     let mut full_text = String::new();
     let result = parse_anthropic_stream_inner(reader, events, &mut full_text);
-    if result.is_err() {
-        events.on_assistant_done(&full_text);
-    }
+    events.on_assistant_done(&full_text);
     result
 }
 
@@ -834,8 +828,6 @@ fn parse_anthropic_stream_inner<R: BufRead>(
             _ => {}
         }
     }
-
-    events.on_assistant_done(full_text.as_str());
 
     let action = if let Some(assembly) = tool_assembly {
         let name = assembly
@@ -1766,6 +1758,48 @@ mod tests {
         assert_eq!(events.done.borrow().len(), 1);
         let chunks = events.chunks.borrow();
         assert_eq!(*chunks, vec!["hi".to_string()]);
+    }
+
+    #[test]
+    fn parse_openai_stream_calls_on_assistant_done_exactly_once_on_post_loop_error() {
+        // Stream completes normally but tool args are malformed JSON.
+        // Inner used to call on_assistant_done before erroring; outer used
+        // to call it again on Err. Now: exactly once.
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"x\",\"type\":\"function\",\"function\":{\"name\":\"git_diff\",\"arguments\":\"NOT_JSON\"}}]},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let mut cur = Cursor::new(body.as_bytes().to_vec());
+        let mut events = CapturingEvents::default();
+        let result = super::parse_openai_stream(&mut cur, &mut events);
+        assert!(result.is_err(), "expected post-loop tool-args parse error");
+        assert_eq!(
+            events.done.borrow().len(),
+            1,
+            "on_assistant_done must fire exactly once even when post-loop parsing errors"
+        );
+    }
+
+    #[test]
+    fn parse_anthropic_stream_calls_on_assistant_done_exactly_once_on_post_loop_error() {
+        // Stream emits valid frames but partial_json never assembles to valid JSON.
+        let body = concat!(
+            "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n",
+            "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu\",\"name\":\"git_diff\",\"input\":{}}}\n\n",
+            "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"NOT_JSON\"}}\n\n",
+            "event: content_block_stop\ndata: {\"index\":0}\n\n",
+            "event: message_stop\ndata: {}\n\n",
+        );
+        let mut cur = Cursor::new(body.as_bytes().to_vec());
+        let mut events = CapturingEvents::default();
+        let result = super::parse_anthropic_stream(&mut cur, &mut events);
+        assert!(result.is_err());
+        assert_eq!(
+            events.done.borrow().len(),
+            1,
+            "on_assistant_done must fire exactly once even when post-loop parsing errors"
+        );
     }
 
     #[test]
