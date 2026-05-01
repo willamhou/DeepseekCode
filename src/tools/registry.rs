@@ -183,6 +183,14 @@ fn sanitize_for_prompt(value: &str) -> String {
 }
 
 pub fn default_registry() -> ToolRegistry {
+    default_registry_with_todos(std::rc::Rc::new(std::cell::RefCell::new(
+        crate::core::todos::TodoList::default(),
+    )))
+}
+
+pub fn default_registry_with_todos(
+    todos: std::rc::Rc<std::cell::RefCell<crate::core::todos::TodoList>>,
+) -> ToolRegistry {
     ToolRegistry {
         tools: vec![
             Box::new(ListFilesTool),
@@ -191,6 +199,7 @@ pub fn default_registry() -> ToolRegistry {
             Box::new(ApplyPatchTool),
             Box::new(RunShellTool),
             Box::new(GitDiffTool),
+            Box::new(crate::tools::todo::TodoWriteTool { list: todos }),
         ],
     }
 }

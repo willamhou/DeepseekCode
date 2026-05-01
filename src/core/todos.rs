@@ -1,4 +1,4 @@
-#![allow(dead_code)] // remove when M2 wires up consumers
+#![allow(dead_code)] // remove when M3 wires up TtyRenderer / M5 wires up /todos slash
 
 use std::fmt::Write;
 

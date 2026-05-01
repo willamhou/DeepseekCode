@@ -17,6 +17,7 @@ pub fn summarize_for_kind(raw: &str, kind: ObservationKind) -> String {
         ObservationKind::Patch => head_trim(raw, PATCH_LINES),
         ObservationKind::Diff => trim_diff(raw, DIFF_LINES),
         ObservationKind::Other => head_trim(raw, OTHER_LINES),
+        ObservationKind::Todos => raw.lines().next().unwrap_or(raw).to_string(),
     }
 }
 
@@ -68,7 +69,7 @@ fn supersede_stub(summary: &str, kind: ObservationKind) -> String {
     }
 }
 
-const KIND_COUNT: usize = 7;
+const KIND_COUNT: usize = 8;
 
 fn kind_index(kind: ObservationKind) -> usize {
     let index = match kind {
@@ -79,6 +80,7 @@ fn kind_index(kind: ObservationKind) -> usize {
         ObservationKind::Diff => 4,
         ObservationKind::ShellOutput => 5,
         ObservationKind::Other => 6,
+        ObservationKind::Todos => 7,
     };
     debug_assert!(index < KIND_COUNT);
     index
@@ -333,5 +335,38 @@ mod tests {
         assert!(compacted[0].summary.starts_with("(superseded"));
         assert_eq!(compacted[1].summary, "read error");
         assert_eq!(compacted[2].summary, "second read");
+    }
+
+    #[test]
+    fn from_tool_name_maps_todo_write_to_todos() {
+        assert_eq!(ObservationKind::from_tool_name("todo_write"), ObservationKind::Todos);
+    }
+
+    #[test]
+    fn label_for_todos_is_todos() {
+        assert_eq!(ObservationKind::Todos.label(), "todos");
+    }
+
+    #[test]
+    fn kind_index_for_todos_is_seven_within_kind_count() {
+        let idx = kind_index(ObservationKind::Todos);
+        assert_eq!(idx, 7);
+        assert!(idx < KIND_COUNT);
+    }
+
+    #[test]
+    fn compact_observations_supersedes_old_todos_observation() {
+        let observations = vec![
+            Observation::ok("todo_write", "5 todos: 0 completed, 1 in_progress, 4 pending\n  details..."),
+            Observation::ok("read_file", "some file"),
+            Observation::ok("todo_write", "5 todos: 1 completed, 1 in_progress, 3 pending\n  newer..."),
+        ];
+        let compacted = compact_observations(&observations);
+        assert!(
+            compacted[0].summary.starts_with("(superseded"),
+            "old todos should be superseded: {}",
+            compacted[0].summary
+        );
+        assert!(compacted[2].summary.starts_with("5 todos: 1 completed"));
     }
 }

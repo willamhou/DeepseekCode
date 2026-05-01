@@ -10,6 +10,9 @@ pub struct ModelRequest {
     pub suggested_test_command: Option<String>,
     pub available_tools: Vec<String>,
     pub observations: Vec<Observation>,
+    // Wired by M3 into the prompt; consumed when readers materialise this struct.
+    #[allow(dead_code)]
+    pub todos: Vec<crate::core::todos::Todo>,
 }
 
 #[derive(Debug, Clone)]
@@ -35,6 +38,7 @@ pub enum ObservationKind {
     Diff,
     ShellOutput,
     Other,
+    Todos,
 }
 
 impl ObservationKind {
@@ -46,6 +50,7 @@ impl ObservationKind {
             "apply_patch" => Self::Patch,
             "git_diff" => Self::Diff,
             "run_shell" => Self::ShellOutput,
+            "todo_write" => Self::Todos,
             _ => Self::Other,
         }
     }
@@ -59,6 +64,7 @@ impl ObservationKind {
             Self::Diff => "diff",
             Self::ShellOutput => "shell_output",
             Self::Other => "other",
+            Self::Todos => "todos",
         }
     }
 }

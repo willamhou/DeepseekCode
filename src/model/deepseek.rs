@@ -1412,6 +1412,7 @@ mod tests {
                 Observation::ok("list_files", "noop"),
                 Observation::ok("read_file", "noop"),
             ],
+            todos: Vec::new(),
         };
 
         let response = planner().respond(request, &mut crate::ui::stream::NoopStreamEvents).unwrap().0;
@@ -1449,6 +1450,7 @@ mod tests {
             suggested_test_command: None,
             available_tools: vec!["apply_patch".to_string(), "read_file".to_string(), "list_files".to_string()],
             observations: vec![],
+            todos: Vec::new(),
         };
 
         let response = planner().respond(request, &mut crate::ui::stream::NoopStreamEvents).unwrap().0;
@@ -1488,6 +1490,7 @@ mod tests {
                 Observation::ok("list_files", "noop"),
                 Observation::ok("read_file", "noop"),
             ],
+            todos: Vec::new(),
         };
 
         let response = planner().respond(request, &mut crate::ui::stream::NoopStreamEvents).unwrap().0;
@@ -1528,6 +1531,7 @@ mod tests {
                     "patch dry-run failed: hunk #1 did not match the target file (the surrounding context drifted)",
                 ),
             ],
+            todos: Vec::new(),
         };
 
         let response = planner().respond(request, &mut crate::ui::stream::NoopStreamEvents).unwrap().0;
@@ -1573,6 +1577,7 @@ mod tests {
                     "apply_patch requires a path",
                 ),
             ],
+            todos: Vec::new(),
         };
 
         let response = planner().respond(request, &mut crate::ui::stream::NoopStreamEvents).unwrap().0;
@@ -2074,6 +2079,7 @@ mod tests {
             suggested_test_command: None,
             available_tools: vec![],
             observations: vec![],
+            todos: Vec::new(),
         };
 
         let mut events = CapturingEvents::default();

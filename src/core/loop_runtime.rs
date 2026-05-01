@@ -126,6 +126,7 @@ impl AgentLoop {
                     .map(str::to_string)
                     .collect(),
                 observations: compact_observations(&observations),
+                todos: Vec::new(),
             };
 
             renderer.paint_step_divider(step + 1);
