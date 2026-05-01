@@ -1096,9 +1096,11 @@ fn json_object_to_string_args(value: &JsonValue) -> AppResult<BTreeMap<String, S
                 result.insert(key.clone(), "null".to_string());
             }
             JsonValue::Object(_) | JsonValue::Array(_) => {
-                return Err(app_error(format!(
-                    "tool argument `{key}` must be a scalar json value"
-                )));
+                // Re-serialize nested values back to JSON strings so ToolInput.args
+                // (BTreeMap<String, String>) can carry them. Tools that need a nested
+                // structure decode again via parse_json_value. Fixes Phase 10a items
+                // transport for todo_write (literal-array form).
+                result.insert(key.clone(), crate::util::json::json_value_to_string(value));
             }
         }
     }
@@ -2086,6 +2088,21 @@ mod tests {
 
         if let Some(value) = original {
             std::env::set_var("DSCODE_TEST_NO_KEY", value);
+        }
+    }
+
+    #[test]
+    fn json_object_to_string_args_re_serializes_nested_array_values() {
+        let body = r#"{"items":[{"content":"Run tests","status":"pending"}]}"#;
+        let value = crate::util::json::parse_json_value(body).unwrap();
+        let args = super::json_object_to_string_args(&value).unwrap();
+        let items_str = args.get("items").expect("items present");
+        let reparsed = crate::util::json::parse_json_value(items_str).unwrap();
+        match reparsed {
+            crate::util::json::JsonValue::Array(a) => {
+                assert_eq!(a.len(), 1);
+            }
+            _ => panic!("expected array, got {reparsed:?}"),
         }
     }
 }
