@@ -1,5 +1,3 @@
-#![allow(dead_code)] // remove when M3 wires up TtyRenderer / M5 wires up /todos slash
-
 use std::fmt::Write;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +43,10 @@ impl TodoList {
         self.items = items;
     }
 
+    /// "- [pending] Run tests\n- [in_progress] Add feature\n…". Empty list → "".
+    /// Currently `build_user_prompt` inlines this format directly; kept on
+    /// `TodoList` per spec API surface for future reuse.
+    #[allow(dead_code)]
     pub fn render_for_prompt(&self) -> String {
         let mut out = String::new();
         for item in &self.items {

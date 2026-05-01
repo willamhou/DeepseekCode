@@ -10,8 +10,6 @@ pub struct ModelRequest {
     pub suggested_test_command: Option<String>,
     pub available_tools: Vec<String>,
     pub observations: Vec<Observation>,
-    // Wired by M3 into the prompt; consumed when readers materialise this struct.
-    #[allow(dead_code)]
     pub todos: Vec<crate::core::todos::Todo>,
 }
 
