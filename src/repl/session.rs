@@ -294,12 +294,14 @@ fn parse_todos_field(
         let content = obj
             .get("content")
             .and_then(json_as_string)
-            .ok_or_else(|| app_error(format!("session todos[{i}] missing `content`")))?
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| app_error(format!("session todos[{i}] missing or empty `content`")))?
             .to_string();
         let active_form = obj
             .get("activeForm")
             .and_then(json_as_string)
-            .ok_or_else(|| app_error(format!("session todos[{i}] missing `activeForm`")))?
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| app_error(format!("session todos[{i}] missing or empty `activeForm`")))?
             .to_string();
         let status_str = obj
             .get("status")
