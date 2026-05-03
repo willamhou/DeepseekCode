@@ -126,6 +126,9 @@ impl AgentLoop {
         let mut tool_events: Vec<ToolEvent> = Vec::new();
         let mut total_usage = crate::model::protocol::TokenUsage::default();
         let mut renderer = crate::ui::stream::TtyRenderer::from_stdout();
+        // Phase 10c-3: detect research-bootstrap mode (empty workspace + research keyword)
+        // ONCE before the loop — workspace state at start defines the run's intent.
+        let research_bootstrap = should_apply_research_bootstrap(&context.task);
         // Phase 10c-1: accumulate prior assistant messages so each step sees what it
         // already said. Without this, dscode run loops on "I'll start by …" because
         // the LLM never sees its own progress (REPL has Repl.transcript; one-shot did not).
@@ -147,7 +150,7 @@ impl AgentLoop {
                 .cloned()
                 .collect::<Vec<_>>();
             let request = ModelRequest {
-                system_prompt: build_system_prompt(skill),
+                system_prompt: build_system_prompt_with_flags(skill, research_bootstrap),
                 task: context.task.clone(),
                 profile_name: profile.name.clone(),
                 profile_hints: profile.hints.clone(),
@@ -308,7 +311,44 @@ fn primary_file(profile: &crate::language::profile::LanguageProfile) -> Option<&
 
 const TODO_NUDGE: &str = "\n\nYou have access to a todo_write tool. Use it proactively when the request:\n- involves three or more distinct steps,\n- spans multiple files or non-trivial refactoring,\n- requires running tests or shell commands as part of completion.\n\nEach todo has fields: content (imperative, e.g. \"Run tests\"), activeForm (present continuous, e.g. \"Running tests\"), status (\"pending\" | \"in_progress\" | \"completed\").\n\nMark exactly one todo as in_progress at a time. Update the list (mark completed, add discovered tasks) before moving to the next step. Skip todo_write only for trivial single-step requests.";
 
+/// Phase 10c-3: research-bootstrap nudge. Prepended to system prompt when the
+/// workspace is empty AND the task text contains research keywords. Without
+/// this, dogfood with v4-pro showed agents oscillating between mkdir +
+/// todo_write for 30 steps without ever issuing a gh/curl call. Strong-style
+/// directive that matches the empirically-observed failure mode.
+const RESEARCH_BOOTSTRAP_NUDGE: &str = "\n\n[research-bootstrap mode]\nThe workspace is INTENTIONALLY EMPTY. You are doing research, not editing files.\n- Step 1 MUST be EITHER (a) todo_write to plan, OR (b) `gh search repos/code` / `curl -sSL` for the FIRST research call.\n- DO NOT call mkdir, list_files, or run_shell with setup commands — the workspace is empty by design.\n- DO NOT repeat the same setup tool call. Each step should make NEW progress (a new gh query, a new curl URL, a new todo_write update reflecting completed work).\n- After research is complete, use apply_patch to write findings to a markdown file.";
+
+fn should_apply_research_bootstrap(task: &str) -> bool {
+    let lower = task.to_lowercase();
+    let keywords = [
+        "research", "investigate", "调研", "explore", "find on github",
+        "gh search", "gh repo", "curl", "search github", "look up",
+    ];
+    let task_matches = keywords.iter().any(|kw| lower.contains(kw));
+    if !task_matches {
+        return false;
+    }
+    // Empty workspace heuristic: cwd contains zero non-hidden, non-.dscode entries.
+    let cwd_empty = std::fs::read_dir(".")
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .all(|entry| {
+                    let name = entry.file_name();
+                    let name_str = name.to_string_lossy();
+                    name_str.starts_with('.') || name_str == ".dscode"
+                })
+        })
+        .unwrap_or(false);
+    cwd_empty
+}
+
+#[cfg(test)]
 fn build_system_prompt(skill_name: Option<&SkillSpec>) -> String {
+    build_system_prompt_with_flags(skill_name, false)
+}
+
+fn build_system_prompt_with_flags(skill_name: Option<&SkillSpec>, research_bootstrap: bool) -> String {
     let mut prompt = String::from(
         "You are the offline planning layer for DeepseekCode. Prefer repository inspection before edits.",
     );
@@ -321,6 +361,9 @@ fn build_system_prompt(skill_name: Option<&SkillSpec>) -> String {
             prompt.push(' ');
             prompt.push_str(skill.system_append.trim());
         }
+    }
+    if research_bootstrap {
+        prompt.push_str(RESEARCH_BOOTSTRAP_NUDGE);
     }
     prompt.push_str(TODO_NUDGE);
     prompt
@@ -358,6 +401,42 @@ mod tests {
         let skill_pos = prompt.find("ZZZ_SKILL_HINT").expect("skill hint present");
         let nudge_pos = prompt.find("todo_write").expect("nudge present");
         assert!(nudge_pos > skill_pos, "nudge must come after skill_append");
+    }
+
+    #[test]
+    fn research_bootstrap_keyword_match_detects_research_in_task() {
+        // Task contains keyword + workspace empty → true.
+        // We can't actually flip the workspace empty state in a unit test (cwd is repo
+        // root with files), so we test the keyword half by examining the prompt
+        // produced when research_bootstrap=true is forced.
+        let prompt = super::build_system_prompt_with_flags(None, true);
+        assert!(prompt.contains("research-bootstrap mode"));
+        assert!(prompt.contains("INTENTIONALLY EMPTY"));
+        assert!(prompt.contains("gh search"));
+        assert!(prompt.contains("DO NOT call mkdir"));
+    }
+
+    #[test]
+    fn research_bootstrap_disabled_omits_nudge() {
+        let prompt = super::build_system_prompt_with_flags(None, false);
+        assert!(!prompt.contains("research-bootstrap mode"));
+        assert!(!prompt.contains("INTENTIONALLY EMPTY"));
+        // TODO_NUDGE still applies (always on)
+        assert!(prompt.contains("todo_write"));
+    }
+
+    #[test]
+    fn research_bootstrap_keyword_detection_unit() {
+        // should_apply_research_bootstrap fingerprints task text. We exercise the
+        // task-keyword half independently of cwd (cwd in tests is repo root which
+        // is non-empty, so the function returns false here regardless of keyword).
+        // The test just verifies no panics + that empty-text returns false.
+        assert!(!super::should_apply_research_bootstrap(""));
+        assert!(!super::should_apply_research_bootstrap("rename foo to bar"));
+        // These would match keyword but cwd is non-empty, so returns false:
+        let result_for_keyword = super::should_apply_research_bootstrap("research the ACP protocol on github");
+        // In repo root cwd this should be false (workspace not empty).
+        assert!(!result_for_keyword, "repo cwd is not empty so should be false");
     }
 
     #[test]
