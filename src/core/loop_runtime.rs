@@ -126,7 +126,19 @@ impl AgentLoop {
         let mut tool_events: Vec<ToolEvent> = Vec::new();
         let mut total_usage = crate::model::protocol::TokenUsage::default();
         let mut renderer = crate::ui::stream::TtyRenderer::from_stdout();
+        // Phase 10c-1: accumulate prior assistant messages so each step sees what it
+        // already said. Without this, dscode run loops on "I'll start by …" because
+        // the LLM never sees its own progress (REPL has Repl.transcript; one-shot did not).
+        let mut recent_steps_log: Vec<String> = Vec::new();
+        const RECENT_STEPS_KEEP: usize = 3;
         for step in 0..steps {
+            let recent_window = recent_steps_log
+                .iter()
+                .rev()
+                .take(RECENT_STEPS_KEEP)
+                .rev()
+                .cloned()
+                .collect::<Vec<_>>();
             let request = ModelRequest {
                 system_prompt: build_system_prompt(skill),
                 task: context.task.clone(),
@@ -141,6 +153,7 @@ impl AgentLoop {
                     .collect(),
                 observations: compact_observations(&observations),
                 todos: todos.borrow().snapshot(),
+                recent_steps: recent_window,
             };
 
             renderer.paint_step_divider(step + 1);
@@ -150,6 +163,9 @@ impl AgentLoop {
                 total_usage.completion += usage.completion;
             }
             last_message = response.message.clone();
+            if !response.message.trim().is_empty() {
+                recent_steps_log.push(response.message.clone());
+            }
 
             match response.action {
                 ModelAction::CallTool { tool_name, input } => {
@@ -339,6 +355,83 @@ mod cr1_regression_test {
                 None,
             ))
         }
+    }
+
+    struct ScriptedReplyClient {
+        replies: RefCell<Vec<String>>,
+        captured_recent_steps: RefCell<Vec<Vec<String>>>,
+    }
+
+    impl ModelClient for ScriptedReplyClient {
+        fn respond(
+            &self,
+            input: ModelRequest,
+            _events: &mut dyn StreamEvents,
+        ) -> crate::error::AppResult<(ModelResponse, Option<TokenUsage>)> {
+            self.captured_recent_steps
+                .borrow_mut()
+                .push(input.recent_steps.clone());
+            let n = self.captured_recent_steps.borrow().len() - 1;
+            let action = if n < 2 {
+                let mut tin = ToolInput::new();
+                tin.args.insert("root".to_string(), ".".to_string());
+                tin.args.insert("max_depth".to_string(), "1".to_string());
+                tin.args.insert("limit".to_string(), "5".to_string());
+                ModelAction::CallTool {
+                    tool_name: "list_files".to_string(),
+                    input: tin,
+                }
+            } else {
+                ModelAction::Finish
+            };
+            let message = self
+                .replies
+                .borrow()
+                .get(n)
+                .cloned()
+                .unwrap_or_else(|| "done".to_string());
+            Ok((ModelResponse { message, action }, None))
+        }
+    }
+
+    #[test]
+    fn run_with_client_replays_recent_assistant_steps_into_each_request() {
+        // Phase 10c-1 regression: dscode run multi-step loops without seeing prior
+        // assistant messages, causing "I'll start by..." infinite loops. Verify the
+        // ModelRequest.recent_steps field carries prior messages forward.
+        let cfg = crate::config::types::AppConfig::default();
+        let agent = AgentLoop::new(cfg);
+        let context = TaskContext::new("dummy".to_string(), None);
+        let todos = Rc::new(RefCell::new(TodoList::default()));
+        let client = ScriptedReplyClient {
+            replies: RefCell::new(vec![
+                "step ONE: looking at files".to_string(),
+                "step TWO: read first one".to_string(),
+                "step THREE: finishing".to_string(),
+            ]),
+            captured_recent_steps: RefCell::new(Vec::new()),
+        };
+        let _ = agent.run_with_client(
+            context,
+            AgentLoopOptions {
+                steps: 3,
+                initial_observations: Vec::new(),
+                todos,
+            },
+            &client,
+        );
+
+        let captured = client.captured_recent_steps.borrow();
+        assert_eq!(captured.len(), 3, "should have called respond 3 times");
+        // First call: no prior steps yet.
+        assert!(captured[0].is_empty(), "step 1 should see empty recent_steps");
+        // Second call: should see step 1's message.
+        assert_eq!(captured[1].len(), 1);
+        assert!(captured[1][0].contains("step ONE"));
+        // Third call: should see steps 1 + 2.
+        assert_eq!(captured[2].len(), 2);
+        assert!(captured[2][0].contains("step ONE"));
+        assert!(captured[2][1].contains("step TWO"));
     }
 
     #[test]

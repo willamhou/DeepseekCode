@@ -11,6 +11,10 @@ pub struct ModelRequest {
     pub available_tools: Vec<String>,
     pub observations: Vec<Observation>,
     pub todos: Vec<crate::core::todos::Todo>,
+    /// Most recent assistant messages from prior agent loop steps (for `dscode run`
+    /// continuity — REPL flows already replay the transcript). Kept compact: caller
+    /// pushes the last N (typically 3) to avoid prompt bloat.
+    pub recent_steps: Vec<String>,
 }
 
 #[derive(Debug, Clone)]

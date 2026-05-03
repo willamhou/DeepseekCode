@@ -509,6 +509,21 @@ fn build_user_prompt(input: &ModelRequest) -> String {
             ));
         }
     }
+    if !input.recent_steps.is_empty() {
+        prompt.push_str("Recent agent steps (your prior assistant messages, oldest first — do NOT repeat work already done):\n");
+        let base = input.recent_steps.len();
+        for (offset, msg) in input.recent_steps.iter().enumerate() {
+            // Trim each line; one-line summary per step keeps prompt compact.
+            let first_line = msg.lines().next().unwrap_or("").trim();
+            let preview = if first_line.chars().count() > 200 {
+                let head: String = first_line.chars().take(200).collect();
+                format!("{head}…")
+            } else {
+                first_line.to_string()
+            };
+            prompt.push_str(&format!("- step {}: {}\n", offset + 1 + (base - input.recent_steps.len()), preview));
+        }
+    }
     prompt.push_str("Observations:\n");
     if input.observations.is_empty() {
         prompt.push_str("- none\n");
@@ -1318,6 +1333,7 @@ mod tests {
             available_tools: vec!["todo_write".to_string()],
             observations: Vec::new(),
             todos,
+            recent_steps: Vec::new(),
         }
     }
 
@@ -1325,6 +1341,24 @@ mod tests {
     fn build_user_prompt_omits_todos_block_when_empty() {
         let prompt = super::build_user_prompt(&empty_request_with_todos(Vec::new()));
         assert!(!prompt.contains("Todos:"), "expected no Todos: section: {prompt}");
+    }
+
+    #[test]
+    fn build_user_prompt_renders_recent_steps_block_when_present() {
+        let mut req = empty_request_with_todos(Vec::new());
+        req.recent_steps = vec![
+            "Listing files in src/util".to_string(),
+            "Read first 50 lines".to_string(),
+        ];
+        let prompt = super::build_user_prompt(&req);
+        assert!(prompt.contains("Recent agent steps"));
+        assert!(prompt.contains("Listing files in src/util"));
+        assert!(prompt.contains("Read first 50 lines"));
+        // Empty case
+        let mut req2 = empty_request_with_todos(Vec::new());
+        req2.recent_steps = Vec::new();
+        let p2 = super::build_user_prompt(&req2);
+        assert!(!p2.contains("Recent agent steps"));
     }
 
     #[test]
@@ -1501,6 +1535,7 @@ mod tests {
                 Observation::ok("read_file", "noop"),
             ],
             todos: Vec::new(),
+            recent_steps: Vec::new(),
         };
 
         let response = planner().respond(request, &mut crate::ui::stream::NoopStreamEvents).unwrap().0;
@@ -1539,6 +1574,7 @@ mod tests {
             available_tools: vec!["apply_patch".to_string(), "read_file".to_string(), "list_files".to_string()],
             observations: vec![],
             todos: Vec::new(),
+            recent_steps: Vec::new(),
         };
 
         let response = planner().respond(request, &mut crate::ui::stream::NoopStreamEvents).unwrap().0;
@@ -1579,6 +1615,7 @@ mod tests {
                 Observation::ok("read_file", "noop"),
             ],
             todos: Vec::new(),
+            recent_steps: Vec::new(),
         };
 
         let response = planner().respond(request, &mut crate::ui::stream::NoopStreamEvents).unwrap().0;
@@ -1620,6 +1657,7 @@ mod tests {
                 ),
             ],
             todos: Vec::new(),
+            recent_steps: Vec::new(),
         };
 
         let response = planner().respond(request, &mut crate::ui::stream::NoopStreamEvents).unwrap().0;
@@ -1666,6 +1704,7 @@ mod tests {
                 ),
             ],
             todos: Vec::new(),
+            recent_steps: Vec::new(),
         };
 
         let response = planner().respond(request, &mut crate::ui::stream::NoopStreamEvents).unwrap().0;
@@ -2168,6 +2207,7 @@ mod tests {
             available_tools: vec![],
             observations: vec![],
             todos: Vec::new(),
+            recent_steps: Vec::new(),
         };
 
         let mut events = CapturingEvents::default();
