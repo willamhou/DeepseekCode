@@ -53,6 +53,7 @@ fn run_review(config: AppConfig, reference: &str, post: bool, out: Option<&str>)
         AgentLoopOptions {
             steps: 4,
             initial_observations: observations,
+            ..AgentLoopOptions::default()
         },
     )?;
     let final_message = result.final_message;
@@ -123,6 +124,7 @@ fn run_fix(config: AppConfig, reference: &str, job_filter: Option<&str>) -> AppR
         AgentLoopOptions {
             steps: 12,
             initial_observations: observations,
+            ..AgentLoopOptions::default()
         },
     )?;
 
@@ -169,6 +171,7 @@ fn run_patch(config: AppConfig, reference: &str, commit: bool) -> AppResult<()> 
         AgentLoopOptions {
             steps: 4,
             initial_observations: observations,
+            ..AgentLoopOptions::default()
         },
     )?;
 

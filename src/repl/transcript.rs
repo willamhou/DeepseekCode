@@ -132,17 +132,30 @@ impl Transcript {
                         crate::model::protocol::ObservationStatus::Ok => "ok",
                         crate::model::protocol::ObservationStatus::Failed => "failed",
                     };
-                    let input_repr = turn
-                        .tool_input
-                        .as_ref()
-                        .map(|map| {
-                            let parts: Vec<String> = map
-                                .iter()
-                                .map(|(k, v)| format!("{k}={v}"))
-                                .collect();
-                            parts.join(", ")
-                        })
-                        .unwrap_or_default();
+                    let input_repr = if name == "todo_write" {
+                        turn.tool_input
+                            .as_ref()
+                            .and_then(|m| m.get("items"))
+                            .and_then(|s| crate::util::json::parse_json_value(s).ok())
+                            .and_then(|v| match v {
+                                crate::util::json::JsonValue::Array(a) => {
+                                    Some(format!("items=<{} todos>", a.len()))
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or_else(|| "items=<malformed>".to_string())
+                    } else {
+                        turn.tool_input
+                            .as_ref()
+                            .map(|map| {
+                                let parts: Vec<String> = map
+                                    .iter()
+                                    .map(|(k, v)| format!("{k}={v}"))
+                                    .collect();
+                                parts.join(", ")
+                            })
+                            .unwrap_or_default()
+                    };
                     out.push_str(&format!(
                         "[tool] {name}({input_repr}) -> {status_label}\n{trimmed_output}\n\n",
                     ));
@@ -246,5 +259,39 @@ mod tests {
         assert!(rendered.contains("[tool] read_file(path=x.rs) -> ok"));
         assert!(rendered.contains("line0"));
         assert!(rendered.contains("truncated"));
+    }
+
+    #[test]
+    fn render_for_prompt_elides_todo_write_input_to_count() {
+        let mut transcript = Transcript::default();
+        let mut input = std::collections::BTreeMap::new();
+        input.insert(
+            "items".to_string(),
+            r#"[{"content":"A","activeForm":"Aing","status":"pending"},{"content":"B","activeForm":"Bing","status":"in_progress"}]"#.to_string(),
+        );
+        transcript.push_tool(
+            "todo_write",
+            input,
+            "2 todos: 0 completed, 1 in_progress, 1 pending",
+            crate::model::protocol::ObservationStatus::Ok,
+        );
+        let render = transcript.render_for_prompt();
+        assert!(render.contains("items=<2 todos>"));
+        assert!(!render.contains(r#""content":"A""#), "raw JSON must be elided: {render}");
+    }
+
+    #[test]
+    fn render_for_prompt_elides_malformed_todo_write_input_as_malformed() {
+        let mut transcript = Transcript::default();
+        let mut input = std::collections::BTreeMap::new();
+        input.insert("items".to_string(), "[not_json".to_string());
+        transcript.push_tool(
+            "todo_write",
+            input,
+            "ok",
+            crate::model::protocol::ObservationStatus::Ok,
+        );
+        let render = transcript.render_for_prompt();
+        assert!(render.contains("items=<malformed>"));
     }
 }

@@ -17,6 +17,7 @@ pub struct Repl {
     pub skill: Option<String>,
     pub tokens_prompt: u64,
     pub tokens_completion: u64,
+    pub todos: std::rc::Rc<std::cell::RefCell<crate::core::todos::TodoList>>,
 }
 
 impl Repl {
@@ -28,6 +29,9 @@ impl Repl {
             skill,
             tokens_prompt: 0,
             tokens_completion: 0,
+            todos: std::rc::Rc::new(std::cell::RefCell::new(
+                crate::core::todos::TodoList::default(),
+            )),
         }
     }
 
@@ -85,6 +89,7 @@ impl Repl {
             crate::core::loop_runtime::AgentLoopOptions {
                 steps: self.budget,
                 initial_observations: Vec::new(),
+                todos: self.todos.clone(),
             },
         )?;
 

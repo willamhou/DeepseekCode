@@ -24,6 +24,7 @@ message triggers an agent loop with up to 20 steps (configurable via
 | `/diff` | Show pending git diff |
 | `/save <name>` | Save the session to `.dscode/sessions/<name>.json` |
 | `/load <name>` | Restore a saved session (replaces current state) |
+| `/todos` | Show the current todo list (read-only inspection) |
 | `/cost` | Show prompt / completion / total token counters |
 
 ## Cross-turn context

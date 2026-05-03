@@ -26,6 +26,7 @@ pub fn try_handle_slash(repl: &mut Repl, line: &str) -> AppResult<SlashOutcome> 
             repl.transcript.clear();
             repl.tokens_prompt = 0;
             repl.tokens_completion = 0;
+            repl.todos.borrow_mut().items.clear();
             println!(
                 "cleared transcript (kept budget={}, skill={})",
                 repl.budget,
@@ -57,6 +58,17 @@ pub fn try_handle_slash(repl: &mut Repl, line: &str) -> AppResult<SlashOutcome> 
             handle_load(repl, &args);
             Ok(SlashOutcome::Continue)
         }
+        "/todos" => {
+            let inner = repl.todos.borrow();
+            if inner.is_empty() {
+                eprintln!("no todos yet");
+            } else {
+                for line in inner.render_for_display().lines() {
+                    eprintln!("{line}");
+                }
+            }
+            Ok(SlashOutcome::Continue)
+        }
         other => {
             println!("unknown slash command `{other}`; type /help for the list");
             Ok(SlashOutcome::Continue)
@@ -74,6 +86,7 @@ fn print_help() {
     println!("  /diff                         show pending git diff");
     println!("  /save <name>                  save the session to .dscode/sessions/<name>.json");
     println!("  /load <name>                  restore a saved session");
+    println!("  /todos                        show the current todo list (read-only)");
     println!("  /cost                         show prompt/completion token totals");
 }
 
@@ -377,5 +390,58 @@ mod tests {
             try_handle_slash(&mut r, "/diff").unwrap(),
             SlashOutcome::Continue,
         ));
+    }
+
+    #[test]
+    fn slash_clear_resets_todos_along_with_transcript_and_tokens() {
+        use crate::core::todos::{Todo, TodoStatus};
+        let mut r = Repl::new(AppConfig::default(), None);
+        r.transcript.push_user("hi");
+        r.tokens_prompt = 100;
+        r.todos.borrow_mut().replace(vec![
+            Todo { content: "X".to_string(), active_form: "Xing".to_string(), status: TodoStatus::Pending },
+        ]);
+        let _ = r.handle_line("/clear").unwrap();
+        assert!(r.transcript.turns.is_empty());
+        assert_eq!(r.tokens_prompt, 0);
+        assert!(r.todos.borrow().is_empty());
+    }
+
+    #[test]
+    fn slash_todos_returns_continue_when_empty() {
+        let mut r = Repl::new(AppConfig::default(), None);
+        let outcome = try_handle_slash(&mut r, "/todos").unwrap();
+        assert!(matches!(outcome, SlashOutcome::Continue));
+        assert!(r.todos.borrow().is_empty());
+    }
+
+    #[test]
+    fn slash_todos_does_not_mutate_list() {
+        use crate::core::todos::{Todo, TodoStatus};
+        let mut r = Repl::new(AppConfig::default(), None);
+        r.todos.borrow_mut().replace(vec![
+            Todo { content: "X".to_string(), active_form: "Xing".to_string(), status: TodoStatus::InProgress },
+            Todo { content: "Y".to_string(), active_form: "Ying".to_string(), status: TodoStatus::Pending },
+        ]);
+        let before_len = r.todos.borrow().items.len();
+        let outcome = try_handle_slash(&mut r, "/todos").unwrap();
+        assert!(matches!(outcome, SlashOutcome::Continue));
+        assert_eq!(r.todos.borrow().items.len(), before_len, "/todos must be read-only");
+    }
+
+    #[test]
+    fn save_load_round_trip_preserves_todos() {
+        use crate::core::todos::{Todo, TodoStatus};
+        let (cfg, _tmp) = crate::repl::session::tests::config_with_temp_session_dir();
+        let original = Repl::new(cfg.clone(), None);
+        original.todos.borrow_mut().replace(vec![
+            Todo { content: "T".to_string(), active_form: "Ting".to_string(), status: TodoStatus::Completed },
+        ]);
+        crate::repl::session::save("rt", &original).unwrap();
+        let loaded = crate::repl::session::load("rt", &cfg).unwrap();
+        let inner = loaded.todos.borrow();
+        assert_eq!(inner.items.len(), 1);
+        assert_eq!(inner.items[0].content, "T");
+        assert_eq!(inner.items[0].status, TodoStatus::Completed);
     }
 }

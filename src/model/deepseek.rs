@@ -499,6 +499,31 @@ fn build_user_prompt(input: &ModelRequest) -> String {
         prompt.push_str(&format!("Suggested test command: {command}\n"));
     }
     prompt.push_str(&format!("Available tools: {}\n", input.available_tools.join(", ")));
+    if !input.todos.is_empty() {
+        prompt.push_str("Todos:\n");
+        for todo in &input.todos {
+            prompt.push_str(&format!(
+                "- [{}] {}\n",
+                todo.status.label(),
+                todo.content,
+            ));
+        }
+    }
+    if !input.recent_steps.is_empty() {
+        prompt.push_str("Recent agent steps (your prior assistant messages, oldest first — do NOT repeat work already done):\n");
+        let base = input.recent_steps.len();
+        for (offset, msg) in input.recent_steps.iter().enumerate() {
+            // Trim each line; one-line summary per step keeps prompt compact.
+            let first_line = msg.lines().next().unwrap_or("").trim();
+            let preview = if first_line.chars().count() > 200 {
+                let head: String = first_line.chars().take(200).collect();
+                format!("{head}…")
+            } else {
+                first_line.to_string()
+            };
+            prompt.push_str(&format!("- step {}: {}\n", offset + 1 + (base - input.recent_steps.len()), preview));
+        }
+    }
     prompt.push_str("Observations:\n");
     if input.observations.is_empty() {
         prompt.push_str("- none\n");
@@ -602,6 +627,12 @@ const TOOL_SPECS: &[ToolSpec] = &[
         description: "Show the current git diff for the workspace.",
         properties_json: r#"{}"#,
         required_json: r#"[]"#,
+    },
+    ToolSpec {
+        name: "todo_write",
+        description: "Replace the entire todo list with a new set of items. Use proactively for tasks with 3+ steps; mark exactly one item as in_progress at a time.",
+        properties_json: r#"{"items":{"type":"string","description":"JSON array of objects with fields {content: string, activeForm: string, status: \"pending\"|\"in_progress\"|\"completed\"}. content is imperative form (e.g. \"Run tests\"); activeForm is present continuous (e.g. \"Running tests\")."}}"#,
+        required_json: r#"["items"]"#,
     },
 ];
 
@@ -1096,9 +1127,11 @@ fn json_object_to_string_args(value: &JsonValue) -> AppResult<BTreeMap<String, S
                 result.insert(key.clone(), "null".to_string());
             }
             JsonValue::Object(_) | JsonValue::Array(_) => {
-                return Err(app_error(format!(
-                    "tool argument `{key}` must be a scalar json value"
-                )));
+                // Re-serialize nested values back to JSON strings so ToolInput.args
+                // (BTreeMap<String, String>) can carry them. Tools that need a nested
+                // structure decode again via parse_json_value. Fixes Phase 10a items
+                // transport for todo_write (literal-array form).
+                result.insert(key.clone(), crate::util::json::json_value_to_string(value));
             }
         }
     }
@@ -1276,6 +1309,97 @@ mod tests {
     }
 
     #[test]
+    fn build_openai_tools_includes_todo_write() {
+        let tools = build_openai_tools(&["todo_write".to_string()]);
+        assert!(tools.contains("\"name\":\"todo_write\""));
+        assert!(tools.contains("\"items\""));
+    }
+
+    #[test]
+    fn build_anthropic_tools_includes_todo_write() {
+        let tools = build_anthropic_tools(&["todo_write".to_string()]);
+        assert!(tools.contains("\"name\":\"todo_write\""));
+        assert!(tools.contains("\"items\""));
+    }
+
+    fn empty_request_with_todos(todos: Vec<crate::core::todos::Todo>) -> ModelRequest {
+        ModelRequest {
+            system_prompt: String::new(),
+            task: "test".to_string(),
+            profile_name: "rust".to_string(),
+            profile_hints: Vec::new(),
+            primary_file: None,
+            suggested_test_command: None,
+            available_tools: vec!["todo_write".to_string()],
+            observations: Vec::new(),
+            todos,
+            recent_steps: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn build_user_prompt_omits_todos_block_when_empty() {
+        let prompt = super::build_user_prompt(&empty_request_with_todos(Vec::new()));
+        assert!(!prompt.contains("Todos:"), "expected no Todos: section: {prompt}");
+    }
+
+    #[test]
+    fn build_user_prompt_renders_recent_steps_block_when_present() {
+        let mut req = empty_request_with_todos(Vec::new());
+        req.recent_steps = vec![
+            "Listing files in src/util".to_string(),
+            "Read first 50 lines".to_string(),
+        ];
+        let prompt = super::build_user_prompt(&req);
+        assert!(prompt.contains("Recent agent steps"));
+        assert!(prompt.contains("Listing files in src/util"));
+        assert!(prompt.contains("Read first 50 lines"));
+        // Empty case
+        let mut req2 = empty_request_with_todos(Vec::new());
+        req2.recent_steps = Vec::new();
+        let p2 = super::build_user_prompt(&req2);
+        assert!(!p2.contains("Recent agent steps"));
+    }
+
+    #[test]
+    fn build_user_prompt_renders_todos_in_status_content_format() {
+        use crate::core::todos::{Todo, TodoStatus};
+        let todos = vec![
+            Todo { content: "Pen".to_string(), active_form: "Penning".to_string(), status: TodoStatus::Pending },
+            Todo { content: "Pro".to_string(), active_form: "Proing".to_string(), status: TodoStatus::InProgress },
+            Todo { content: "Don".to_string(), active_form: "Doning".to_string(), status: TodoStatus::Completed },
+        ];
+        let prompt = super::build_user_prompt(&empty_request_with_todos(todos));
+        assert!(prompt.contains("Todos:\n- [pending] Pen\n- [in_progress] Pro\n- [completed] Don\n"), "prompt: {prompt}");
+        // active_form must NOT leak into the user prompt:
+        assert!(!prompt.contains("Penning"));
+        assert!(!prompt.contains("Proing"));
+        assert!(!prompt.contains("Doning"));
+    }
+
+    #[test]
+    fn deepseek_body_contains_tool_choice_auto() {
+        // NEW-2: pin tool_choice="auto" against future PR drift.
+        // Inspect the source file directly to confirm the literal is present.
+        // We expect at least two matches (format string + this assertion); if
+        // the format string is removed we will see exactly one match, which
+        // still trips a follow-up safety check below.
+        let source = include_str!("deepseek.rs");
+        let openai_lit = r#""\"tool_choice\":\"auto\","#;
+        let anthropic_lit = r#""\"tool_choice\":{{\"type\":\"auto\"}},"#;
+        let openai_count = source.matches(openai_lit).count();
+        let anthropic_count = source.matches(anthropic_lit).count();
+        assert!(
+            openai_count >= 2,
+            "OpenAI body must include tool_choice auto (count={openai_count})"
+        );
+        assert!(
+            anthropic_count >= 2,
+            "Anthropic body must include tool_choice auto (count={anthropic_count})"
+        );
+    }
+
+    #[test]
     fn parses_anthropic_tool_use_response() {
         let body = r#"{
             "id": "msg_1",
@@ -1410,6 +1534,8 @@ mod tests {
                 Observation::ok("list_files", "noop"),
                 Observation::ok("read_file", "noop"),
             ],
+            todos: Vec::new(),
+            recent_steps: Vec::new(),
         };
 
         let response = planner().respond(request, &mut crate::ui::stream::NoopStreamEvents).unwrap().0;
@@ -1447,6 +1573,8 @@ mod tests {
             suggested_test_command: None,
             available_tools: vec!["apply_patch".to_string(), "read_file".to_string(), "list_files".to_string()],
             observations: vec![],
+            todos: Vec::new(),
+            recent_steps: Vec::new(),
         };
 
         let response = planner().respond(request, &mut crate::ui::stream::NoopStreamEvents).unwrap().0;
@@ -1486,6 +1614,8 @@ mod tests {
                 Observation::ok("list_files", "noop"),
                 Observation::ok("read_file", "noop"),
             ],
+            todos: Vec::new(),
+            recent_steps: Vec::new(),
         };
 
         let response = planner().respond(request, &mut crate::ui::stream::NoopStreamEvents).unwrap().0;
@@ -1526,6 +1656,8 @@ mod tests {
                     "patch dry-run failed: hunk #1 did not match the target file (the surrounding context drifted)",
                 ),
             ],
+            todos: Vec::new(),
+            recent_steps: Vec::new(),
         };
 
         let response = planner().respond(request, &mut crate::ui::stream::NoopStreamEvents).unwrap().0;
@@ -1571,6 +1703,8 @@ mod tests {
                     "apply_patch requires a path",
                 ),
             ],
+            todos: Vec::new(),
+            recent_steps: Vec::new(),
         };
 
         let response = planner().respond(request, &mut crate::ui::stream::NoopStreamEvents).unwrap().0;
@@ -2072,6 +2206,8 @@ mod tests {
             suggested_test_command: None,
             available_tools: vec![],
             observations: vec![],
+            todos: Vec::new(),
+            recent_steps: Vec::new(),
         };
 
         let mut events = CapturingEvents::default();
@@ -2086,6 +2222,21 @@ mod tests {
 
         if let Some(value) = original {
             std::env::set_var("DSCODE_TEST_NO_KEY", value);
+        }
+    }
+
+    #[test]
+    fn json_object_to_string_args_re_serializes_nested_array_values() {
+        let body = r#"{"items":[{"content":"Run tests","status":"pending"}]}"#;
+        let value = crate::util::json::parse_json_value(body).unwrap();
+        let args = super::json_object_to_string_args(&value).unwrap();
+        let items_str = args.get("items").expect("items present");
+        let reparsed = crate::util::json::parse_json_value(items_str).unwrap();
+        match reparsed {
+            crate::util::json::JsonValue::Array(a) => {
+                assert_eq!(a.len(), 1);
+            }
+            _ => panic!("expected array, got {reparsed:?}"),
         }
     }
 }

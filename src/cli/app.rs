@@ -112,12 +112,12 @@ impl Cli {
         let first = args.remove(0);
         let command = match first.as_str() {
             "run" => {
-                let (skill, positional) = parse_common_flags(args);
+                let (skill, budget, positional) = parse_common_flags_extended(args);
                 let task = positional
                     .first()
                     .cloned()
                     .unwrap_or_else(|| "Run task".to_string());
-                Command::Run(RunArgs { task, skill })
+                Command::Run(RunArgs { task, skill, budget })
             }
             "diff" => Command::Diff(DiffArgs {}),
             "resume" => Command::Resume(ResumeArgs { session: None }),
@@ -172,6 +172,7 @@ pub struct ChatArgs {
 pub struct RunArgs {
     pub task: String,
     pub skill: Option<String>,
+    pub budget: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -235,7 +236,15 @@ fn parse_smoke_args(args: Vec<String>) -> SmokeArgs {
 }
 
 fn parse_common_flags(args: Vec<String>) -> (Option<String>, Vec<String>) {
+    let (skill, _budget, positional) = parse_common_flags_extended(args);
+    (skill, positional)
+}
+
+pub fn parse_common_flags_extended(
+    args: Vec<String>,
+) -> (Option<String>, Option<usize>, Vec<String>) {
     let mut skill = None;
+    let mut budget: Option<usize> = None;
     let mut positional = Vec::new();
     let mut index = 0;
 
@@ -247,12 +256,23 @@ fn parse_common_flags(args: Vec<String>) -> (Option<String>, Vec<String>) {
                 continue;
             }
         }
+        if args[index] == "--budget" {
+            if index + 1 < args.len() {
+                if let Ok(n) = args[index + 1].parse::<usize>() {
+                    if (1..=200).contains(&n) {
+                        budget = Some(n);
+                    }
+                }
+                index += 2;
+                continue;
+            }
+        }
 
         positional.push(args[index].clone());
         index += 1;
     }
 
-    (skill, positional)
+    (skill, budget, positional)
 }
 
 #[cfg(test)]

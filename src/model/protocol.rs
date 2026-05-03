@@ -10,6 +10,11 @@ pub struct ModelRequest {
     pub suggested_test_command: Option<String>,
     pub available_tools: Vec<String>,
     pub observations: Vec<Observation>,
+    pub todos: Vec<crate::core::todos::Todo>,
+    /// Most recent assistant messages from prior agent loop steps (for `dscode run`
+    /// continuity — REPL flows already replay the transcript). Kept compact: caller
+    /// pushes the last N (typically 3) to avoid prompt bloat.
+    pub recent_steps: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -35,6 +40,7 @@ pub enum ObservationKind {
     Diff,
     ShellOutput,
     Other,
+    Todos,
 }
 
 impl ObservationKind {
@@ -46,6 +52,7 @@ impl ObservationKind {
             "apply_patch" => Self::Patch,
             "git_diff" => Self::Diff,
             "run_shell" => Self::ShellOutput,
+            "todo_write" => Self::Todos,
             _ => Self::Other,
         }
     }
@@ -59,6 +66,7 @@ impl ObservationKind {
             Self::Diff => "diff",
             Self::ShellOutput => "shell_output",
             Self::Other => "other",
+            Self::Todos => "todos",
         }
     }
 }

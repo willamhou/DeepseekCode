@@ -327,6 +327,46 @@ pub fn json_escape(value: &str) -> String {
     output
 }
 
+pub fn json_value_to_string(value: &JsonValue) -> String {
+    match value {
+        JsonValue::Null => "null".to_string(),
+        JsonValue::Bool(b) => if *b { "true" } else { "false" }.to_string(),
+        JsonValue::Number(n) => n.clone(),
+        JsonValue::String(s) => {
+            let mut out = String::with_capacity(s.len() + 2);
+            out.push('"');
+            out.push_str(&json_escape(s));
+            out.push('"');
+            out
+        }
+        JsonValue::Array(items) => {
+            let mut out = String::from("[");
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(&json_value_to_string(item));
+            }
+            out.push(']');
+            out
+        }
+        JsonValue::Object(map) => {
+            let mut out = String::from("{");
+            for (i, (k, v)) in map.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push('"');
+                out.push_str(&json_escape(k));
+                out.push_str("\":");
+                out.push_str(&json_value_to_string(v));
+            }
+            out.push('}');
+            out
+        }
+    }
+}
+
 pub fn write_quoted(out: &mut String, value: &str) {
     out.push('"');
     out.push_str(&json_escape(value));
@@ -482,5 +522,22 @@ mod tests {
     fn json_escape_handles_b_and_f() {
         let escaped = json_escape("\u{0008}\u{000C}");
         assert_eq!(escaped, "\\b\\f");
+    }
+
+    #[test]
+    fn json_value_to_string_round_trips_nested_array() {
+        let input = r#"[{"k":"v","n":42},[1,2],null,true]"#;
+        let parsed = parse_json_value(input).unwrap();
+        let rewritten = json_value_to_string(&parsed);
+        let reparsed = parse_json_value(&rewritten).unwrap();
+        let reparsed_str = json_value_to_string(&reparsed);
+        assert_eq!(rewritten, reparsed_str);
+    }
+
+    #[test]
+    fn json_value_to_string_escapes_special_chars_in_strings() {
+        let value = JsonValue::String("a\"b\\c\nd\u{0008}".to_string());
+        let s = json_value_to_string(&value);
+        assert_eq!(s, r#""a\"b\\c\nd\b""#);
     }
 }

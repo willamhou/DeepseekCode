@@ -13,7 +13,7 @@ use crate::util::json::{
     write_kv_string, write_kv_u64, JsonValue,
 };
 
-pub const SESSION_VERSION: u32 = 1;
+pub const SESSION_VERSION: u32 = 2;
 
 pub fn save(name: &str, repl: &Repl) -> AppResult<PathBuf> {
     validate_session_name(name).map_err(app_error)?;
@@ -64,7 +64,19 @@ pub fn serialize_session(name: &str, repl: &Repl) -> String {
     out.push_str("],\"tokens\":{");
     write_kv_u64(&mut out, "prompt", repl.tokens_prompt, false);
     write_kv_u64(&mut out, "completion", repl.tokens_completion, true);
-    out.push('}');
+    out.push_str("},\"todos\":[");
+    let todos_snapshot = repl.todos.borrow().snapshot();
+    for (i, todo) in todos_snapshot.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push('{');
+        write_kv_string(&mut out, "content", &todo.content, false);
+        write_kv_string(&mut out, "activeForm", &todo.active_form, true);
+        write_kv_string(&mut out, "status", todo.status.label(), true);
+        out.push('}');
+    }
+    out.push(']');
     out.push('}');
     out
 }
@@ -121,11 +133,15 @@ pub fn parse_session(config: &AppConfig, content: &str) -> AppResult<Repl> {
         .get("version")
         .and_then(json_as_u64)
         .ok_or_else(|| app_error("session missing or non-numeric `version`"))?;
-    if version != SESSION_VERSION as u64 {
-        return Err(app_error(format!(
-            "unsupported session version: {version} (expected {SESSION_VERSION})"
-        )));
-    }
+    let todos_from_file: Vec<crate::core::todos::Todo> = match version {
+        1 => Vec::new(),
+        2 => parse_todos_field(&root)?,
+        other => {
+            return Err(app_error(format!(
+                "unsupported session version: {other} (this dscode supports v1 and v2)"
+            )));
+        }
+    };
 
     let budget = root
         .get("budget")
@@ -175,6 +191,7 @@ pub fn parse_session(config: &AppConfig, content: &str) -> AppResult<Repl> {
     repl.transcript = transcript;
     repl.tokens_prompt = tokens_prompt;
     repl.tokens_completion = tokens_completion;
+    *repl.todos.borrow_mut() = crate::core::todos::TodoList { items: todos_from_file };
     Ok(repl)
 }
 
@@ -263,12 +280,49 @@ fn parse_turn(value: &JsonValue) -> AppResult<crate::repl::transcript::Turn> {
     }
 }
 
+fn parse_todos_field(
+    root: &std::collections::BTreeMap<String, JsonValue>,
+) -> AppResult<Vec<crate::core::todos::Todo>> {
+    let arr = root
+        .get("todos")
+        .and_then(json_as_array)
+        .ok_or_else(|| app_error("session v2 missing required field `todos`"))?;
+    let mut out = Vec::with_capacity(arr.len());
+    for (i, value) in arr.iter().enumerate() {
+        let obj = json_as_object(value)
+            .ok_or_else(|| app_error(format!("session todos[{i}] must be an object")))?;
+        let content = obj
+            .get("content")
+            .and_then(json_as_string)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| app_error(format!("session todos[{i}] missing or empty `content`")))?
+            .to_string();
+        let active_form = obj
+            .get("activeForm")
+            .and_then(json_as_string)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| app_error(format!("session todos[{i}] missing or empty `activeForm`")))?
+            .to_string();
+        let status_str = obj
+            .get("status")
+            .and_then(json_as_string)
+            .ok_or_else(|| app_error(format!("session todos[{i}] missing `status`")))?;
+        let status = crate::core::todos::TodoStatus::from_label(status_str).ok_or_else(|| {
+            app_error(format!(
+                "session todos[{i}]: status must be pending|in_progress|completed (got `{status_str}`)"
+            ))
+        })?;
+        out.push(crate::core::todos::Todo { content, active_form, status });
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::config::types::AppConfig;
 
-    fn config_with_temp_session_dir() -> (AppConfig, TempDir) {
+    pub(crate) fn config_with_temp_session_dir() -> (AppConfig, TempDir) {
         let dir = TempDir::new();
         let mut cfg = AppConfig::default();
         cfg.workspace.session_dir = dir.path().to_string_lossy().into_owned();
@@ -373,12 +427,73 @@ mod tests {
         assert!(path.exists());
     }
 
-    pub struct TempDir {
+    #[test]
+    fn v1_session_loads_with_empty_todos_in_memory() {
+        let cfg = AppConfig::default();
+        let body = r#"{"version":1,"name":"x","saved_at":"-","skill":null,"budget":20,"transcript":[],"tokens":{"prompt":0,"completion":0}}"#;
+        let repl = parse_session(&cfg, body).unwrap();
+        assert!(repl.todos.borrow().is_empty(), "v1 must migrate to empty todos in memory");
+    }
+
+    #[test]
+    fn v2_session_round_trip_preserves_todos() {
+        let (cfg, _tmp) = config_with_temp_session_dir();
+        use crate::core::todos::{Todo, TodoStatus};
+        let mut original = fixture_repl();
+        original.config = cfg.clone();
+        original.todos.borrow_mut().replace(vec![
+            Todo { content: "A".to_string(), active_form: "Aing".to_string(), status: TodoStatus::Pending },
+            Todo { content: "B".to_string(), active_form: "Bing".to_string(), status: TodoStatus::InProgress },
+        ]);
+        save("v2-todos", &original).unwrap();
+        let loaded = load("v2-todos", &cfg).unwrap();
+        let inner = loaded.todos.borrow();
+        assert_eq!(inner.items.len(), 2);
+        assert_eq!(inner.items[0].content, "A");
+        assert_eq!(inner.items[1].status, TodoStatus::InProgress);
+    }
+
+    #[test]
+    fn v2_session_missing_todos_field_errors() {
+        let cfg = AppConfig::default();
+        let body = r#"{"version":2,"name":"x","saved_at":"-","skill":null,"budget":20,"transcript":[],"tokens":{"prompt":0,"completion":0}}"#;
+        let err = parse_session(&cfg, body).unwrap_err();
+        assert!(err.to_string().contains("v2 missing required field `todos`"));
+    }
+
+    #[test]
+    fn unknown_version_rejects_with_descriptive_error() {
+        let cfg = AppConfig::default();
+        let body = r#"{"version":99,"name":"x","saved_at":"-","skill":null,"budget":20,"transcript":[],"tokens":{"prompt":0,"completion":0}}"#;
+        let err = parse_session(&cfg, body).unwrap_err();
+        assert!(err.to_string().contains("supports v1 and v2"));
+    }
+
+    #[test]
+    fn v1_load_then_save_upgrades_file_to_v2() {
+        let (cfg, tmp) = config_with_temp_session_dir();
+        let path = tmp.path().join("upgrade.json");
+        let v1_body = r#"{"version":1,"name":"upgrade","saved_at":"-","skill":null,"budget":20,"transcript":[],"tokens":{"prompt":0,"completion":0}}"#;
+        std::fs::write(&path, v1_body).unwrap();
+
+        let repl = load("upgrade", &cfg).unwrap();
+        assert!(repl.todos.borrow().is_empty());
+
+        save("upgrade", &repl).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("\"version\":2"), "saved file must be v2: {raw}");
+        assert!(raw.contains("\"todos\":[]"), "saved file must include empty todos array: {raw}");
+
+        let reloaded = load("upgrade", &cfg).unwrap();
+        assert!(reloaded.todos.borrow().is_empty());
+    }
+
+    pub(crate) struct TempDir {
         path: PathBuf,
     }
 
     impl TempDir {
-        pub fn new() -> Self {
+        pub(crate) fn new() -> Self {
             let nanos = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -388,7 +503,7 @@ mod tests {
             Self { path }
         }
 
-        pub fn path(&self) -> &std::path::Path {
+        pub(crate) fn path(&self) -> &std::path::Path {
             &self.path
         }
     }
