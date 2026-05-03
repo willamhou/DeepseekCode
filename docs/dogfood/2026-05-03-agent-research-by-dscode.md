@@ -1,3 +1,16 @@
+<!--
+DOGFOOD ARTIFACT — verbatim agent output, NOT verified ground truth.
+
+This file is the literal markdown produced by `dscode run --budget 40`
+on 2026-05-03 with DeepSeek v4-pro and the full Phase 10c stack. It is
+checked in as proof that the closed-loop research → apply_patch flow
+works end-to-end.
+
+Numbers (star counts, repository names) and descriptive claims are
+LLM-generated and may be fabricated or stale. Do NOT cite as authoritative.
+For real GitHub data, run the commands listed in the prompt yourself.
+-->
+
 # Research Findings
 
 ## ACP (Agent Communication Protocol)

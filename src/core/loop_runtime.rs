@@ -198,6 +198,12 @@ impl AgentLoop {
                         .filter(|fp| **fp == fingerprint)
                         .count();
                     recent_call_fingerprints.push(fingerprint.clone());
+                    // Trim to keep memory bounded over long runs (only the last
+                    // REPEAT_WINDOW are ever read).
+                    if recent_call_fingerprints.len() > REPEAT_WINDOW {
+                        let drop_n = recent_call_fingerprints.len() - REPEAT_WINDOW;
+                        recent_call_fingerprints.drain(0..drop_n);
+                    }
 
                     if same_count_in_window >= 2 {
                         // Third identical call in window → short-circuit as tool_failure.
@@ -224,14 +230,19 @@ impl AgentLoop {
                         continue;
                     }
 
+                    // Phase 10c-2: 2nd identical call — emit a separate stuck-warning
+                    // Observation BEFORE running the tool. Avoids burying the warning in the
+                    // tail of a long tool output that head_trim / Todos summarize would eat,
+                    // and works for both Ok and Err result paths.
+                    if same_count_in_window == 1 {
+                        let warning = format!(
+                            "⚠ stuck-warning: '{tool_name}' was called with the same args last step. If output is unchanged, try a DIFFERENT approach (todo_write to plan, gh/curl for research, different path/args, or move to the next step)."
+                        );
+                        observations.push(Observation::ok("stuck-warning", warning));
+                    }
+
                     match registry.execute_with_policy(&tool_name, input, &policy) {
-                        Ok(mut output) => {
-                            // Phase 10c-2: 2nd identical call gets a stuck-warning appended.
-                            if same_count_in_window == 1 {
-                                output.summary.push_str(
-                                    "\n\n[stuck-warning] You called this tool with the same args last step. If output is unchanged, try a DIFFERENT approach (todo_write to plan, gh/curl for research, different path/args, or move to next step).",
-                                );
-                            }
+                        Ok(output) => {
                             let kind = ObservationKind::from_tool_name(&tool_name);
                             let observation_summary = summarize_for_kind(&output.summary, kind);
                             // CR-1: user sees full body (output.summary), observation/transcript get trim.
@@ -353,13 +364,16 @@ fn build_system_prompt(skill_name: Option<&SkillSpec>) -> String {
 /// ("research these 4 topics"). dscode's parser rejects them (C3 fail-loud) so
 /// the agent gets a fatal error instead of useful work. State this constraint
 /// explicitly so the model issues sequential calls.
-const ONE_TOOL_PER_TURN_NUDGE: &str = " ALWAYS emit exactly ONE tool call per turn. NEVER emit parallel tool calls — the runtime rejects them with a hard error. Process multiple subtopics SEQUENTIALLY across turns.";
+const ONE_TOOL_PER_TURN_NUDGE: &str = "\n\nALWAYS emit exactly ONE tool call per turn. NEVER emit parallel tool calls — the runtime rejects them with a hard error. Process multiple subtopics SEQUENTIALLY across turns.";
 
 fn build_system_prompt_with_flags(skill_name: Option<&SkillSpec>, research_bootstrap: bool) -> String {
     let mut prompt = String::from(
         "You are the offline planning layer for DeepseekCode. Prefer repository inspection before edits.",
     );
     prompt.push_str(ONE_TOOL_PER_TURN_NUDGE);
+    // Note: ONE_TOOL_PER_TURN_NUDGE starts with explicit "\n\n" so order with
+    // skill.system_append (added below) is well-defined regardless of trailing
+    // punctuation in the base prompt.
     if let Some(skill) = skill_name {
         prompt.push_str(&format!(" Active skill: {}.", skill.name));
         if !skill.description.is_empty() {
@@ -645,7 +659,11 @@ mod cr1_regression_test {
     }
 
     #[test]
-    fn repeat_detection_second_identical_call_appends_stuck_warning() {
+    fn repeat_detection_second_identical_call_does_not_short_circuit() {
+        // 2nd identical call should NOT trigger the short-circuit (only the 3rd does).
+        // The stuck-warning is now injected as a separate Observation rather than
+        // appended to output.summary (codex review: warning was being eaten by
+        // head_trim / Todos summarize when buried in the tail).
         let cfg = crate::config::types::AppConfig::default();
         let agent = AgentLoop::new(cfg);
         let context = TaskContext::new("dummy".to_string(), None);
@@ -664,21 +682,93 @@ mod cr1_regression_test {
                 &client,
             )
             .unwrap();
-        // 2 tool events: 1st clean, 2nd has stuck-warning appended OR is the warning itself.
-        // For Ok results we append; for Failed results the registry-failure dominates.
-        // list_files on /empty likely returns Ok with empty body (or Failed). Either way,
-        // ToolEvent.output for the SECOND call should contain stuck-warning OR be a tool_failure.
         assert_eq!(result.tool_events.len(), 2, "expected 2 tool events");
         let second = &result.tool_events[1].output;
-        // After Ok branch appends stuck-warning the observation_summary may have it
-        // (passes through summarize_for_kind for `Listing` kind which keeps head 40 lines).
-        // Or if registry erred and there was no Ok branch, the failure path doesn't append
-        // — but the 2nd identical call before that is still tracked. Acceptable either way:
-        // assertion: NO short-circuit yet (output is normal tool result, not the
-        // "repeated identical tool call detected" string).
         assert!(
             !second.contains("repeated identical tool call detected"),
             "2nd call must NOT short-circuit (only the 3rd does); output: {second}"
+        );
+    }
+
+    /// Mock client that captures the `observations` field of every ModelRequest it sees.
+    /// Used to verify side effects on the observation stream (e.g., stuck-warning).
+    struct ObservationCapturingClient {
+        captured_observations: RefCell<Vec<Vec<crate::model::protocol::Observation>>>,
+        max_calls: usize,
+        calls: RefCell<usize>,
+    }
+
+    impl ModelClient for ObservationCapturingClient {
+        fn respond(
+            &self,
+            input: ModelRequest,
+            _events: &mut dyn StreamEvents,
+        ) -> crate::error::AppResult<(ModelResponse, Option<TokenUsage>)> {
+            self.captured_observations
+                .borrow_mut()
+                .push(input.observations.clone());
+            let n = *self.calls.borrow();
+            *self.calls.borrow_mut() = n + 1;
+            let action = if n < self.max_calls {
+                let mut tin = ToolInput::new();
+                tin.args.insert("root".to_string(), "/empty".to_string());
+                tin.args.insert("max_depth".to_string(), "1".to_string());
+                tin.args.insert("limit".to_string(), "5".to_string());
+                ModelAction::CallTool {
+                    tool_name: "list_files".to_string(),
+                    input: tin,
+                }
+            } else {
+                ModelAction::Finish
+            };
+            Ok((
+                ModelResponse {
+                    message: format!("step {n}"),
+                    action,
+                },
+                None,
+            ))
+        }
+    }
+
+    #[test]
+    fn repeat_detection_emits_stuck_warning_observation_on_second_identical_call() {
+        // After 2nd identical call, the next ModelRequest must include a stuck-warning
+        // Observation in its observations field (not buried in the tool's summary).
+        let cfg = crate::config::types::AppConfig::default();
+        let agent = AgentLoop::new(cfg);
+        let context = TaskContext::new("dummy".to_string(), None);
+        let client = ObservationCapturingClient {
+            captured_observations: RefCell::new(Vec::new()),
+            max_calls: 3,
+            calls: RefCell::new(0),
+        };
+        let _ = agent.run_with_client(
+            context,
+            AgentLoopOptions {
+                steps: 4,
+                initial_observations: Vec::new(),
+                todos: Rc::new(RefCell::new(TodoList::default())),
+            },
+            &client,
+        );
+        let captures = client.captured_observations.borrow();
+        // After step 1 (1st list_files), step 2 sees observations including the result —
+        // no warning yet. After step 2 (2nd identical), step 3's request observations
+        // should include the stuck-warning entry (tool_name == "stuck-warning").
+        let step3_obs = captures
+            .get(2)
+            .expect("at least 3 model calls (step 1 + 2 + 3 setup)");
+        let has_warning = step3_obs
+            .iter()
+            .any(|o| o.tool_name == "stuck-warning" && o.summary.contains("stuck-warning"));
+        assert!(
+            has_warning,
+            "step 3 request should see a stuck-warning Observation: {:?}",
+            step3_obs
+                .iter()
+                .map(|o| (&o.tool_name, &o.summary))
+                .collect::<Vec<_>>()
         );
     }
 
