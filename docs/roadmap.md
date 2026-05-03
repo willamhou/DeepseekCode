@@ -354,9 +354,35 @@
 - session schema v1 → v2，自动迁移；v1 加载到空 todos，下次 `/save` 升级为 v2
 - `/todos` slash 命令读检视当前列表
 - transcript elision：旧的 `todos` ObservationKind 同类只保留最新
-- 261 → 264 tests，0 新依赖
+- CR-1 解耦：user 看完整 list（`output.summary`），observation/transcript 走 trim（防 context 泄漏）
+- AgentLoop 增 `run_with_client<C: ModelClient>` 注入 seam（regression test 验证 CR-1）
+- 221 → 264 tests，0 新依赖
 
 状态：已完成（2026-05-01）
+
+### Phase 10c — Agent loop 实用性补强（dogfood 驱动）
+
+`dscode run` 多 agent dashboard dogfood（2026-05-02）暴露 4 类需求：
+
+**已完成（feat/todo-tool 分支顺手补的）：**
+- `dscode run --budget N` flag（与 REPL `/budget` 对齐，1..=200）
+- `run_shell` allowlist 扩 `curl/wget/gh/mkdir/cat/echo/head/tail`（agentic 调研工作流）
+- `recent_steps` replay：`AgentLoop::run_with_client` 把最近 3 步 assistant message 注入下一轮 `ModelRequest`，`build_user_prompt` 渲染 "Recent agent steps" block。补齐 `dscode run` 与 REPL transcript 的能力差。
+- 264 → 266 tests
+
+**未完成（Phase 10c 真实需求清单）：**
+
+1. **Repeat-call detection**：agent 反复调相同 `(tool_name, input.args)` 时（dogfood 实测：v4-pro 卡 30 步空目录 list_files 循环），dscode 应短路并强制 LLM 换路。设计草案：滑窗 3 步内同样调用 ≥2 次 → 在下一步 observation 注入 `⚠ stuck on X, try a different approach` 强提示，或返回 `tool_failure(stuck loop detected)`。
+2. **Empty workspace bootstrap**：agent 在空目录开局会先做 `list_files` → 看到 "No files found" → 不知道下一步该 `gh search` 还是 `todo_write`。需要 system prompt 在空 workspace 时强引导（"if workspace is empty, todo_write first to plan, then use gh/curl for research").
+3. **LLM-driven planner**：当前 reactive loop（每步选一个 tool）对项目级任务跑不通。需要预规划阶段：开局让 LLM 产 5-10 步 plan，loop 跟踪 plan 进度，每步明示"now executing step N of plan"。
+4. **Sub-agent dispatch (Phase 10b)**：长任务拆子任务的能力，每子任务独立 budget + transcript。
+
+dogfood 实测的额外发现：
+- DeepSeek v4-flash + v4-pro 都用 OpenAI 并行 tool calls — Phase 10a C3 fail-loud 守门救了我们（未挂的话静默丢 tool call）
+- DeepSeek v4-pro 在多步任务上：todo_write 能照 nudge 提示用、状态切换正确；但**开放式调研型任务**（无明确文件起点）跑不通
+- `dscode chat` REPL transcript 工作正常；但 `dscode run` 多步任务弱（10c-1 部分修复）
+
+状态：进行中（10c-1 transcript replay 完成；10c-2/3/4 待开工）
 
 ## 建议的下一个顺序
 
