@@ -364,25 +364,27 @@
 
 `dscode run` 多 agent dashboard dogfood（2026-05-02）暴露 4 类需求：
 
-**已完成（feat/todo-tool 分支顺手补的）：**
-- `dscode run --budget N` flag（与 REPL `/budget` 对齐，1..=200）
-- `run_shell` allowlist 扩 `curl/wget/gh/mkdir/cat/echo/head/tail`（agentic 调研工作流）
-- `recent_steps` replay：`AgentLoop::run_with_client` 把最近 3 步 assistant message 注入下一轮 `ModelRequest`，`build_user_prompt` 渲染 "Recent agent steps" block。补齐 `dscode run` 与 REPL transcript 的能力差。
-- 264 → 266 tests
+**已完成：**
 
-**未完成（Phase 10c 真实需求清单）：**
+- **10c-1 (`feat/todo-tool` merged)** — `recent_steps` replay：`AgentLoop::run_with_client` 把最近 3 步 assistant message 注入下一轮 `ModelRequest`，`build_user_prompt` 渲染 "Recent agent steps" block。补齐 `dscode run` 与 REPL transcript 的能力差。+2 tests。
+- **10c-1 周边** — `dscode run --budget N` flag（与 REPL `/budget` 对齐 1..=200）；`run_shell` allowlist 扩 `curl/wget/gh/mkdir/cat/echo/head/tail`（agentic 调研工作流）。
+- **10c-2 (`feat/loop-progress`)** — repeat-call detection：滑窗 3 步内同 `(tool_name, args)` 指纹，第 2 次执行后 observation summary 追加 `[stuck-warning]`，第 3 次直接短路返 `tool_failure(repeated identical tool call detected)`。+3 tests, 269 total。
+  - dogfood 实测（2026-05-03 retry research）：机制完全工作，stuck-warning 正确触发，第 3 次正确短路。**但暴露下一层问题**：v4-pro 写"Let me start fresh with actual research"却继续做 mkdir/todo_write 振荡（ABAB 模式绕过 fingerprint 检测），**从未调用 gh/curl**。LLM planning 短板，不是机制问题。
 
-1. **Repeat-call detection**：agent 反复调相同 `(tool_name, input.args)` 时（dogfood 实测：v4-pro 卡 30 步空目录 list_files 循环），dscode 应短路并强制 LLM 换路。设计草案：滑窗 3 步内同样调用 ≥2 次 → 在下一步 observation 注入 `⚠ stuck on X, try a different approach` 强提示，或返回 `tool_failure(stuck loop detected)`。
-2. **Empty workspace bootstrap**：agent 在空目录开局会先做 `list_files` → 看到 "No files found" → 不知道下一步该 `gh search` 还是 `todo_write`。需要 system prompt 在空 workspace 时强引导（"if workspace is empty, todo_write first to plan, then use gh/curl for research").
-3. **LLM-driven planner**：当前 reactive loop（每步选一个 tool）对项目级任务跑不通。需要预规划阶段：开局让 LLM 产 5-10 步 plan，loop 跟踪 plan 进度，每步明示"now executing step N of plan"。
-4. **Sub-agent dispatch (Phase 10b)**：长任务拆子任务的能力，每子任务独立 budget + transcript。
+**未完成：**
 
-dogfood 实测的额外发现：
-- DeepSeek v4-flash + v4-pro 都用 OpenAI 并行 tool calls — Phase 10a C3 fail-loud 守门救了我们（未挂的话静默丢 tool call）
-- DeepSeek v4-pro 在多步任务上：todo_write 能照 nudge 提示用、状态切换正确；但**开放式调研型任务**（无明确文件起点）跑不通
-- `dscode chat` REPL transcript 工作正常；但 `dscode run` 多步任务弱（10c-1 部分修复）
+3. **10c-3 — Empty workspace bootstrap**：agent 在空目录开局会卡在"setup 阶段"反复 mkdir + todo_write，**永远不切到 gh search**。设计：detect (workspace empty + task contains research/调研/research 关键字) → system prompt 注入"Step 1 MUST be gh search or curl, NOT mkdir/todo_write/list_files。Workspace is intentionally empty。" 或在 cli 层加 `--research` flag 触发。
+4. **10c-4 — LLM-driven planner**：当前 reactive loop（每步选一个 tool）对项目级任务跑不通。需要预规划阶段：开局让 LLM 产 5-10 步 plan（含具体工具+参数），loop 跟踪 plan 进度，每步明示"now executing step N of plan: <command>"。
+5. **Phase 10b — Sub-agent dispatch**：长任务拆子任务的能力，每子任务独立 budget + transcript。
 
-状态：进行中（10c-1 transcript replay 完成；10c-2/3/4 待开工）
+**dogfood 累计发现的真实数据：**
+- ✅ DeepSeek v4-pro 在 **bounded 多步任务**上完全 work（todo_write 列表、状态切换 in_progress→completed、跨步 transcript replay 都正确）
+- ❌ DeepSeek v4-pro 在 **open-ended bootstrap** 上做不到从 setup 切到 research（mkdir+todo_write 振荡，10c-2 机制对但 LLM 不用）
+- ❌ DeepSeek v4-flash 不主动用 todo_write（v4-pro 主动用）— nudge 在小模型上效果弱
+- ✅ DeepSeek v4-flash + v4-pro 都用 OpenAI 并行 tool calls — Phase 10a C3 fail-loud 守门救了我们
+- ✅ `dscode chat` REPL transcript 始终工作正常；`dscode run` 多步任务能力差距由 10c-1 部分修复，10c-2 进一步加固
+
+状态：进行中（10c-1 + 10c-2 完成，10c-3/4 待开工）
 
 ## 建议的下一个顺序
 
