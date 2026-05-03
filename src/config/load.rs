@@ -43,6 +43,9 @@ fn parse_config(content: &str, config: &mut AppConfig) -> AppResult<()> {
             }
             "workspace.config_dir" => config.workspace.config_dir = unquote(value),
             "workspace.session_dir" => config.workspace.session_dir = unquote(value),
+            "workspace.user_skills_dir" => {
+                config.workspace.user_skills_dir = unquote(value);
+            }
             _ => {}
         }
     }
@@ -60,4 +63,24 @@ fn parse_bool(value: &str) -> AppResult<bool> {
 
 fn unquote(value: &str) -> String {
     value.trim().trim_matches('"').to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::types::AppConfig;
+
+    #[test]
+    fn default_user_skills_dir_is_xdg_path() {
+        let config = AppConfig::default();
+        assert_eq!(config.workspace.user_skills_dir, "~/.config/dscode/skills");
+    }
+
+    #[test]
+    fn parse_config_overrides_user_skills_dir_from_toml() {
+        let mut config = AppConfig::default();
+        let toml = "workspace.user_skills_dir = \"/custom/skills\"\n";
+        parse_config(toml, &mut config).unwrap();
+        assert_eq!(config.workspace.user_skills_dir, "/custom/skills");
+    }
 }
