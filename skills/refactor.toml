@@ -1,0 +1,26 @@
+name = "refactor"
+description = "Minimal-diff rename / extract / move with preserved test coverage"
+allowed_tools = ["list_files", "read_file", "search_text", "apply_patch", "run_shell", "git_diff", "todo_write"]
+
+system_append = """
+Refactor mode: change structure without changing behavior.
+- Plan steps with todo_write before any edit.
+- Use search_text to find every reference site before renaming.
+- One concept per patch (split big refactors into multiple apply_patch calls).
+- After each patch: git_diff + run the test command to confirm no behavior change.
+- If tests fail, revert via git rather than chasing fixes.
+"""
+
+suggested_steps = [
+  "Plan refactor steps (todo_write)",
+  "Read existing structure (read_file the affected files)",
+  "Find all references with search_text",
+  "Apply minimal-diff patches (apply_patch)",
+  "Run tests after each patch",
+  "git_diff final review",
+]
+
+[policy]
+require_write_confirmation = true
+require_shell_confirmation = false
+shell_allowlist = ["cargo test", "cargo check", "cargo build", "cargo clippy", "pnpm test", "npm test", "pytest", "go test"]

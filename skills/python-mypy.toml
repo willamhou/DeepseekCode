@@ -1,0 +1,25 @@
+name = "python-mypy"
+description = "Resolve mypy / pyright type errors with the smallest safe annotations"
+allowed_tools = ["list_files", "read_file", "search_text", "apply_patch", "run_shell", "git_diff"]
+
+system_append = """
+Type checker cleanup:
+- Run mypy or pyright with the project's strictest config first.
+- Read the smallest scope where the error fires (usually a single function).
+- Add explicit annotations rather than `# type: ignore` unless the third-party stub is wrong.
+- For Optional / Union narrowing, prefer guard clauses over casts.
+- Commit per file or per related-error-cluster, never one giant commit.
+"""
+
+suggested_steps = [
+  "Run mypy or pyright to enumerate errors",
+  "Group errors by file",
+  "Add minimal annotations",
+  "Re-run to confirm error count drops",
+  "Commit per file",
+]
+
+[policy]
+require_write_confirmation = true
+require_shell_confirmation = false
+shell_allowlist = ["mypy", "ruff check", "pytest", "python -m pytest", "python -m mypy"]

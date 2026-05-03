@@ -386,6 +386,22 @@
 
 状态：进行中（10c-1 + 10c-2 完成，10c-3/4 待开工）
 
+### Phase 10d — Skills 拓展
+
+**10d-1 (`feat/skills-expansion`) — 已完成 (2026-05-03)**：
+- 12 个新 skill toml ship 到仓库 `skills/` （research / refactor / debug / write-tests / dependency-update / rust-clippy / python-mypy / pr-fix-feedback / brainstorm / verify-changes / commit-message / readme-update）
+- 用户级目录 `~/.config/dscode/skills/` 加载支持，可经 `workspace.user_skills_dir` 配置
+- last-wins 撞名语义（user override repo）
+- `SkillRegistry::load_dirs(&[paths])` + `LoadStats` 报告 per-path 计数 + override 列表
+- `dscode doctor` 加 `[skills]` 段
+- 273 → 285 tests, 0 新依赖
+
+**10d-2 / 10d-3 待开工**：
+- 10d-2: SkillSpec schema v2（`triggers` / `initial_todos` / `references` 字段）
+- 10d-3: 用 triggers 做 auto-select skill from task
+
+状态：10d-1 完成
+
 ## 建议的下一个顺序
 
 建议严格按下面顺序推进：

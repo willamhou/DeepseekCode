@@ -1,0 +1,28 @@
+name = "verify-changes"
+description = "Pre-commit verification: lint + test + build before declaring done"
+allowed_tools = ["list_files", "read_file", "run_shell", "git_diff", "todo_write"]
+
+system_append = """
+Verification ritual before commit:
+- todo_write: [lint, test, build, diff_review].
+- Run the project's lint command — must be 0 warnings.
+- Run the project's test command — must be 0 failures.
+- Run the project's build command — must be 0 warnings.
+- git_diff to review the change one more time.
+- Only then confirm the work is ready to commit.
+
+If any step fails, do NOT commit. Surface the failure to the user and pause.
+"""
+
+suggested_steps = [
+  "Run lint",
+  "Run tests",
+  "Run build",
+  "Review diff",
+  "Confirm or escalate",
+]
+
+[policy]
+require_write_confirmation = false
+require_shell_confirmation = false
+shell_allowlist = ["cargo clippy", "cargo test", "cargo build", "cargo fmt", "pnpm lint", "pnpm test", "pnpm build", "npm run lint", "npm test", "npm run build", "ruff check", "mypy", "pytest", "go test", "go build", "go vet"]

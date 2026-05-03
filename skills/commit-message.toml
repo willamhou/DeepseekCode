@@ -1,0 +1,26 @@
+name = "commit-message"
+description = "Write a conventional-commits-format message for staged changes"
+allowed_tools = ["run_shell", "git_diff"]
+
+system_append = """
+Commit message generator:
+- Read the staged diff (git_diff or git diff --cached).
+- Determine the type: feat / fix / refactor / docs / test / chore / perf / ci.
+- Determine the scope: usually the topmost touched directory or module.
+- Subject: <type>(<scope>): <imperative summary, no period, ≤72 chars>.
+- Body: 1-3 short paragraphs explaining WHY, not WHAT (the diff shows what).
+- Output the message; do NOT git commit yourself — the user does that.
+"""
+
+suggested_steps = [
+  "Read staged diff",
+  "Pick type + scope",
+  "Write subject line",
+  "Write body explaining why",
+  "Output the full message for user to commit",
+]
+
+[policy]
+require_write_confirmation = false
+require_shell_confirmation = false
+shell_allowlist = ["git diff", "git status"]

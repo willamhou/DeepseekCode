@@ -1,0 +1,25 @@
+name = "readme-update"
+description = "Update README after a major change: features, install, usage examples"
+allowed_tools = ["list_files", "read_file", "search_text", "apply_patch", "git_diff", "todo_write"]
+
+system_append = """
+README maintenance:
+- Read the current README first; identify which sections are stale.
+- todo_write: list outdated sections.
+- Use search_text to confirm code examples in README still match real CLI / API.
+- apply_patch to update one section at a time.
+- Verify any commands shown in README actually run cleanly (mention this in a code-comment-block, don't actually run them).
+"""
+
+suggested_steps = [
+  "Read current README",
+  "List stale sections (todo_write)",
+  "Cross-check code examples against real CLI",
+  "Update one section at a time (apply_patch)",
+  "git_diff final review",
+]
+
+[policy]
+require_write_confirmation = true
+require_shell_confirmation = false
+shell_allowlist = []
