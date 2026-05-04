@@ -42,8 +42,11 @@ fn print_skills_section(config: &AppConfig) {
     println!();
     println!("[skills]");
     let user_dir = crate::skills::tilde::expand_tilde(&config.workspace.user_skills_dir);
-    let repo_path = std::path::Path::new("skills");
-    match crate::skills::registry::SkillRegistry::load_dirs(&[repo_path, user_dir.as_path()]) {
+    let repo_path = crate::skills::paths::resolve_repo_skills_dir();
+    match crate::skills::registry::SkillRegistry::load_dirs(&[
+        repo_path.as_path(),
+        user_dir.as_path(),
+    ]) {
         Ok((_registry, stats)) => {
             println!("  loaded: {} skills", stats.total);
             for (path, count) in &stats.by_path {

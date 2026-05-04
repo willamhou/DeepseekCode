@@ -90,10 +90,9 @@ impl AgentLoop {
         let registry = crate::tools::registry::default_registry_with_todos(todos.clone());
         let user_skills_dir =
             crate::skills::tilde::expand_tilde(&self.config.workspace.user_skills_dir);
-        let (skills, _stats) = SkillRegistry::load_dirs(&[
-            std::path::Path::new("skills"),
-            user_skills_dir.as_path(),
-        ])?;
+        let repo_skills_dir = crate::skills::paths::resolve_repo_skills_dir();
+        let (skills, _stats) =
+            SkillRegistry::load_dirs(&[repo_skills_dir.as_path(), user_skills_dir.as_path()])?;
         let skill = resolve_skill(&skills, context.skill.as_deref());
         let policy = ExecutionPolicy::new(&self.config.approval, skill);
         let memory = MemoryState::new(profile.name.clone());
