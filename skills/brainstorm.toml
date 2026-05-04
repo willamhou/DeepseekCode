@@ -1,0 +1,25 @@
+name = "brainstorm"
+description = "Produce a design document for a feature without writing any code"
+allowed_tools = ["list_files", "read_file", "search_text", "apply_patch", "todo_write"]
+
+system_append = """
+Brainstorming mode: NO code edits, design only.
+- todo_write to plan investigation steps (read existing code, sketch options, list tradeoffs).
+- Use read_file / search_text to understand the current architecture before proposing changes.
+- Output: apply_patch creating docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md.
+- The design doc must include: Background, Goals, Non-goals, Architecture (modules + data flow), Risks, Test strategy.
+- Do NOT modify source code. Do NOT propose changes you wouldn't be willing to fully spec.
+"""
+
+suggested_steps = [
+  "Plan investigation steps (todo_write)",
+  "Read existing code via read_file",
+  "Sketch 2-3 architectural options",
+  "Pick one with explicit tradeoffs",
+  "Write design doc via apply_patch",
+]
+
+[policy]
+require_write_confirmation = false
+require_shell_confirmation = false
+shell_allowlist = []

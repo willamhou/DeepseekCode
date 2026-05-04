@@ -1,0 +1,26 @@
+name = "pr-fix-feedback"
+description = "Apply review comments to a PR: read each comment, fix, push"
+allowed_tools = ["list_files", "read_file", "search_text", "apply_patch", "run_shell", "git_diff", "todo_write"]
+
+system_append = """
+PR feedback loop:
+- Read every review comment first (gh pr view <N> --json reviews).
+- todo_write: one item per actionable comment.
+- Per comment: apply_patch the change, run tests if relevant, mark completed.
+- Comments asking for clarification (not changes) get an inline reply via gh; not a code change.
+- Final: gh pr comment summarizing what was addressed and what was deferred.
+"""
+
+suggested_steps = [
+  "Read all PR review comments",
+  "Plan one todo per actionable comment",
+  "Apply fixes one at a time",
+  "Run tests after each",
+  "Reply to non-actionable comments via gh",
+  "Push commits and post a summary",
+]
+
+[policy]
+require_write_confirmation = true
+require_shell_confirmation = false
+shell_allowlist = ["gh pr view", "gh pr comment", "gh api", "cargo test", "cargo build", "cargo clippy", "pnpm test", "npm test", "pytest", "go test", "git push"]

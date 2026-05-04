@@ -1,0 +1,25 @@
+name = "dependency-update"
+description = "Bump dependencies safely: update + run tests + commit per package"
+allowed_tools = ["list_files", "read_file", "apply_patch", "run_shell", "git_diff", "todo_write"]
+
+system_append = """
+Dependency updates need verification:
+- todo_write: list each package to bump.
+- Per package: update lockfile (cargo update -p X / pnpm up X / pip install -U X).
+- Run the project's test suite after each update.
+- If tests fail, revert that single package via git checkout and note in todo.
+- Group successful updates into separate commits per package.
+"""
+
+suggested_steps = [
+  "Inventory dependencies needing update (todo_write)",
+  "Update one package at a time (run_shell)",
+  "Run tests after each update",
+  "Revert and note any package that breaks tests",
+  "Commit per successful update",
+]
+
+[policy]
+require_write_confirmation = true
+require_shell_confirmation = true
+shell_allowlist = ["cargo update", "cargo test", "cargo build", "pnpm up", "pnpm test", "npm update", "npm test", "go get -u", "go test", "pip install -U", "pytest"]

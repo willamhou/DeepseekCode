@@ -1,0 +1,25 @@
+name = "debug"
+description = "Reproduce a bug, trace its root cause, then apply a minimal fix"
+allowed_tools = ["list_files", "read_file", "search_text", "apply_patch", "run_shell", "git_diff", "todo_write"]
+
+system_append = """
+Debugging discipline:
+1. REPRODUCE first — write a failing test or shell command that triggers the bug.
+2. TRACE the call path with read_file / search_text. Note the exact line where reality diverges from intent.
+3. ROOT CAUSE — explain why before how. Avoid 'just add a try/except'.
+4. FIX with minimal diff; the failing repro must now pass.
+5. todo_write tracks progress: [reproduce, trace, root_cause, fix, verify].
+"""
+
+suggested_steps = [
+  "Reproduce with run_shell or a test",
+  "Trace with read_file + search_text",
+  "Articulate root cause in chat (don't skip this)",
+  "Apply minimal fix via apply_patch",
+  "Re-run repro to confirm fix",
+]
+
+[policy]
+require_write_confirmation = true
+require_shell_confirmation = false
+shell_allowlist = ["cargo test", "cargo run", "pytest", "pnpm test", "npm test", "go test", "python -m pytest"]

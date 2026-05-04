@@ -1,0 +1,25 @@
+name = "rust-clippy"
+description = "Fix Rust clippy warnings with minimal-diff edits across the workspace"
+allowed_tools = ["list_files", "read_file", "search_text", "apply_patch", "run_shell", "git_diff"]
+
+system_append = """
+Clippy strict cleanup:
+- Run `cargo clippy --all-targets -- -D warnings` first to capture the full warning list.
+- Group warnings by lint name; pick the lowest-risk lint to fix first (style → idiom → correctness).
+- One lint at a time; commit per lint group so reverts are surgical.
+- Avoid `#[allow(clippy::...)]` unless the lint is a genuine false positive AND a comment justifies it.
+- Re-run after each fix to confirm warning count drops monotonically.
+"""
+
+suggested_steps = [
+  "Run cargo clippy --all-targets to enumerate warnings",
+  "Group by lint name",
+  "Fix lowest-risk group first",
+  "Commit per lint group",
+  "Re-run clippy to confirm progress",
+]
+
+[policy]
+require_write_confirmation = true
+require_shell_confirmation = false
+shell_allowlist = ["cargo clippy", "cargo check", "cargo build", "cargo test", "cargo fmt"]

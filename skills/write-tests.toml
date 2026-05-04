@@ -1,0 +1,30 @@
+name = "write-tests"
+description = "Test-Driven Development: failing test first, then implementation"
+allowed_tools = ["list_files", "read_file", "search_text", "apply_patch", "run_shell", "git_diff", "todo_write"]
+
+system_append = """
+TDD strict order:
+1. todo_write the test names you intend to write.
+2. apply_patch to add ONE failing test.
+3. Run the test command — confirm it fails for the expected reason.
+4. apply_patch to add the minimal implementation.
+5. Run again — confirm pass.
+6. Repeat for each test name.
+
+Do NOT write the implementation before its test exists.
+Do NOT write multiple tests at once; one red→green cycle per todo.
+"""
+
+suggested_steps = [
+  "Plan test names with todo_write",
+  "Write ONE failing test (apply_patch)",
+  "Run to verify failure",
+  "Write minimal implementation (apply_patch)",
+  "Run to verify pass",
+  "Move to next test",
+]
+
+[policy]
+require_write_confirmation = true
+require_shell_confirmation = false
+shell_allowlist = ["cargo test", "pytest", "pnpm test", "npm test", "go test", "python -m pytest"]

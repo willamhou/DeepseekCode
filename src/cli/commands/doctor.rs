@@ -11,6 +11,7 @@ pub fn run(_args: DoctorArgs) -> AppResult<()> {
     let config = load_or_default()?;
     println!("DeepseekCode doctor");
     print_workspace_section(&config);
+    print_skills_section(&config);
     print_model_section(&config);
     print_api_key_section(&config);
     print_network_section(&config);
@@ -35,6 +36,35 @@ fn print_workspace_section(config: &AppConfig) {
         session_dir.display(),
         existence_label(&session_dir)
     );
+}
+
+fn print_skills_section(config: &AppConfig) {
+    println!();
+    println!("[skills]");
+    let user_dir = crate::skills::tilde::expand_tilde(&config.workspace.user_skills_dir);
+    let repo_path = crate::skills::paths::resolve_repo_skills_dir();
+    match crate::skills::registry::SkillRegistry::load_dirs(&[
+        repo_path.as_path(),
+        user_dir.as_path(),
+    ]) {
+        Ok((_registry, stats)) => {
+            println!("  loaded: {} skills", stats.total);
+            for (path, count) in &stats.by_path {
+                let label = path.display();
+                if path.exists() {
+                    println!("    {label}: {count} loaded");
+                } else {
+                    println!("    {label}: not found (skip)");
+                }
+            }
+            if !stats.overridden.is_empty() {
+                println!("  user overrides: {}", stats.overridden.join(", "));
+            }
+        }
+        Err(error) => {
+            println!("  error: {error}");
+        }
+    }
 }
 
 fn print_model_section(config: &AppConfig) {
@@ -329,5 +359,13 @@ mod tests {
             Some("api.deepseek.com".to_string())
         );
         assert_eq!(host_from_url("api.deepseek.com"), Some("api.deepseek.com".to_string()));
+    }
+
+    #[test]
+    fn print_skills_section_does_not_panic() {
+        // Smoke: with a default config, calling print_skills_section should not panic
+        // even if the user-skills directory doesn't exist (it usually won't).
+        let config = AppConfig::default();
+        super::print_skills_section(&config);
     }
 }

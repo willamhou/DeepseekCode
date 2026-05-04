@@ -1,0 +1,25 @@
+name = "research"
+description = "Research a topic on GitHub or via curl, write findings to a markdown file"
+allowed_tools = ["list_files", "read_file", "search_text", "apply_patch", "run_shell", "todo_write"]
+
+system_append = """
+You are doing read-only research, not editing project source code.
+- Step 1: todo_write to plan 4-8 search steps.
+- Each subsequent step: ONE gh search / curl call.
+- Cite real GitHub repos with star counts; never fabricate stats.
+- If a search returns nothing, note 'no results' and move on.
+- Output: apply_patch to create RESEARCH.md with sections per topic.
+"""
+
+suggested_steps = [
+  "Plan 4-8 research steps with todo_write",
+  "Issue gh search repos / gh search code calls one at a time",
+  "Track progress in todo_write between calls",
+  "Synthesize findings into RESEARCH.md via apply_patch",
+  "Mark all todos completed and Finish",
+]
+
+[policy]
+require_write_confirmation = false
+require_shell_confirmation = false
+shell_allowlist = ["gh search", "gh repo view", "gh api", "curl -sSL", "curl -sS", "mkdir -p"]
