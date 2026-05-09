@@ -118,6 +118,9 @@ fn parse_config(content: &str, config: &mut AppConfig) -> AppResult<()> {
             "mcp.enabled" => {
                 config.mcp.enabled = parse_bool(value)?;
             }
+            "mcp.expose_remote_tools" => {
+                config.mcp.expose_remote_tools = parse_bool(value)?;
+            }
             "mcp.project_file" => {
                 config.mcp.project_file = unquote(value);
             }
@@ -290,12 +293,14 @@ hooks.timeout_ms = 1234
         let mut config = AppConfig::default();
         let toml = r#"
 mcp.enabled = false
+mcp.expose_remote_tools = true
 mcp.project_file = ".dscode/custom-mcp.json"
 mcp.user_file = "/custom/user-mcp.json"
 "#;
         parse_config(toml, &mut config).unwrap();
 
         assert!(!config.mcp.enabled);
+        assert!(config.mcp.expose_remote_tools);
         assert_eq!(config.mcp.project_file, ".dscode/custom-mcp.json");
         assert_eq!(config.mcp.user_file, "/custom/user-mcp.json");
     }

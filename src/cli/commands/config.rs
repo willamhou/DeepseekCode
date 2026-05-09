@@ -62,6 +62,10 @@ fn print_config(config: &AppConfig) {
     println!("hooks.user_dir = {}", config.hooks.user_dir);
     println!("hooks.timeout_ms = {}", config.hooks.timeout_ms);
     println!("mcp.enabled = {}", config.mcp.enabled);
+    println!(
+        "mcp.expose_remote_tools = {}",
+        config.mcp.expose_remote_tools
+    );
     println!("mcp.project_file = {}", config.mcp.project_file);
     println!("mcp.user_file = {}", config.mcp.user_file);
 }
@@ -121,9 +125,11 @@ hooks.project_dir = "{hooks_project_dir}"
 hooks.user_dir = "{hooks_user_dir}"
 hooks.timeout_ms = {hooks_timeout_ms}
 
-# MCP server discovery supports config inspection plus manual stdio tools/list/call.
+# MCP server discovery supports config inspection plus stdio/http/sse tools/list/call.
+# Keep dynamic remote tool exposure off unless you trust the configured MCP servers.
 # Use `deepseek mcp list|doctor|tools|call` to inspect or invoke MCP definitions.
 mcp.enabled = {mcp_enabled}
+mcp.expose_remote_tools = {mcp_expose_remote_tools}
 mcp.project_file = "{mcp_project_file}"
 mcp.user_file = "{mcp_user_file}"
 "#,
@@ -144,6 +150,7 @@ mcp.user_file = "{mcp_user_file}"
         hooks_user_dir = config.hooks.user_dir,
         hooks_timeout_ms = config.hooks.timeout_ms,
         mcp_enabled = config.mcp.enabled,
+        mcp_expose_remote_tools = config.mcp.expose_remote_tools,
         mcp_project_file = config.mcp.project_file,
         mcp_user_file = config.mcp.user_file,
     )

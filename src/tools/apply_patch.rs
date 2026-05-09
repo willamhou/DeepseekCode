@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct ApplyPatchTool;
 
 impl Tool for ApplyPatchTool {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "apply_patch"
     }
 

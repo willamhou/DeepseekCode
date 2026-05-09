@@ -150,12 +150,7 @@ pub(crate) fn list_remote_tools_summary(
             continue;
         }
 
-        let tools = match server.transport.as_str() {
-            "stdio" => list_stdio_tools(server)?,
-            "http" => list_http_tools(server)?,
-            "sse" => list_sse_tools(server)?,
-            _ => unreachable!("transport checked above"),
-        };
+        let tools = list_tools_for_server(server)?;
         output.push_str(&format!(
             "- {} [{}]: {} tool(s)\n",
             server.name,
@@ -179,6 +174,44 @@ pub(crate) fn list_remote_tools_summary(
     }
 
     Ok(output)
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct McpDiscoveredRemoteTool {
+    pub server: String,
+    pub tool: String,
+}
+
+pub(crate) fn discover_remote_tools_for_agent(
+    config: &AppConfig,
+    max_tools: usize,
+) -> Vec<McpDiscoveredRemoteTool> {
+    if !config.mcp.enabled || max_tools == 0 {
+        return Vec::new();
+    }
+    let Ok(inventory) = load_inventory(config) else {
+        return Vec::new();
+    };
+
+    let mut discovered = Vec::new();
+    for server in inventory.servers.iter().filter(|server| server.enabled) {
+        if !matches!(server.transport.as_str(), "stdio" | "http" | "sse") {
+            continue;
+        }
+        let Ok(tools) = list_tools_for_server(server) else {
+            continue;
+        };
+        for tool in tools {
+            discovered.push(McpDiscoveredRemoteTool {
+                server: server.name.clone(),
+                tool: tool.name,
+            });
+            if discovered.len() >= max_tools {
+                return discovered;
+            }
+        }
+    }
+    discovered
 }
 
 fn call_remote_tool(
@@ -289,6 +322,18 @@ fn select_tool_targets<'a>(
         .iter()
         .filter(|server| server.enabled)
         .collect())
+}
+
+fn list_tools_for_server(server: &McpServer) -> AppResult<Vec<McpRemoteTool>> {
+    match server.transport.as_str() {
+        "stdio" => list_stdio_tools(server),
+        "http" => list_http_tools(server),
+        "sse" => list_sse_tools(server),
+        _ => Err(app_error(format!(
+            "mcp tools currently supports stdio/http/sse servers only; `{}` uses {}",
+            server.name, server.transport
+        ))),
+    }
 }
 
 fn list_stdio_tools(server: &McpServer) -> AppResult<Vec<McpRemoteTool>> {

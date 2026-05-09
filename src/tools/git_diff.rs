@@ -6,7 +6,7 @@ use crate::tools::types::{Tool, ToolInput, ToolOutput};
 pub struct GitDiffTool;
 
 impl Tool for GitDiffTool {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "git_diff"
     }
 

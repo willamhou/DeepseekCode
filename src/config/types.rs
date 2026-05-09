@@ -77,6 +77,7 @@ impl Default for HooksConfig {
 #[derive(Debug, Clone)]
 pub struct McpConfig {
     pub enabled: bool,
+    pub expose_remote_tools: bool,
     pub project_file: String,
     pub user_file: String,
 }
@@ -85,6 +86,7 @@ impl Default for McpConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            expose_remote_tools: false,
             project_file: ".dscode/mcp.json".to_string(),
             user_file: "~/.config/dscode/mcp.json".to_string(),
         }

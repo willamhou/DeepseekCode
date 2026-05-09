@@ -1765,7 +1765,16 @@
   - `deepseek mcp call <server> <tool> [json-args]` 可通过同一 SSE session 执行 `tools/call`
   - SSE stream 上的 JSON-RPC response 会按 request id 匹配，并跳过 endpoint / heartbeat / 非目标 response
 - agent bridge 的 `mcp_list_tools` / `mcp_call` 复用同一路径，因此 SSE MCP server 也进入 agent 可用路径，并继续受 confirmation / allowlist 保护
-- 当前边界仍明确：远端 MCP tools 还不是动态独立 agent tools，permission UX 也仍是 bridge 级别；完整 plugin ecosystem 和云端/外部任务面仍未接入
+- 当前边界仍明确：动态独立 agent tools 已在下一轮补 opt-in 初版；完整 schema 注入、permission UX、plugin ecosystem 和云端/外部任务面仍未接入
+
+**Phase 11+ opt-in MCP dynamic tool exposure (`main`, 2026-05-09) — 已完成基础版**：
+- 延续 stdio / HTTP / SSE MCP 调用路径，本轮补上保守的动态 tool 注入：
+  - 新增 `mcp.expose_remote_tools`，默认 `false`，避免 agent 启动时隐式执行不受信任的 MCP server discovery
+  - 开启后，registry 会发现 enabled MCP server tools，并以 `mcp__server__tool` 名称注入为独立 agent tool
+  - 动态 tool 接收 `arguments` JSON object string，内部复用 `deepseek mcp call` 的实际调用路径
+  - 动态 tool 仍按真实 `server/tool` 走 `approval.require_mcp_confirmation` 与 `approval.mcp_call_allowlist`
+  - 单次最多注入 `24` 个动态 MCP tools；发现失败的 server 会被跳过，避免单个坏 server 阻断整个 agent registry
+- 当前边界仍明确：动态 tool schema 还是通用 `arguments` wrapper，尚未把远端 input schema 逐个注入模型 schema；permission UX 仍偏 bridge 级别，完整 plugin ecosystem 和云端/外部任务面仍未接入
 
 ## 最近里程碑
 

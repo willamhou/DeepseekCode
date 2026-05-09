@@ -28,6 +28,9 @@ pub struct ToolOutput {
 }
 
 pub trait Tool {
-    fn name(&self) -> &'static str;
+    fn name(&self) -> &str;
+    fn mcp_target(&self) -> Option<(&str, &str)> {
+        None
+    }
     fn execute(&self, input: ToolInput) -> AppResult<ToolOutput>;
 }

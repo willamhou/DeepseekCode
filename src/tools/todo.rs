@@ -18,7 +18,7 @@ pub struct TodoWriteTool {
 }
 
 impl Tool for TodoWriteTool {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "todo_write"
     }
 

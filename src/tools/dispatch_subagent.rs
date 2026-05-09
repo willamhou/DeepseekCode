@@ -17,7 +17,7 @@ pub struct DispatchSubagentTool {
 }
 
 impl Tool for DispatchSubagentTool {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "dispatch_subagent"
     }
 

@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::env;
 use std::rc::Rc;
 
@@ -11,7 +12,9 @@ use crate::tools::apply_patch::ApplyPatchTool;
 use crate::tools::dispatch_subagent::DispatchSubagentTool;
 use crate::tools::git_diff::GitDiffTool;
 use crate::tools::list_files::ListFilesTool;
-use crate::tools::mcp::{McpCallTool, McpListToolsTool};
+use crate::tools::mcp::{
+    remote_tool_registry_name, McpCallTool, McpListToolsTool, McpRemoteToolTool,
+};
 use crate::tools::read_file::ReadFileTool;
 use crate::tools::run_shell::{is_safe_shell_command, RunShellTool};
 use crate::tools::search_text::SearchTextTool;
@@ -23,9 +26,10 @@ pub struct ToolRegistry {
 }
 
 pub const MAX_SUBAGENT_DEPTH: usize = 1;
+const MAX_DYNAMIC_MCP_TOOLS: usize = 24;
 
 impl ToolRegistry {
-    pub fn names_for_policy(&self, policy: &ExecutionPolicy) -> Vec<&'static str> {
+    pub fn names_for_policy(&self, policy: &ExecutionPolicy) -> Vec<&str> {
         self.tools
             .iter()
             .map(|tool| tool.name())
@@ -48,6 +52,11 @@ impl ToolRegistry {
         input: ToolInput,
         policy: &ExecutionPolicy,
     ) -> AppResult<ToolOutput> {
+        let tool = self
+            .tools
+            .iter()
+            .find(|tool| tool.name() == name)
+            .ok_or_else(|| app_error(format!("unknown tool: {name}")))?;
         if !policy.allows_tool(name) {
             return Err(policy_denied(format!("tool blocked by policy: {name}")));
         }
@@ -103,12 +112,16 @@ impl ToolRegistry {
             }
         }
 
-        if name == "mcp_call" {
-            let (server, tool) = mcp_call_target(&input)?;
-            let target = format!("{server}/{tool}");
+        let mcp_target = if name == "mcp_call" {
+            Some(mcp_call_target(&input)?)
+        } else {
+            tool.mcp_target()
+        };
+        if let Some((server, remote_tool)) = mcp_target {
+            let target = format!("{server}/{remote_tool}");
 
             if !policy.mcp_call_allowlist.is_empty()
-                && !mcp_call_matches_allowlist(&policy.mcp_call_allowlist, server, tool)
+                && !mcp_call_matches_allowlist(&policy.mcp_call_allowlist, server, remote_tool)
             {
                 return Err(policy_denied(format!(
                     "mcp tool call blocked by policy allowlist: {}; add an entry to approval.mcp_call_allowlist or use server/*",
@@ -127,7 +140,7 @@ impl ToolRegistry {
             }
         }
 
-        self.execute(name, input).map_err(|error| {
+        tool.execute(input).map_err(|error| {
             if error.downcast_ref::<crate::error::AppError>().is_some() {
                 error
             } else {
@@ -291,6 +304,26 @@ pub fn default_registry_with_context(
         tools.push(Box::new(McpCallTool {
             config: config.clone(),
         }));
+        if config.mcp.expose_remote_tools {
+            let mut names = tools
+                .iter()
+                .map(|tool| tool.name().to_string())
+                .collect::<BTreeSet<_>>();
+            for remote in crate::cli::commands::mcp::discover_remote_tools_for_agent(
+                &config,
+                MAX_DYNAMIC_MCP_TOOLS,
+            ) {
+                let name = remote_tool_registry_name(&remote.server, &remote.tool);
+                if names.insert(name.clone()) {
+                    tools.push(Box::new(McpRemoteToolTool {
+                        name,
+                        server: remote.server,
+                        tool: remote.tool,
+                        config: config.clone(),
+                    }));
+                }
+            }
+        }
     }
     if subagent_depth < MAX_SUBAGENT_DEPTH {
         tools.push(Box::new(DispatchSubagentTool {
@@ -330,6 +363,47 @@ mod tests {
             "deepseek-registry-{name}-{}-{suffix}",
             std::process::id()
         ))
+    }
+
+    fn fake_mcp_server_config(root: &std::path::Path, expose_remote_tools: bool) -> AppConfig {
+        std::fs::create_dir_all(root).unwrap();
+        let server = root.join("server.sh");
+        std::fs::write(
+            &server,
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"fake","version":"1"}}}'
+      ;;
+    *'"method":"tools/list"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"echo","description":"Echo input","inputSchema":{"type":"object","properties":{"text":{"type":"string"}}}}]}}'
+      exit 0
+      ;;
+    *'"method":"tools/call"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"echo: hello"}],"structuredContent":{"ok":true},"isError":false}}'
+      exit 0
+      ;;
+  esac
+done
+"#,
+        )
+        .unwrap();
+        let mcp_file = root.join("mcp.json");
+        std::fs::write(
+            &mcp_file,
+            format!(
+                r#"{{"mcpServers":{{"fake":{{"transport":"stdio","command":"/bin/sh","args":["{}"]}}}}}}"#,
+                server.display()
+            ),
+        )
+        .unwrap();
+
+        let mut config = AppConfig::default();
+        config.mcp.project_file = mcp_file.display().to_string();
+        config.mcp.user_file = root.join("missing-user.json").display().to_string();
+        config.mcp.expose_remote_tools = expose_remote_tools;
+        config
     }
 
     #[test]
@@ -554,6 +628,53 @@ mod tests {
 
         assert!(names.contains(&"mcp_list_tools"));
         assert!(names.contains(&"mcp_call"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn default_registry_exposes_dynamic_mcp_tools_when_enabled() {
+        let root = temp_root("mcp-dynamic");
+        let config = fake_mcp_server_config(&root, true);
+        let registry =
+            default_registry_with_context(config, 0, Rc::new(RefCell::new(TodoList::default())));
+        let approval = ApprovalConfig::default();
+        let names = registry.names_for_policy(&ExecutionPolicy::new(&approval, None));
+
+        assert!(names.contains(&"mcp_list_tools"));
+        assert!(names.contains(&"mcp_call"));
+        assert!(names.contains(&"mcp__fake__echo"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn execute_with_policy_blocks_non_allowlisted_dynamic_mcp_tool() {
+        let root = temp_root("mcp-dynamic-policy");
+        let config = fake_mcp_server_config(&root, true);
+        let registry =
+            default_registry_with_context(config, 0, Rc::new(RefCell::new(TodoList::default())));
+        let policy = ExecutionPolicy {
+            allowed_tools: vec!["mcp__fake__echo".to_string()],
+            require_write_confirmation: false,
+            require_shell_confirmation: false,
+            require_mcp_confirmation: false,
+            shell_allowlist: Vec::new(),
+            mcp_call_allowlist: vec!["other/*".to_string()],
+            auto_approve_writes: false,
+            auto_approve_shell: false,
+            auto_approve_mcp: false,
+        };
+
+        let error = registry
+            .execute_with_policy(
+                "mcp__fake__echo",
+                ToolInput::new().with_arg("arguments", r#"{"text":"hello"}"#),
+                &policy,
+            )
+            .unwrap_err();
+        assert_eq!(classify(error.as_ref()), AppErrorKind::PolicyDenied);
+        assert!(error.to_string().contains("policy allowlist"));
 
         let _ = std::fs::remove_dir_all(root);
     }

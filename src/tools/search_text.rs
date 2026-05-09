@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 pub struct SearchTextTool;
 
 impl Tool for SearchTextTool {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "search_text"
     }
 

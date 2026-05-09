@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct RunShellTool;
 
 impl Tool for RunShellTool {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "run_shell"
     }
 

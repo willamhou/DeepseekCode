@@ -7,7 +7,7 @@ use std::path::Path;
 pub struct ReadFileTool;
 
 impl Tool for ReadFileTool {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "read_file"
     }
 

@@ -93,9 +93,10 @@ hooks.timeout_ms = 5000
 # 当前版本会读取并校验 MCP server 配置，可手动对 stdio、HTTP 或 SSE server 执行 tools/list / tools/call。
 # 当 project/user MCP config 文件存在时，agent registry 会暴露通用 mcp_list_tools / mcp_call bridge。
 # agent bridge 的 mcp_call 默认受 approval.require_mcp_confirmation 和 approval.mcp_call_allowlist 保护。
-# 还不会把每个远端 MCP tool 动态注入为独立 agent tool。
+# 设置 mcp.expose_remote_tools = true 后，会把发现到的远端 MCP tools 以 mcp__server__tool 形式注入为独立 agent tool。
 # Project/user scope 的同名 server 以 project 为准。
 mcp.enabled = true
+mcp.expose_remote_tools = false
 mcp.project_file = ".dscode/mcp.json"
 mcp.user_file = "~/.config/dscode/mcp.json"
 

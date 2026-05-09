@@ -170,14 +170,16 @@ deepseek mcp call <server-name> <tool-name> '{"arg":"value"}'
 }
 ```
 
-`deepseek mcp tools` 会按 MCP lifecycle 对 stdio server 或 HTTP MCP endpoint 执行 `initialize` / `notifications/initialized` / `tools/list`，并展示返回的 tool name、description 和 input schema。
-`deepseek mcp call` 会显式执行 `tools/call`，参数必须是 JSON object；返回会显示 text content、structuredContent 和 tool-level error flag。HTTP transport 通过 JSON-RPC POST 调用，并会续传服务端返回的 `Mcp-Session-Id`。
+`deepseek mcp tools` 会按 MCP lifecycle 对 stdio server、HTTP MCP endpoint 或旧式 SSE server 执行 `initialize` / `notifications/initialized` / `tools/list`，并展示返回的 tool name、description 和 input schema。
+`deepseek mcp call` 会显式执行 `tools/call`，参数必须是 JSON object；返回会显示 text content、structuredContent 和 tool-level error flag。HTTP transport 通过 JSON-RPC POST 调用，并会续传服务端返回的 `Mcp-Session-Id`；SSE transport 会先读取 `endpoint` 事件，再向 endpoint POST JSON-RPC 并从 SSE stream 匹配 response。
 
-当 project/user MCP config 文件存在时，agent 运行时会暴露两个通用 bridge tools：`mcp_list_tools` 和 `mcp_call`。这使模型可以先枚举 MCP server tools，再用 JSON object arguments 调用 stdio / HTTP MCP tools。
+当 project/user MCP config 文件存在时，agent 运行时会暴露两个通用 bridge tools：`mcp_list_tools` 和 `mcp_call`。这使模型可以先枚举 MCP server tools，再用 JSON object arguments 调用 stdio / HTTP / SSE MCP tools。
 
-agent 侧的 `mcp_call` 默认受 `approval.require_mcp_confirmation = true` 保护；非交互运行可用 `DSCODE_AUTO_APPROVE_MCP=1` 放行。还可以用 `approval.mcp_call_allowlist = ["server/tool", "server/*", "*/tool"]` 限制 agent 能调用的远端 MCP tool；空数组表示不限制。`mcp_list_tools` 只是只读发现，不要求确认；用户显式执行的 `deepseek mcp call ...` 也不会再次弹出 agent 审批。
+如果你信任配置里的 MCP servers，可设置 `mcp.expose_remote_tools = true`。开启后，agent 启动时会发现 enabled MCP server tools，并以 `mcp__server__tool` 形式注入为独立 agent tool；动态 tool 的参数是 `arguments` JSON object string。
 
-这一版还不会把每个远端 MCP tool 动态注入为独立 agent tool；旧式 SSE 双通道 transport 和更完整的 MCP permission UX 仍是后续工作。
+agent 侧的 `mcp_call` 和动态 MCP tools 默认受 `approval.require_mcp_confirmation = true` 保护；非交互运行可用 `DSCODE_AUTO_APPROVE_MCP=1` 放行。还可以用 `approval.mcp_call_allowlist = ["server/tool", "server/*", "*/tool"]` 限制 agent 能调用的远端 MCP tool；空数组表示不限制。`mcp_list_tools` 只是只读发现，不要求确认；用户显式执行的 `deepseek mcp call ...` 也不会再次弹出 agent 审批。
+
+这一版的动态 MCP tool schema 仍是通用 `arguments` wrapper，还不会把每个远端 input schema 逐个注入模型 schema；更完整的 MCP permission UX 仍是后续工作。
 
 如果要做一次最小 live 请求验证：
 

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::env;
 use std::io::BufRead;
@@ -1808,7 +1809,7 @@ fn build_anthropic_tools(names: &[String]) -> String {
 fn render_tools(names: &[String], envelope: fn(&ToolSpec) -> String) -> String {
     let tools = names
         .iter()
-        .filter_map(|name| tool_spec(name).map(envelope))
+        .filter_map(|name| tool_spec(name).map(|spec| envelope(&spec)))
         .collect::<Vec<_>>();
     format!("[{}]", tools.join(","))
 }
@@ -1816,8 +1817,8 @@ fn render_tools(names: &[String], envelope: fn(&ToolSpec) -> String) -> String {
 fn openai_envelope(spec: &ToolSpec) -> String {
     format!(
         r#"{{"type":"function","function":{{"name":"{}","description":"{}","parameters":{{"type":"object","properties":{},"required":{},"additionalProperties":false}}}}}}"#,
-        json_escape(spec.name),
-        json_escape(spec.description),
+        json_escape(&spec.name),
+        json_escape(&spec.description),
         spec.properties_json,
         spec.required_json,
     )
@@ -1826,82 +1827,114 @@ fn openai_envelope(spec: &ToolSpec) -> String {
 fn anthropic_envelope(spec: &ToolSpec) -> String {
     format!(
         r#"{{"name":"{}","description":"{}","input_schema":{{"type":"object","properties":{},"required":{}}}}}"#,
-        json_escape(spec.name),
-        json_escape(spec.description),
+        json_escape(&spec.name),
+        json_escape(&spec.description),
         spec.properties_json,
         spec.required_json,
     )
 }
 
 struct ToolSpec {
+    name: Cow<'static, str>,
+    description: Cow<'static, str>,
+    properties_json: Cow<'static, str>,
+    required_json: Cow<'static, str>,
+}
+
+fn tool_spec(name: &str) -> Option<ToolSpec> {
+    TOOL_SPECS
+        .iter()
+        .find(|spec| spec.name == name)
+        .map(|spec| ToolSpec {
+            name: Cow::Borrowed(spec.name),
+            description: Cow::Borrowed(spec.description),
+            properties_json: Cow::Borrowed(spec.properties_json),
+            required_json: Cow::Borrowed(spec.required_json),
+        })
+        .or_else(|| dynamic_mcp_tool_spec(name))
+}
+
+struct StaticToolSpec {
     name: &'static str,
     description: &'static str,
     properties_json: &'static str,
     required_json: &'static str,
 }
 
-fn tool_spec(name: &str) -> Option<&'static ToolSpec> {
-    TOOL_SPECS.iter().find(|spec| spec.name == name)
+fn dynamic_mcp_tool_spec(name: &str) -> Option<ToolSpec> {
+    if !name.starts_with(crate::tools::mcp::MCP_DYNAMIC_TOOL_PREFIX) {
+        return None;
+    }
+    Some(ToolSpec {
+        name: Cow::Owned(name.to_string()),
+        description: Cow::Owned(format!(
+            "Call the configured MCP remote tool `{name}` directly. Use mcp_list_tools first if you need its input schema."
+        )),
+        properties_json: Cow::Borrowed(
+            r#"{"arguments":{"type":"string","description":"JSON object string containing remote tool arguments, for example {\"path\":\"README.md\"}. Use {} when the remote tool takes no arguments."}}"#,
+        ),
+        required_json: Cow::Borrowed(r#"[]"#),
+    })
 }
 
-const TOOL_SPECS: &[ToolSpec] = &[
-    ToolSpec {
+const TOOL_SPECS: &[StaticToolSpec] = &[
+    StaticToolSpec {
         name: "list_files",
         description: "List repository files and directories under a root path.",
         properties_json: r#"{"root":{"type":"string","description":"Root directory to list from, usually `.`."},"max_depth":{"type":"string","description":"Maximum directory depth to traverse, encoded as a string integer."},"limit":{"type":"string","description":"Maximum number of entries to return, encoded as a string integer."}}"#,
         required_json: r#"["root","max_depth","limit"]"#,
     },
-    ToolSpec {
+    StaticToolSpec {
         name: "read_file",
         description: "Read a text file and return a numbered excerpt.",
         properties_json: r#"{"path":{"type":"string","description":"Path to the file."},"max_lines":{"type":"string","description":"Maximum number of lines to return, encoded as a string integer."}}"#,
         required_json: r#"["path","max_lines"]"#,
     },
-    ToolSpec {
+    StaticToolSpec {
         name: "search_text",
         description: "Search for plain text occurrences in repository files.",
         properties_json: r#"{"root":{"type":"string","description":"Root directory to search from."},"query":{"type":"string","description":"Plain text query to find."},"limit":{"type":"string","description":"Maximum number of matches to return, encoded as a string integer."}}"#,
         required_json: r#"["root","query","limit"]"#,
     },
-    ToolSpec {
+    StaticToolSpec {
         name: "apply_patch",
         description: "Apply a text replacement or a unified diff patch to files.",
         properties_json: r#"{"cwd":{"type":"string","description":"Working directory used when applying a unified diff patch."},"path":{"type":"string","description":"Target file path for direct replacement mode."},"find":{"type":"string","description":"Exact text to find for direct replacement mode."},"replace":{"type":"string","description":"Replacement text for direct replacement mode."},"replace_all":{"type":"string","description":"`true` to replace all occurrences in direct replacement mode, otherwise `false`."},"patch":{"type":"string","description":"Unified diff patch content. When provided, patch mode is used and path/find/replace are optional."}}"#,
         required_json: r#"[]"#,
     },
-    ToolSpec {
+    StaticToolSpec {
         name: "run_shell",
         description: "Run a safe allowlisted shell command in the repository.",
         properties_json: r#"{"cwd":{"type":"string","description":"Working directory for the command."},"command":{"type":"string","description":"Safe shell command to execute."}}"#,
         required_json: r#"["cwd","command"]"#,
     },
-    ToolSpec {
+    StaticToolSpec {
         name: "git_diff",
         description: "Show the current git diff for the workspace.",
         properties_json: r#"{}"#,
         required_json: r#"[]"#,
     },
-    ToolSpec {
+    StaticToolSpec {
         name: "todo_write",
         description: "Replace the entire todo list with a new set of items. Use proactively for tasks with 3+ steps; mark exactly one item as in_progress at a time.",
         properties_json: r#"{"items":{"type":"string","description":"JSON array of objects with fields {content: string, activeForm: string, status: \"pending\"|\"in_progress\"|\"completed\"}. content is imperative form (e.g. \"Run tests\"); activeForm is present continuous (e.g. \"Running tests\")."}}"#,
         required_json: r#"["items"]"#,
     },
-    ToolSpec {
+    StaticToolSpec {
         name: "dispatch_subagent",
         description: "Delegate an independent subtask to a child agent with its own budget and todo list.",
         properties_json: r#"{"task":{"type":"string","description":"Concrete self-contained subtask for the child agent."},"skill":{"type":"string","description":"Optional skill name for the child agent."},"steps":{"type":"string","description":"Optional step budget for the child agent, as a positive integer up to 12."}}"#,
         required_json: r#"["task"]"#,
     },
-    ToolSpec {
+    StaticToolSpec {
         name: "mcp_list_tools",
-        description: "List tools exposed by configured stdio or HTTP MCP servers. Use before mcp_call when you need the remote tool schema.",
-        properties_json: r#"{"server":{"type":"string","description":"Optional MCP server name. Omit to list enabled stdio or HTTP MCP servers."}}"#,
+        description: "List tools exposed by configured stdio, HTTP, or SSE MCP servers. Use before mcp_call or dynamic mcp__server__tool calls when you need the remote tool schema.",
+        properties_json: r#"{"server":{"type":"string","description":"Optional MCP server name. Omit to list enabled stdio, HTTP, or SSE MCP servers."}}"#,
         required_json: r#"[]"#,
     },
-    ToolSpec {
+    StaticToolSpec {
         name: "mcp_call",
-        description: "Call a configured stdio or HTTP MCP server tool with JSON object arguments.",
+        description: "Call a configured stdio, HTTP, or SSE MCP server tool with JSON object arguments.",
         properties_json: r#"{"server":{"type":"string","description":"MCP server name from the project or user MCP config."},"tool":{"type":"string","description":"Remote MCP tool name to call."},"arguments":{"type":"string","description":"JSON object string containing tool arguments, for example {\"path\":\"README.md\"}."}}"#,
         required_json: r#"["server","tool"]"#,
     },
@@ -2704,14 +2737,22 @@ mod tests {
         assert!(openai.contains("\"name\":\"mcp_call\""));
         assert!(openai.contains("\"server\""));
         assert!(openai.contains("\"arguments\""));
-        assert!(openai.contains("stdio or HTTP MCP servers"));
+        assert!(openai.contains("stdio, HTTP, or SSE MCP servers"));
 
         let anthropic =
             build_anthropic_tools(&["mcp_list_tools".to_string(), "mcp_call".to_string()]);
         assert!(anthropic.contains("\"name\":\"mcp_list_tools\""));
         assert!(anthropic.contains("\"name\":\"mcp_call\""));
         assert!(anthropic.contains("\"input_schema\""));
-        assert!(anthropic.contains("stdio or HTTP MCP server tool"));
+        assert!(anthropic.contains("stdio, HTTP, or SSE MCP server tool"));
+    }
+
+    #[test]
+    fn build_tool_specs_include_dynamic_mcp_tools() {
+        let tools = build_openai_tools(&["mcp__fake__echo".to_string()]);
+        assert!(tools.contains("\"name\":\"mcp__fake__echo\""));
+        assert!(tools.contains("\"arguments\""));
+        assert!(tools.contains("Call the configured MCP remote tool"));
     }
 
     fn empty_request_with_todos(todos: Vec<crate::core::todos::Todo>) -> ModelRequest {

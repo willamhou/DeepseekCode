@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 pub struct ListFilesTool;
 
 impl Tool for ListFilesTool {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "list_files"
     }
 

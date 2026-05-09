@@ -16,10 +16,10 @@
 - fixture-backed benchmark
 - dogfood ledger / promotion / trend gate / category slices
 
-当前基线（2026-05-09 Phase 11+ MCP legacy SSE transport 后复测）：
+当前基线（2026-05-09 Phase 11+ opt-in MCP dynamic tool exposure 后复测）：
 
 - benchmark：`46/46`
-- 全量测试：`535 passed, 0 failed`
+- 全量测试：`540 passed, 0 failed`
 - benchmark trend gate：`pass against 5 comparable runs`
 - dogfood live gate：`pass (no new dogfood records since previous snapshot, runs=33)`
 - 当前已收掉的红点：
@@ -126,7 +126,7 @@
   - 当 project/user MCP config 文件存在时，agent registry 会暴露 `mcp_list_tools` 与 `mcp_call`
   - `mcp_list_tools` 让模型枚举 configured MCP server tools 和 schema
   - `mcp_call` 让模型通过 JSON object arguments 调用 stdio / HTTP / SSE MCP tools
-  - 还不会把每个远端 MCP tool 动态注入为独立 agent tool，完整 permission UX 也未接入，因此 MCP/plugin ecosystem 仍不是小差距
+  - 后续已补 opt-in 动态 tool 注入初版；完整 schema 注入、permission UX 和 plugin ecosystem 仍不是小差距
 - Phase 11+ MCP call approval/allowlist policy：
   - 新增 `approval.require_mcp_confirmation`，默认 `true`
   - 新增 `approval.mcp_call_allowlist`，支持 `server/tool`、`server/*`、`*/tool` 和 `*/*`
@@ -144,6 +144,12 @@
   - `deepseek mcp call <server> <tool> [json-args]` 可通过同一 SSE session 执行 `tools/call`
   - SSE stream 上的 JSON-RPC response 会按 request id 匹配，忽略 endpoint / heartbeat / 非目标 response
   - agent bridge 复用同一路径，因此 SSE MCP server 也可被 `mcp_list_tools` / `mcp_call` 使用，并继续受 confirmation / allowlist 保护
+- Phase 11+ opt-in MCP dynamic tool exposure：
+  - 新增 `mcp.expose_remote_tools`，默认 `false`，避免 agent 启动时隐式执行不受信任的 MCP server discovery
+  - 开启后，agent registry 会发现 enabled MCP servers 的远端 tools，并以 `mcp__server__tool` 名称注入为独立 agent tool
+  - 动态 tool 复用 `deepseek mcp call` 的 stdio / HTTP / SSE 调用路径，参数为 `arguments` JSON object string
+  - 动态 tool 继续按真实 `server/tool` 走 `approval.require_mcp_confirmation` 与 `approval.mcp_call_allowlist`
+  - 单次最多注入 `24` 个动态 MCP tools，启动发现失败的 server 会被跳过，避免单个坏 server 阻断整个 agent registry
 
 本轮收口顺序：
 
@@ -153,7 +159,7 @@
 4. 收 `11f`：release / upgrade story 从“能安装”补到“能发布、能升级、能回滚”
 
 当前结果：Phase 11 主体与后续 baseline hardening / custom slash commands / workspace instructions /
-local hooks / config bootstrap / live coverage gate / benchmark asset reproducibility / IDE bootstrap / MCP config surface / MCP stdio tool discovery / MCP manual tool call / MCP agent bridge / MCP call approval/allowlist policy / MCP HTTP JSON-RPC transport / MCP legacy SSE transport / Python PR CI fixture thickening / ambiguous improvement planning guard / subagent edited-file handoff 已收口，最新 benchmark 为 `46/46`，trend gate 已恢复通过，全量测试为 `535 passed, 0 failed`。
+local hooks / config bootstrap / live coverage gate / benchmark asset reproducibility / IDE bootstrap / MCP config surface / MCP stdio tool discovery / MCP manual tool call / MCP agent bridge / MCP call approval/allowlist policy / MCP HTTP JSON-RPC transport / MCP legacy SSE transport / opt-in MCP dynamic tool exposure / Python PR CI fixture thickening / ambiguous improvement planning guard / subagent edited-file handoff 已收口，最新 benchmark 为 `46/46`，trend gate 已恢复通过，全量测试为 `540 passed, 0 failed`。
 
 这说明 `DeepseekCode` 已经不是“演示级原型”，但仍明显低于 Claude Code / Codex 的
 产品完成度。差距不再是“有没有 planner / tool loop”，而是：
@@ -161,7 +167,7 @@ local hooks / config bootstrap / live coverage gate / benchmark asset reproducib
 1. 真实 PR / CI / review 场景样本不够厚
 2. open-ended / ambiguous task 的默认稳定性不够
 3. subagent orchestration 仍是单层、保守的 merge-back
-4. IDE / 编辑器配套仍只有最小入口，MCP/plugin 生态已有配置发现、stdio/HTTP/SSE `tools/list`、manual `tools/call`、generic agent bridge 和 bridge 级审批/allowlist，但动态独立 tool 注入和更完整 permission UX 仍缺失，云端/外部任务面仍缺失
+4. IDE / 编辑器配套仍只有最小入口，MCP/plugin 生态已有配置发现、stdio/HTTP/SSE `tools/list`、manual `tools/call`、generic agent bridge、bridge 级审批/allowlist 和 opt-in 动态 tool 注入初版，但完整 schema 注入、更完整 permission UX、plugin 生态和云端/外部任务面仍缺失
 5. live online-model 稳定性与外部 PR/CI 样本厚度还不足以宣称产品级
 
 ## 差距表
@@ -171,7 +177,7 @@ local hooks / config bootstrap / live coverage gate / benchmark asset reproducib
 | 命令行入口 | `deepseek` 已可直接进入 REPL | 默认心智一致、文档和错误提示完全统一 | 小 |
 | REPL / 交互体验 | transcript、slash、session 已有 | 更顺滑的 history、恢复、帮助、默认提示 | 中 |
 | 单仓库本地 coding flow | benchmark 覆盖面已较强 | 默认成功率更高，少漂移、少无效 hops | 中 |
-| 本地扩展 / 策略入口 | custom commands、workspace instructions、local hooks、MCP config + stdio/HTTP/SSE tools/list/call + generic agent bridge + bridge 级 MCP 审批/allowlist 已有 | 更完整的 MCP/plugin ecosystem 与团队级扩展面 | 中到大 |
+| 本地扩展 / 策略入口 | custom commands、workspace instructions、local hooks、MCP config + stdio/HTTP/SSE tools/list/call + generic agent bridge + bridge 级 MCP 审批/allowlist + opt-in 动态 MCP tool 注入已有 | 更完整的 MCP/plugin ecosystem 与团队级扩展面 | 中 |
 | open-ended 任务 | 已有 recovery / replan / ambiguous improvement first-turn plan guard，但仍依赖 heuristic | 对模糊任务也能稳定收敛 | 中到大 |
 | PR / CI 工作流 | `pr review/fix/patch` 已有 + `15` 条 fixture baseline | 更厚的真实/外部 PR/CI 样本与稳定端到端闭环 | 中到大 |
 | subagent | 已能 dispatch / merge-back，并能把 child patch/diff touched files 回传给 parent readback | 更成熟的拆分、归并、去重、收敛 | 中到大 |
