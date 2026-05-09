@@ -100,6 +100,9 @@ fn parse_config(content: &str, config: &mut AppConfig) -> AppResult<()> {
             "approval.require_mcp_confirmation" => {
                 config.approval.require_mcp_confirmation = parse_bool(value)?
             }
+            "approval.mcp_call_allowlist" => {
+                config.approval.mcp_call_allowlist = parse_mcp_call_allowlist(value)?
+            }
             "hooks.enabled" => {
                 config.hooks.enabled = parse_bool(value)?;
             }
@@ -154,6 +157,49 @@ fn parse_u64(value: &str) -> AppResult<u64> {
         .map_err(|_| app_error(format!("invalid integer value: {value}")))
 }
 
+fn parse_mcp_call_allowlist(value: &str) -> AppResult<Vec<String>> {
+    let entries = parse_string_list(value)?;
+    for entry in &entries {
+        validate_mcp_call_pattern(entry)?;
+    }
+    Ok(entries)
+}
+
+fn validate_mcp_call_pattern(value: &str) -> AppResult<()> {
+    let Some((server, tool)) = value.split_once('/') else {
+        return Err(app_error(format!(
+            "invalid MCP call allowlist pattern `{value}`; expected server/tool"
+        )));
+    };
+    if server.trim().is_empty() || tool.trim().is_empty() {
+        return Err(app_error(format!(
+            "invalid MCP call allowlist pattern `{value}`; expected server/tool"
+        )));
+    }
+    Ok(())
+}
+
+fn parse_string_list(value: &str) -> AppResult<Vec<String>> {
+    let value = value.trim();
+    let Some(inner) = value.strip_prefix('[').and_then(|v| v.strip_suffix(']')) else {
+        return Err(app_error(format!("invalid string list value: {value}")));
+    };
+    let inner = inner.trim();
+    if inner.is_empty() {
+        return Ok(Vec::new());
+    }
+    inner
+        .split(',')
+        .map(|item| {
+            let item = item.trim();
+            if item.len() < 2 || !item.starts_with('"') || !item.ends_with('"') {
+                return Err(app_error(format!("invalid string list item: {item}")));
+            }
+            Ok(unquote(item))
+        })
+        .collect()
+}
+
 fn unquote(value: &str) -> String {
     value.trim().trim_matches('"').to_string()
 }
@@ -200,12 +246,26 @@ mod tests {
 approval.require_write_confirmation = false
 approval.require_shell_confirmation = false
 approval.require_mcp_confirmation = false
+approval.mcp_call_allowlist = ["filesystem/*", "github/list_issues"]
 "#;
         parse_config(toml, &mut config).unwrap();
 
         assert!(!config.approval.require_write_confirmation);
         assert!(!config.approval.require_shell_confirmation);
         assert!(!config.approval.require_mcp_confirmation);
+        assert_eq!(
+            config.approval.mcp_call_allowlist,
+            vec!["filesystem/*", "github/list_issues"]
+        );
+    }
+
+    #[test]
+    fn parse_config_rejects_invalid_mcp_call_allowlist_pattern() {
+        let mut config = AppConfig::default();
+        let toml = r#"approval.mcp_call_allowlist = ["missing-tool"]"#;
+        let error = parse_config(toml, &mut config).unwrap_err();
+
+        assert!(error.to_string().contains("server/tool"));
     }
 
     #[test]

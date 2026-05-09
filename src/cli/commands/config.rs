@@ -39,6 +39,10 @@ fn print_config(config: &AppConfig) {
         "approval.require_mcp_confirmation = {}",
         config.approval.require_mcp_confirmation
     );
+    println!(
+        "approval.mcp_call_allowlist = {}",
+        render_string_list(&config.approval.mcp_call_allowlist)
+    );
     println!("workspace.config_dir = {}", config.workspace.config_dir);
     println!("workspace.session_dir = {}", config.workspace.session_dir);
     println!(
@@ -103,6 +107,7 @@ model.api_key_env = "{api_key_env}"
 approval.require_write_confirmation = {require_write_confirmation}
 approval.require_shell_confirmation = {require_shell_confirmation}
 approval.require_mcp_confirmation = {require_mcp_confirmation}
+approval.mcp_call_allowlist = {mcp_call_allowlist}
 
 workspace.config_dir = "{config_dir}"
 workspace.session_dir = "{session_dir}"
@@ -128,6 +133,7 @@ mcp.user_file = "{mcp_user_file}"
         require_write_confirmation = config.approval.require_write_confirmation,
         require_shell_confirmation = config.approval.require_shell_confirmation,
         require_mcp_confirmation = config.approval.require_mcp_confirmation,
+        mcp_call_allowlist = render_string_list(&config.approval.mcp_call_allowlist),
         config_dir = config.workspace.config_dir,
         session_dir = config.workspace.session_dir,
         user_skills_dir = config.workspace.user_skills_dir,
@@ -140,6 +146,20 @@ mcp.user_file = "{mcp_user_file}"
         mcp_enabled = config.mcp.enabled,
         mcp_project_file = config.mcp.project_file,
         mcp_user_file = config.mcp.user_file,
+    )
+}
+
+fn render_string_list(values: &[String]) -> String {
+    if values.is_empty() {
+        return "[]".to_string();
+    }
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(|value| format!("\"{}\"", value.replace('"', "\\\"")))
+            .collect::<Vec<_>>()
+            .join(", ")
     )
 }
 

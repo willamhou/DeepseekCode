@@ -49,6 +49,10 @@ approval.require_shell_confirmation = true
 # 用户显式执行 `deepseek mcp call ...` 不走此审批，因为那已经是直接命令意图。
 approval.require_mcp_confirmation = true
 
+# 可选：限制 agent 允许调用哪些 MCP server/tool；空数组表示不限制，仍会走上面的确认。
+# 支持精确 server/tool、server/*、*/tool、*/*。
+approval.mcp_call_allowlist = []
+
 # -----------------------------------------------------------------------------
 # workspace: 配置与会话目录
 # -----------------------------------------------------------------------------
@@ -88,7 +92,7 @@ hooks.timeout_ms = 5000
 
 # 当前版本会读取并校验 MCP server 配置，可手动对 stdio server 执行 tools/list / tools/call。
 # 当 project/user MCP config 文件存在时，agent registry 会暴露通用 mcp_list_tools / mcp_call bridge。
-# agent bridge 的 mcp_call 默认受 approval.require_mcp_confirmation 保护。
+# agent bridge 的 mcp_call 默认受 approval.require_mcp_confirmation 和 approval.mcp_call_allowlist 保护。
 # 还不会把每个远端 MCP tool 动态注入为独立 agent tool。
 # Project/user scope 的同名 server 以 project 为准。
 mcp.enabled = true

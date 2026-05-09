@@ -64,6 +64,7 @@
   - `approval.require_write_confirmation`
   - `approval.require_shell_confirmation`
   - `approval.require_mcp_confirmation`
+  - `approval.mcp_call_allowlist`
   - `workspace.config_dir`
   - `workspace.session_dir`
 
@@ -222,6 +223,7 @@
   - `apply_patch` 写入前在 stderr 输出 `Apply patch in <path>? [y/N]:` 并读 stdin
   - `run_shell` 执行前输出 `Run shell command in <cwd>: \`<command>\`? [y/N]:`
   - agent `mcp_call` 调用远端 MCP tool 前输出 `Call MCP tool <server>/<tool>? [y/N]:`
+  - `approval.mcp_call_allowlist` 可把 agent MCP 调用限制到 `server/tool`、`server/*` 或 `*/tool`
   - 非 TTY 默认拒绝（安全 fallback）；`DSCODE_AUTO_APPROVE_WRITES=1` / `DSCODE_AUTO_APPROVE_SHELL=1` / `DSCODE_AUTO_APPROVE_MCP=1` 可一次性放行对应类别
 - ~~区分”策略拒绝”和”工具失败”~~（已完成）
   - `AppErrorKind` 枚举：`Other / PolicyDenied / ToolFailure`
@@ -1736,16 +1738,17 @@
   - `mcp_list_tools`：枚举 configured MCP server tools 和 input schema
   - `mcp_call`：按 server/tool/JSON arguments 调用 stdio MCP tools
 - OpenAI / Anthropic tool schema 都已加入这两个 bridge tools；没有 MCP config 文件时不会暴露，避免无 MCP 项目的默认 prompt 膨胀
-- 当前边界仍明确：远端 MCP tools 还不是动态独立 agent tools；HTTP/SSE transport、按 server/tool 的细粒度 MCP policy 和更完整的 plugin ecosystem 仍未接入
+- 当前边界仍明确：远端 MCP tools 还不是动态独立 agent tools；HTTP/SSE transport、更完整的 MCP permission UX 和 plugin ecosystem 仍未接入
 
-**Phase 11+ MCP call approval policy (`main`, 2026-05-09) — 已完成基础版**：
+**Phase 11+ MCP call approval/allowlist policy (`main`, 2026-05-09) — 已完成基础版**：
 - 延续 MCP agent bridge，本轮把远端 tool 调用接回现有 approval/policy 入口：
   - 新增 `approval.require_mcp_confirmation`，默认 `true`
+  - 新增 `approval.mcp_call_allowlist`，支持 `server/tool`、`server/*`、`*/tool` 和 `*/*`
   - 新增 `DSCODE_AUTO_APPROVE_MCP=1`，用于非交互 benchmark / dogfood replay 或用户显式放行
   - agent 通过 `mcp_call` 调用远端 MCP tool 前会确认 `server/tool`
 - `mcp_list_tools` 仍保持只读发现能力，不要求确认
 - 用户直接执行的 `deepseek mcp call <server> <tool> [json-args]` 不走该 prompt，因为它已经是显式 CLI 命令意图
-- 当前边界仍明确：这只是 MCP bridge 级别的安全闸；还没有把每个远端 MCP tool 动态注入为独立 agent tool，也没有 HTTP/SSE runtime 或按 server/tool allowlist
+- 当前边界仍明确：这只是 MCP bridge 级别的安全闸；还没有把每个远端 MCP tool 动态注入为独立 agent tool，也没有 HTTP/SSE runtime 或更完整的 permission UX
 
 ## 最近里程碑
 

@@ -41,6 +41,7 @@ pub struct ApprovalConfig {
     pub require_write_confirmation: bool,
     pub require_shell_confirmation: bool,
     pub require_mcp_confirmation: bool,
+    pub mcp_call_allowlist: Vec<String>,
 }
 
 impl Default for ApprovalConfig {
@@ -49,6 +50,7 @@ impl Default for ApprovalConfig {
             require_write_confirmation: true,
             require_shell_confirmation: true,
             require_mcp_confirmation: true,
+            mcp_call_allowlist: Vec::new(),
         }
     }
 }

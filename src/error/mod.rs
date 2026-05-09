@@ -114,6 +114,12 @@ fn derive_hint(message: &str) -> Option<String> {
                 .to_string(),
         );
     }
+    if lower.contains("mcp tool call blocked by policy allowlist") {
+        return Some(
+            "add `server/tool`, `server/*`, or `*/tool` to `approval.mcp_call_allowlist`"
+                .to_string(),
+        );
+    }
     if lower.contains("blocked by policy allowlist") || lower.contains("command not allowed") {
         return Some(
             "expand the active skill's `policy.shell_allowlist` or relax the policy in .dscode/config.toml"

@@ -103,14 +103,27 @@ impl ToolRegistry {
             }
         }
 
-        if name == "mcp_call" && policy.require_mcp_confirmation && !policy.auto_approve_mcp {
-            let target = describe_mcp_call_target(&input)?;
-            let prompt = format!("Call MCP tool {}?", sanitize_for_prompt(&target));
-            if !confirm(&prompt) {
+        if name == "mcp_call" {
+            let (server, tool) = mcp_call_target(&input)?;
+            let target = format!("{server}/{tool}");
+
+            if !policy.mcp_call_allowlist.is_empty()
+                && !mcp_call_matches_allowlist(&policy.mcp_call_allowlist, server, tool)
+            {
                 return Err(policy_denied(format!(
-                    "mcp tool call declined for {}; set DSCODE_AUTO_APPROVE_MCP=1 to skip prompts or relax approval.require_mcp_confirmation",
+                    "mcp tool call blocked by policy allowlist: {}; add an entry to approval.mcp_call_allowlist or use server/*",
                     sanitize_for_prompt(&target)
                 )));
+            }
+
+            if policy.require_mcp_confirmation && !policy.auto_approve_mcp {
+                let prompt = format!("Call MCP tool {}?", sanitize_for_prompt(&target));
+                if !confirm(&prompt) {
+                    return Err(policy_denied(format!(
+                        "mcp tool call declined for {}; set DSCODE_AUTO_APPROVE_MCP=1 to skip prompts or relax approval.require_mcp_confirmation",
+                        sanitize_for_prompt(&target)
+                    )));
+                }
             }
         }
 
@@ -131,6 +144,7 @@ pub struct ExecutionPolicy {
     require_shell_confirmation: bool,
     require_mcp_confirmation: bool,
     shell_allowlist: Vec<String>,
+    mcp_call_allowlist: Vec<String>,
     auto_approve_writes: bool,
     auto_approve_shell: bool,
     auto_approve_mcp: bool,
@@ -165,6 +179,7 @@ impl ExecutionPolicy {
             require_shell_confirmation,
             require_mcp_confirmation: approval.require_mcp_confirmation,
             shell_allowlist,
+            mcp_call_allowlist: approval.mcp_call_allowlist.clone(),
             auto_approve_writes: env_flag("DSCODE_AUTO_APPROVE_WRITES"),
             auto_approve_shell: env_flag("DSCODE_AUTO_APPROVE_SHELL"),
             auto_approve_mcp: env_flag("DSCODE_AUTO_APPROVE_MCP"),
@@ -193,14 +208,33 @@ fn describe_apply_patch_target(input: &ToolInput) -> String {
     "current workspace".to_string()
 }
 
-fn describe_mcp_call_target(input: &ToolInput) -> AppResult<String> {
+fn mcp_call_target(input: &ToolInput) -> AppResult<(&str, &str)> {
     let server = input
         .get("server")
+        .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| app_error("mcp_call requires `server`"))?;
     let tool = input
         .get("tool")
+        .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| app_error("mcp_call requires `tool`"))?;
-    Ok(format!("{server}/{tool}"))
+    Ok((server, tool))
+}
+
+fn mcp_call_matches_allowlist(patterns: &[String], server: &str, tool: &str) -> bool {
+    patterns
+        .iter()
+        .any(|pattern| mcp_call_pattern_matches(pattern, server, tool))
+}
+
+fn mcp_call_pattern_matches(pattern: &str, server: &str, tool: &str) -> bool {
+    let Some((server_pattern, tool_pattern)) = pattern.trim().split_once('/') else {
+        return false;
+    };
+    segment_matches(server_pattern.trim(), server) && segment_matches(tool_pattern.trim(), tool)
+}
+
+fn segment_matches(pattern: &str, value: &str) -> bool {
+    pattern == "*" || pattern == value
 }
 
 const PROMPT_LIMIT: usize = 200;
@@ -280,6 +314,7 @@ mod tests {
             require_shell_confirmation: true,
             require_mcp_confirmation: true,
             shell_allowlist: Vec::new(),
+            mcp_call_allowlist: Vec::new(),
             auto_approve_writes: false,
             auto_approve_shell: false,
             auto_approve_mcp: false,
@@ -370,6 +405,7 @@ mod tests {
             require_shell_confirmation: false,
             require_mcp_confirmation: true,
             shell_allowlist: Vec::new(),
+            mcp_call_allowlist: Vec::new(),
             auto_approve_writes: false,
             auto_approve_shell: false,
             auto_approve_mcp: false,
@@ -385,6 +421,71 @@ mod tests {
         assert!(error.to_string().contains("mcp tool call declined"));
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn execute_with_policy_blocks_non_allowlisted_mcp_call() {
+        let root = temp_root("mcp-allowlist");
+        std::fs::create_dir_all(&root).unwrap();
+        let mcp_file = root.join("mcp.json");
+        std::fs::write(
+            &mcp_file,
+            r#"{"mcpServers":{"fake":{"disabled":true,"transport":"stdio"}}}"#,
+        )
+        .unwrap();
+
+        let mut config = AppConfig::default();
+        config.mcp.project_file = mcp_file.display().to_string();
+        config.mcp.user_file = root.join("missing-user.json").display().to_string();
+        let registry =
+            default_registry_with_context(config, 0, Rc::new(RefCell::new(TodoList::default())));
+        let policy = ExecutionPolicy {
+            allowed_tools: vec!["mcp_call".to_string()],
+            require_write_confirmation: false,
+            require_shell_confirmation: false,
+            require_mcp_confirmation: false,
+            shell_allowlist: Vec::new(),
+            mcp_call_allowlist: vec!["github/*".to_string()],
+            auto_approve_writes: false,
+            auto_approve_shell: false,
+            auto_approve_mcp: false,
+        };
+
+        let input = ToolInput::new()
+            .with_arg("server", "fake")
+            .with_arg("tool", "echo");
+        let error = registry
+            .execute_with_policy("mcp_call", input, &policy)
+            .unwrap_err();
+        assert_eq!(classify(error.as_ref()), AppErrorKind::PolicyDenied);
+        assert!(error.to_string().contains("policy allowlist"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn mcp_call_pattern_supports_server_and_tool_wildcards() {
+        assert!(mcp_call_pattern_matches(
+            "filesystem/read_file",
+            "filesystem",
+            "read_file"
+        ));
+        assert!(mcp_call_pattern_matches(
+            "filesystem/*",
+            "filesystem",
+            "write_file"
+        ));
+        assert!(mcp_call_pattern_matches("*/search", "github", "search"));
+        assert!(!mcp_call_pattern_matches(
+            "github/*",
+            "filesystem",
+            "read_file"
+        ));
+        assert!(!mcp_call_pattern_matches(
+            "missing_separator",
+            "github",
+            "search"
+        ));
     }
 
     #[test]
