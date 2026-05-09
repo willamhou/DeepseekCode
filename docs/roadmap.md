@@ -1693,6 +1693,22 @@
   - trend gate：`pass against 5 comparable runs`
   - live gate：`pass (no new dogfood records since previous snapshot, runs=33)`
 
+**Phase 11+ Go PR CI reproduce fixture (`main`, 2026-05-09) — 已完成**：
+- 延续 PR/CI fixture thickening，本轮补上 Go 的自然失败复现修复样本：
+  - 新增 `fixtures/go-cli-failing-mini`
+  - 新增 `fixture-pr-reproduce-fix-go-cli-failing-mini`
+  - case 要求先执行 `go test ./...` 复现失败，再读取 `main.go`、把 `run bench` 修成 `run benchmark`、查看 diff 并重新跑测试
+- 这让默认 `pr_workflow` baseline 从 `15` 条扩到 `16` 条，并把自然失败复现修复链路扩到 Rust / JavaScript / Python / Go。
+- 最新验证：
+  - fixture 原始状态下 `go test ./...` 会按预期失败，失败输出指向 `run bench` 与期望 `run benchmark`
+  - 全量测试：`540 passed, 0 failed`
+  - 默认 benchmark：`47/47`
+  - total tool calls：`162`
+  - failed tool calls：`0`
+  - trend gate：`skipped (need at least 3 prior comparable runs, found 0)`，因为 case 数从 `46` 到 `47`，当前没有同 case 数历史
+  - live gate：`pass (no new dogfood records since previous snapshot, runs=33)`
+- 当前边界仍明确：PR/CI fixture baseline 已更厚，但外部真实 PR/CI live 样本和在线模型稳定性还不是小差距。
+
 **Phase 11+ IDE bootstrap (`main`, 2026-05-09) — 已完成基础版**：
 - 二次差距审计显示，Claude Code / Codex 的 IDE/app/cloud surface 仍是大差距；本轮先补一个很小但可版本化的 VS Code 入口
 - 新增 [`editors/vscode`](/home/willamhou/codes/DeepseekCode/editors/vscode/README.md)：

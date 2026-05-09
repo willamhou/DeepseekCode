@@ -178,6 +178,15 @@ isolate_workdir = true
 notes = "Real Rust PR workflow repair case that first reproduces the failing command before applying the explicit fix"
 budget = 8
 
+name = "fixture-pr-reproduce-fix-go-cli-failing-mini"
+task = "CI job `test-go` (run #561) on PR #50 failed. Reproduce locally, replace `run bench` with `run benchmark` in main.go, and rerun go test ./..."
+category = "pr_workflow"
+assertion_bundle = "write_validate_repro_then_fix_ok"
+workdir = "fixtures/go-cli-failing-mini"
+isolate_workdir = true
+notes = "Real Go PR workflow repair case that first reproduces the failing go test command before applying the explicit fix"
+budget = 8
+
 name = "fixture-pr-patch-validate-rust-mini"
 task = "Address PR #44 review feedback: replace `a - b` with `a + b` in src/lib.rs and validate with cargo test."
 category = "pr_workflow"

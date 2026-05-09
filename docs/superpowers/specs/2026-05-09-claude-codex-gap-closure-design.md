@@ -16,11 +16,11 @@
 - fixture-backed benchmark
 - dogfood ledger / promotion / trend gate / category slices
 
-当前基线（2026-05-09 Phase 11+ VS Code quick actions 后复测）：
+当前基线（2026-05-09 Phase 11+ Go PR CI reproduce fixture 后复测）：
 
-- benchmark：`46/46`
+- benchmark：`47/47`
 - 全量测试：`540 passed, 0 failed`
-- benchmark trend gate：`pass against 5 comparable runs`
+- benchmark trend gate：`skipped (need at least 3 prior comparable runs, found 0)`，原因是默认 baseline 从 `46` 条扩到 `47` 条，当前没有同 case 数历史
 - dogfood live gate：`pass (no new dogfood records since previous snapshot, runs=33)`
 - 当前已收掉的红点：
   - `fixture-pr-reproduce-fix-rust-cli-failing-mini` 已稳定为 `run_shell -> read_file -> apply_patch -> git_diff -> run_shell`
@@ -47,8 +47,8 @@
 当前已完成的 Phase 11 进展：
 
 - `11a`：`deepseek` 已成为主入口，主文档和关键运行时提示已统一到 `deepseek`，`dscode` 退回兼容别名
-- `11b`：`pr_workflow` baseline 已覆盖 seeded review/fix/patch、CI lint/test、second-round feedback 和 Rust / JavaScript / Python / Go fixture-backed patch/fix/retry cases
-- `11b`：`pr_workflow` baseline 继续新增真实 Python PR reproduce+fix+validate case，当前 category 为 `15` 条 case
+- `11b`：`pr_workflow` baseline 已覆盖 seeded review/fix/patch、CI lint/test、second-round feedback 和 Rust / JavaScript / Python / Go fixture-backed patch/fix/retry/reproduce cases
+- `11b`：`pr_workflow` baseline 继续新增真实 Python 与 Go PR reproduce+fix+validate case，当前 category 为 `16` 条 case
 - `11c`：natural JS failing-test recovery 已收紧为 `run_shell -> read_file -> finish`，benchmark 回到全绿；dogfood 也已把这类诊断型成功单独记账
 - `11d`：subagent v2 收口到 `meta.child_next_action`，parent 可按机器可读 next-action 消费 child summary
 - `11e`：`dogfood run --from-benchmark` 在 isolated fixture replay 场景下会临时开启 auto-approve，避免非交互审批把 live replay 误记成 workflow 失败
@@ -97,6 +97,10 @@
   - 新增 `fixtures/python-cli-failing-mini`
   - 新增 `fixture-pr-reproduce-fix-python-cli-failing-mini`
   - 默认 baseline 从 `44` 条扩到 `45` 条，PR/CI 自然失败修复链路已有 Rust / JavaScript / Python 样本
+- Phase 11+ Go PR CI reproduce fixture：
+  - 新增 `fixtures/go-cli-failing-mini`
+  - 新增 `fixture-pr-reproduce-fix-go-cli-failing-mini`
+  - 默认 baseline 从 `46` 条扩到 `47` 条，PR/CI 自然失败复现修复链路已覆盖 Rust / JavaScript / Python / Go
 - Phase 11+ ambiguous improvement planning guard：
   - explicit planning heuristic 会把短句 `improve` / `enhance` / `stabilize` / `hardening` / `optimize` / `better` 类模糊改进请求纳入 first-turn todo plan
   - 新增 `plan-ambiguous-improvement` benchmark，覆盖 `improve benchmark reliability` 这类没有路径和明确编辑指令的 open-ended 请求
@@ -164,12 +168,12 @@
 4. 收 `11f`：release / upgrade story 从“能安装”补到“能发布、能升级、能回滚”
 
 当前结果：Phase 11 主体与后续 baseline hardening / custom slash commands / workspace instructions /
-local hooks / config bootstrap / live coverage gate / benchmark asset reproducibility / IDE bootstrap / VS Code quick actions / MCP config surface / MCP stdio tool discovery / MCP manual tool call / MCP agent bridge / MCP call approval/allowlist policy / MCP HTTP JSON-RPC transport / MCP legacy SSE transport / opt-in MCP dynamic tool exposure / Python PR CI fixture thickening / ambiguous improvement planning guard / subagent edited-file handoff 已收口，最新 benchmark 为 `46/46`，trend gate 已恢复通过，全量测试为 `540 passed, 0 failed`。
+local hooks / config bootstrap / live coverage gate / benchmark asset reproducibility / IDE bootstrap / VS Code quick actions / MCP config surface / MCP stdio tool discovery / MCP manual tool call / MCP agent bridge / MCP call approval/allowlist policy / MCP HTTP JSON-RPC transport / MCP legacy SSE transport / opt-in MCP dynamic tool exposure / Python PR CI fixture thickening / Go PR CI reproduce fixture / ambiguous improvement planning guard / subagent edited-file handoff 已收口，最新 benchmark 为 `47/47`，全量测试为 `540 passed, 0 failed`。本轮 trend gate 因 case 数从 `46` 到 `47` 进入 comparability warmup，live gate 继续通过。
 
 这说明 `DeepseekCode` 已经不是“演示级原型”，但仍明显低于 Claude Code / Codex 的
 产品完成度。差距不再是“有没有 planner / tool loop”，而是：
 
-1. 真实 PR / CI / review 场景样本不够厚
+1. 真实/外部 PR / CI / review live 样本不够厚
 2. open-ended / ambiguous task 的默认稳定性不够
 3. subagent orchestration 仍是单层、保守的 merge-back
 4. IDE / 编辑器配套已有 VS Code command palette / status bar / quick action / context menu 的轻量入口，MCP/plugin 生态已有配置发现、stdio/HTTP/SSE `tools/list`、manual `tools/call`、generic agent bridge、bridge 级审批/allowlist 和 opt-in 动态 tool 注入初版，但完整 IDE agent 体验、完整 schema 注入、更完整 permission UX、plugin 生态和云端/外部任务面仍缺失
@@ -184,7 +188,7 @@ local hooks / config bootstrap / live coverage gate / benchmark asset reproducib
 | 单仓库本地 coding flow | benchmark 覆盖面已较强 | 默认成功率更高，少漂移、少无效 hops | 中 |
 | 本地扩展 / 策略入口 | custom commands、workspace instructions、local hooks、MCP config + stdio/HTTP/SSE tools/list/call + generic agent bridge + bridge 级 MCP 审批/allowlist + opt-in 动态 MCP tool 注入已有 | 更完整的 MCP/plugin ecosystem 与团队级扩展面 | 中 |
 | open-ended 任务 | 已有 recovery / replan / ambiguous improvement first-turn plan guard，但仍依赖 heuristic | 对模糊任务也能稳定收敛 | 中到大 |
-| PR / CI 工作流 | `pr review/fix/patch` 已有 + `15` 条 fixture baseline | 更厚的真实/外部 PR/CI 样本与稳定端到端闭环 | 中到大 |
+| PR / CI 工作流 | `pr review/fix/patch` 已有 + `16` 条 fixture baseline，Rust / JavaScript / Python / Go 均已有 PR 向修复样本 | 更厚的真实/外部 PR/CI 样本与稳定端到端闭环 | 中 |
 | subagent | 已能 dispatch / merge-back，并能把 child patch/diff touched files 回传给 parent readback | 更成熟的拆分、归并、去重、收敛 | 中到大 |
 | live 回归体系 | benchmark + dogfood 已闭环，且有关键 slice 覆盖下限 | 更厚的外部/在线 live baseline，且可阻断回归 | 小到中 |
 | 安装 / 分发 | install guide、version、completion、config init 已有 | 普通用户开箱即装即用 | 小到中 |
@@ -296,7 +300,7 @@ Phase 11 拆成 6 条 workstream：
 验收：
 
 - `pr_workflow` 不再只有少量 happy path
-- 至少覆盖 Rust + JavaScript + Go 三类 workflow，其中 Rust / JavaScript / Python 已覆盖 retry，Go 已覆盖 patch+validate
+- 至少覆盖 Rust + JavaScript + Go 三类 workflow，其中 Rust / JavaScript / Python 已覆盖 retry，Go 已覆盖 patch+validate 与 reproduce+fix
 - benchmark / dogfood 两端都能看到样本增长
 
 ### 11c. Recovery And Open-Ended Stability
