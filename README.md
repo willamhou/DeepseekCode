@@ -111,7 +111,7 @@
 首版不做：
 
 - 多模型适配
-- IDE 插件
+- 完整 IDE 插件（当前只有最小 VS Code 终端入口）
 - PR review / CI 云端集成
 - 多 agent 并行
 - 远程 skill 市场
@@ -128,6 +128,7 @@
 - [Rust 技术选型](./docs/rust-stack.md)
 - [PR / CI 集成指南](./docs/pr-integration.md)
 - [REPL 模式 (`deepseek` / `deepseek chat`)](./docs/repl.md)
+- [VS Code 扩展雏形](./editors/vscode/README.md)
 
 ## 快速开始
 

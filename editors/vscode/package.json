@@ -1,0 +1,62 @@
+{
+  "name": "deepseek-code",
+  "displayName": "DeepseekCode",
+  "description": "Run DeepseekCode CLI tasks from VS Code.",
+  "version": "0.1.0",
+  "publisher": "deepseekcode",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.86.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:deepseek.openChat",
+    "onCommand:deepseek.runTask",
+    "onCommand:deepseek.explainSelection",
+    "onCommand:deepseek.runBenchmark",
+    "onCommand:deepseek.showDogfoodReport"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "deepseek.openChat",
+        "title": "DeepseekCode: Open Chat"
+      },
+      {
+        "command": "deepseek.runTask",
+        "title": "DeepseekCode: Run Task"
+      },
+      {
+        "command": "deepseek.explainSelection",
+        "title": "DeepseekCode: Explain Selection"
+      },
+      {
+        "command": "deepseek.runBenchmark",
+        "title": "DeepseekCode: Run Benchmark"
+      },
+      {
+        "command": "deepseek.showDogfoodReport",
+        "title": "DeepseekCode: Show Dogfood Report"
+      }
+    ],
+    "configuration": {
+      "title": "DeepseekCode",
+      "properties": {
+        "deepseek.command": {
+          "type": "string",
+          "default": "deepseek",
+          "description": "Command used to launch DeepseekCode. Use an absolute path or a wrapper such as `cargo run --bin deepseek --`."
+        },
+        "deepseek.maxSelectionChars": {
+          "type": "number",
+          "default": 6000,
+          "minimum": 500,
+          "description": "Maximum selected text characters sent to DeepseekCode task prompts."
+        }
+      }
+    }
+  }
+}

@@ -1684,8 +1684,19 @@
   - 默认 benchmark：`44/44`
   - total tool calls：`151`
   - failed tool calls：`0`
-  - trend gate：`skipped`，因为默认 manifest 从 `42` 条扩到 `44` 条，目前只有 1 条 44-case comparable history
+  - trend gate：`pass against 3 comparable runs`
   - live gate：`pass (no new dogfood records since previous snapshot, runs=33)`
+
+**Phase 11+ IDE bootstrap (`main`, 2026-05-09) — 已完成基础版**：
+- 二次差距审计显示，Claude Code / Codex 的 IDE/app/cloud surface 仍是大差距；本轮先补一个很小但可版本化的 VS Code 入口
+- 新增 [`editors/vscode`](/home/willamhou/codes/DeepseekCode/editors/vscode/README.md)：
+  - `DeepseekCode: Open Chat`
+  - `DeepseekCode: Run Task`
+  - `DeepseekCode: Explain Selection`
+  - `DeepseekCode: Run Benchmark`
+  - `DeepseekCode: Show Dogfood Report`
+- extension 只负责把当前 workspace、当前文件路径和可选 selection 组织成 `deepseek` CLI 命令并在 VS Code terminal 中运行
+- 这一步没有引入 npm dependency，也不声明已具备完整 IDE agent 体验；它只是把 IDE gap 从“几乎没有”推进到“有可试用入口”
 
 ## 最近里程碑
 
