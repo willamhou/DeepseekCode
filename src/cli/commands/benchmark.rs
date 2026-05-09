@@ -291,9 +291,13 @@ impl BenchmarkCase {
                 };
             };
             if !last.output.contains(needle) {
+                let output_preview = clip(
+                    first_non_empty_line(&last.output).unwrap_or(&last.output),
+                    120,
+                );
                 failures.push(format!(
-                    "last tool `{}` output did not contain `{needle}`",
-                    last.tool_name
+                    "last tool `{}` output did not contain `{needle}`; output starts `{output_preview}`",
+                    last.tool_name,
                 ));
             }
         }
