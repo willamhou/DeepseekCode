@@ -118,10 +118,35 @@
 
 ## 文档
 
+- [安装指南](./docs/install.md)
 - [架构设计](./docs/architecture.md)
 - [MVP 与路线图](./docs/mvp.md)
 - [状态与完整 Roadmap](./docs/roadmap.md)
 - [Skill 与 Language Profile 设计](./docs/skills-and-profiles.md)
 - [Rust 技术选型](./docs/rust-stack.md)
 - [PR / CI 集成指南](./docs/pr-integration.md)
-- [REPL 模式 (`dscode chat`)](./docs/repl.md)
+- [REPL 模式 (`deepseek` / `deepseek chat`)](./docs/repl.md)
+
+## 快速开始
+
+```bash
+cargo install --path .
+deepseek version
+deepseek
+```
+
+升级源码安装：
+
+```bash
+git pull
+cargo install --path . --force
+deepseek version
+```
+
+如果想启用 shell completion：
+
+```bash
+deepseek completion bash > ~/.local/share/bash-completion/completions/deepseek
+deepseek completion zsh > ~/.zfunc/_deepseek
+deepseek completion fish > ~/.config/fish/completions/deepseek.fish
+```

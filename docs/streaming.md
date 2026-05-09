@@ -1,6 +1,6 @@
 # Streaming Output
 
-`dscode` streams LLM output token-by-token over Server-Sent Events
+`deepseek` streams LLM output token-by-token over Server-Sent Events
 (SSE) by default. Both OpenAI-compatible (`/chat/completions`) and
 Anthropic-compatible (`/messages`) base URLs are supported.
 
@@ -13,7 +13,7 @@ When stdout is a TTY, the renderer applies ANSI:
 - Red `✗ name`: tool failed
 - Dim `─── step N ───`: step divider
 
-Pipe stdout to a file (`dscode run "..." > out.txt`) and ANSI is
+Pipe stdout to a file (`deepseek run "..." > out.txt`) and ANSI is
 suppressed automatically — `is_terminal()` detects the redirection.
 
 ## Implementation
@@ -57,7 +57,7 @@ colors. Tokens arrive in one block rather than progressively.
 ## Limitations (Phase 9c candidates)
 
 - Ctrl+C does not interrupt an in-flight stream
-- `up`/`down` arrow history not implemented (use `rlwrap dscode chat`)
+- `up`/`down` arrow history not implemented (use `rlwrap deepseek`)
 - Patch / shell tool output not streamed (rendered in one block)
 - Syntax highlight not applied
 - Color theme not user-configurable

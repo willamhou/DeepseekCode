@@ -4,6 +4,8 @@
 
 `v0.1` 的目标不是“最强 code agent”，而是“稳定跑通本地代码修改闭环”。
 
+主命令以 `deepseek` 为准；`dscode` 仍保留为兼容别名。
+
 一句话：
 
 > 在本地仓库中，能够围绕 DeepSeek 完成读代码、改代码、跑命令、继续修复的基本代理流程。
@@ -12,12 +14,12 @@
 
 ### 基础交互
 
-- `dscode`
-- `dscode "task"`
-- `dscode diff`
-- `dscode resume`
-- `dscode config`
-- `dscode doctor`
+- `deepseek`
+- `deepseek "task"`
+- `deepseek diff`
+- `deepseek resume`
+- `deepseek config`
+- `deepseek doctor`
 
 ### 项目理解
 
@@ -98,4 +100,3 @@
 - “修复 lint / typecheck 错误”
 - “基于报错做一轮小范围修改”
 - “给一个函数加一处小功能并跑验证命令”
-

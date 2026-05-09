@@ -2,7 +2,7 @@
 
 The `todo_write` tool lets the LLM maintain a structured task list during a
 session, modeled after Claude Code's TodoWrite. The list is **session-scoped**:
-it lives across REPL turns inside `dscode chat`, can be saved/loaded via
+it lives across REPL turns inside `deepseek`, can be saved/loaded via
 `/save` / `/load`, and resets on `/clear` or new session.
 
 ## Schema
@@ -23,7 +23,7 @@ The system prompt nudges the LLM to use `todo_write` when:
 - it spans multiple files / non-trivial refactoring, OR
 - it requires running tests or shell commands as part of completion.
 
-The LLM is prompted to mark exactly one todo as `in_progress` at a time. dscode
+The LLM is prompted to mark exactly one todo as `in_progress` at a time. DeepseekCode
 does **not** strictly validate this — the renderer shows multiple
 in_progress items if they appear, so the user can see the LLM going off track.
 

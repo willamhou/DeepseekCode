@@ -1,13 +1,19 @@
-# `dscode chat` — REPL Mode
+# `deepseek` — REPL Mode
 
-`dscode chat` enters a persistent interactive REPL with cross-turn
+`deepseek` enters a persistent interactive REPL with cross-turn
 transcript, slash commands, and JSON session save/load. Each user
 message triggers an agent loop with up to 20 steps (configurable via
 `/budget`).
 
+Explicit aliases are also supported:
+
+- `deepseek chat`
+- `deepseek repl`
+- `deepseek interactive`
+
 ## Prerequisites
 
-- A real terminal (TTY). Piped stdin is rejected; use `dscode run "task"`
+- A real terminal (TTY). Piped stdin is rejected; use `deepseek run "task"`
   for one-shot tasks in scripts.
 - Optional: `DEEPSEEK_API_KEY` exported for live LLM-driven planning.
   Without it, the offline planner produces shallow output.
@@ -72,7 +78,7 @@ if the file is missing, corrupt, or has an unknown version.
 
 ## v1 limitations
 
-- No up/down arrow history. Use `rlwrap dscode chat` for a quick
+- No up/down arrow history. Use `rlwrap deepseek` for a quick
   workaround.
 - Ctrl+C does not interrupt an in-flight LLM call; let the curl call
   finish or `Ctrl+\` to force-kill.
@@ -86,7 +92,7 @@ These are tracked as Phase 9b candidates.
 
 Start a session, ask a question, save:
 ```
-$ dscode chat
+$ deepseek
 > what does src/repl/repl.rs do?
 [planner runs, prints tool calls and final assistant message]
 > /save my-investigation
@@ -96,7 +102,7 @@ saved -> .dscode/sessions/my-investigation.json
 
 Restart and resume:
 ```
-$ dscode chat
+$ deepseek
 > /load my-investigation
 loaded my-investigation (transcript: 2 turns, tokens: 1234 / 567)
 > can you also check src/repl/transcript.rs?

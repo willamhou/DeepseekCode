@@ -80,7 +80,21 @@ pub struct SkillSpec {
     pub system_append: String,
     #[serde(default)]
     pub suggested_steps: Vec<String>,
+    #[serde(default)]
+    pub triggers: Vec<String>,
+    #[serde(default)]
+    pub initial_todos: Vec<TodoSeed>,
+    #[serde(default)]
+    pub references: Vec<String>,
     pub policy: SkillPolicy,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct TodoSeed {
+    pub content: String,
+    pub active_form: String,
+    #[serde(default = "default_pending")]
+    pub status: TodoStatus,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -100,6 +114,8 @@ pub struct SkillPolicy {
 name = "fix-tests"
 description = "Focus on reproducing and fixing failing tests with minimal edits"
 allowed_tools = ["list_files", "read_file", "search_text", "apply_patch", "run_shell", "git_diff"]
+triggers = ["fix tests", "failing tests", "red tests"]
+references = ["README.md", "Cargo.toml"]
 system_append = """
 Reproduce failures first. Prefer the smallest safe code change.
 Rerun only relevant tests before broad test suites.
@@ -111,6 +127,16 @@ suggested_steps = [
   "Apply a minimal patch",
   "Rerun the relevant tests"
 ]
+
+[[initial_todos]]
+content = "Reproduce the failure"
+active_form = "Reproducing the failure"
+status = "in_progress"
+
+[[initial_todos]]
+content = "Apply the minimal patch"
+active_form = "Applying the minimal patch"
+status = "pending"
 
 [policy]
 require_write_confirmation = true
@@ -126,4 +152,3 @@ shell_allowlist = ["cargo test", "pytest", "pnpm test", "npm test", "go test", "
 - `small-refactor`
 
 这些已经足够支撑第一版常见任务，不需要一开始做开放式插件生态。
-
