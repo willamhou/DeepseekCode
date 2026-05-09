@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use crate::config::types::AppConfig;
 use crate::core::context::TaskContext;
-use crate::core::loop_runtime::{AgentLoop, AgentLoopOptions, RunResult};
+use crate::core::loop_runtime::{AgentLoop, AgentLoopOptions, RunResult, ToolEvent};
 use crate::core::todos::TodoList;
 use crate::error::{tool_failure, AppResult};
 use crate::tools::types::{Tool, ToolInput, ToolOutput};
@@ -182,6 +182,12 @@ fn extract_child_files(result: &RunResult) -> Vec<String> {
                     push_unique(&mut files, path);
                 }
             }
+            "apply_patch" => {
+                collect_apply_patch_paths(event, &mut files);
+            }
+            "git_diff" => {
+                collect_diff_paths(&event.output, &mut files);
+            }
             "search_text" => {
                 for line in event.output.lines() {
                     if let Some(path) = line.splitn(3, ':').next().map(str::trim) {
@@ -213,6 +219,71 @@ fn extract_child_files(result: &RunResult) -> Vec<String> {
     files
 }
 
+fn collect_apply_patch_paths(event: &ToolEvent, files: &mut Vec<String>) {
+    if let Some(path) = event.input.get("path") {
+        push_unique(files, path);
+    }
+
+    for line in event.output.lines().map(str::trim) {
+        if let Some(rest) = line.strip_prefix("Updated ") {
+            if let Some(path) = rest.split(" using ").next().map(str::trim) {
+                if !path.is_empty() {
+                    push_unique(files, path);
+                }
+            }
+            continue;
+        }
+
+        if let Some(path) = line
+            .strip_prefix("- ")
+            .or_else(|| line.strip_prefix("+ "))
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        {
+            push_unique(files, path);
+            continue;
+        }
+
+        if let Some((old, new)) = line.split_once(" -> ") {
+            push_unique(files, old.trim());
+            push_unique(files, new.trim());
+        }
+    }
+}
+
+fn collect_diff_paths(output: &str, files: &mut Vec<String>) {
+    for line in output.lines().map(str::trim) {
+        if let Some(rest) = line.strip_prefix("diff --git ") {
+            let mut parts = rest.split_whitespace();
+            let _old = parts.next();
+            if let Some(new) = parts.next().and_then(normalize_diff_path) {
+                push_unique(files, &new);
+            }
+            continue;
+        }
+
+        if let Some(path) = line
+            .strip_prefix("+++ ")
+            .and_then(|value| value.split_whitespace().next())
+            .and_then(normalize_diff_path)
+        {
+            push_unique(files, &path);
+        }
+    }
+}
+
+fn normalize_diff_path(raw: &str) -> Option<String> {
+    if raw == "/dev/null" {
+        return None;
+    }
+    Some(
+        raw.strip_prefix("a/")
+            .or_else(|| raw.strip_prefix("b/"))
+            .unwrap_or(raw)
+            .to_string(),
+    )
+}
+
 fn child_next_action(outcome: &str, child_files: &[String], final_message: &str) -> String {
     if outcome == "blocked" {
         return "replan_parent".to_string();
@@ -239,6 +310,9 @@ fn first_backtick_segment(text: &str) -> Option<String> {
 }
 
 fn push_unique(files: &mut Vec<String>, candidate: &str) {
+    if files.len() >= 4 {
+        return;
+    }
     if !files.iter().any(|existing| existing == candidate) {
         files.push(candidate.to_string());
     }
@@ -247,7 +321,6 @@ fn push_unique(files: &mut Vec<String>, candidate: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::loop_runtime::ToolEvent;
     use crate::model::protocol::{ObservationStatus, TokenUsage};
 
     #[test]
@@ -312,5 +385,33 @@ mod tests {
         };
         let summary = render_summary("inspect symbol", None, 2, &result);
         assert!(summary.contains("meta.child_next_action=search_text:route_benchmark_subcommand"));
+    }
+
+    #[test]
+    fn render_summary_includes_patched_files_for_parent_readback() {
+        let result = RunResult {
+            final_message: "patched the failing route".to_string(),
+            tool_events: vec![
+                ToolEvent {
+                    tool_name: "apply_patch".to_string(),
+                    input: std::collections::BTreeMap::from([(
+                        "path".to_string(),
+                        "src/lib.rs".to_string(),
+                    )]),
+                    output: "Updated src/lib.rs using single replacement mode.".to_string(),
+                    status: ObservationStatus::Ok,
+                },
+                ToolEvent {
+                    tool_name: "git_diff".to_string(),
+                    input: std::collections::BTreeMap::new(),
+                    output: "diff --git a/src/lib.rs b/src/lib.rs\n+++ b/src/lib.rs".to_string(),
+                    status: ObservationStatus::Ok,
+                },
+            ],
+            usage: TokenUsage::default(),
+        };
+        let summary = render_summary("fix route", None, 4, &result);
+        assert!(summary.contains("meta.child_files=src/lib.rs"));
+        assert!(summary.contains("meta.child_next_action=read_file:src/lib.rs"));
     }
 }
