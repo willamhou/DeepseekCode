@@ -2,7 +2,7 @@
 
 VS Code entrypoint for the `deepseek` CLI.
 
-The extension adds a `DeepseekCode` status bar action, editor title action, command palette commands, and editor context menu entries for common workflows.
+The extension adds a `DeepseekCode` Explorer view, status bar action, editor title action, command palette commands, and editor context menu entries for common workflows.
 
 ## Commands
 
@@ -12,6 +12,10 @@ The extension adds a `DeepseekCode` status bar action, editor title action, comm
 - `DeepseekCode: Explain Selection` sends the active file and selected text as task context
 - `DeepseekCode: Run Benchmark` runs `deepseek benchmark`
 - `DeepseekCode: Show Dogfood Report` runs `deepseek dogfood report --limit 10`
+
+## Explorer View
+
+The `DeepseekCode` view in the Explorer sidebar exposes the same core actions as clickable items, so common agent workflows are available without opening the command palette.
 
 ## Settings
 

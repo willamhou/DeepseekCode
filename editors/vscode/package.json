@@ -18,7 +18,8 @@
     "onCommand:deepseek.runTask",
     "onCommand:deepseek.explainSelection",
     "onCommand:deepseek.runBenchmark",
-    "onCommand:deepseek.showDogfoodReport"
+    "onCommand:deepseek.showDogfoodReport",
+    "onView:deepseek.actions"
   ],
   "main": "./extension.js",
   "contributes": {
@@ -70,6 +71,14 @@
         {
           "command": "deepseek.quickAction",
           "group": "navigation@90"
+        }
+      ]
+    },
+    "views": {
+      "explorer": [
+        {
+          "id": "deepseek.actions",
+          "name": "DeepseekCode"
         }
       ]
     },

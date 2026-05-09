@@ -16,11 +16,11 @@
 - fixture-backed benchmark
 - dogfood ledger / promotion / trend gate / category slices
 
-当前基线（2026-05-09 Phase 11+ bounded nested subagents 后复测）：
+当前基线（2026-05-09 Phase 11+ VS Code Explorer view 后复测）：
 
 - benchmark：`48/48`
 - 全量测试：`540 passed, 0 failed`
-- benchmark trend gate：`skipped (need at least 3 prior comparable runs, found 1)`，当前 `48` 条 case 的同数历史还在 warmup
+- benchmark trend gate：`skipped (need at least 3 prior comparable runs, found 2)`，当前 `48` 条 case 的同数历史还在 warmup
 - dogfood live gate：`pass (no new dogfood records since previous snapshot, runs=33)`
 - 当前已收掉的红点：
   - `fixture-pr-reproduce-fix-rust-cli-failing-mini` 已稳定为 `run_shell -> read_file -> apply_patch -> git_diff -> run_shell`
@@ -127,6 +127,10 @@
   - 新增 `DeepseekCode: Quick Action` quick-pick，可从一个入口启动 chat / task / selection explain / benchmark / dogfood report
   - 新增 editor title 和 editor context menu 入口，提高 explain selection / run task 的可发现性
   - extension manifest 为常用命令补齐 product icons，并继续保持无外部 npm dependency
+- Phase 11+ VS Code Explorer view：
+  - VS Code extension 新增 Explorer sidebar 里的 `DeepseekCode` view
+  - view 内以 clickable tree items 暴露 open chat / run task / explain selection / benchmark / dogfood report
+  - 仍保持 terminal-backed launcher 和无外部 npm dependency
 - Phase 11+ MCP config surface：
   - 新增 `deepseek mcp init|list|doctor`
   - 支持项目级 `.dscode/mcp.json` 与用户级 `~/.config/dscode/mcp.json`
@@ -176,7 +180,7 @@
 4. 收 `11f`：release / upgrade story 从“能安装”补到“能发布、能升级、能回滚”
 
 当前结果：Phase 11 主体与后续 baseline hardening / custom slash commands / workspace instructions /
-local hooks / config bootstrap / live coverage gate / benchmark asset reproducibility / IDE bootstrap / VS Code quick actions / MCP config surface / MCP stdio tool discovery / MCP manual tool call / MCP agent bridge / MCP call approval/allowlist policy / MCP HTTP JSON-RPC transport / MCP legacy SSE transport / opt-in MCP dynamic tool exposure / Python PR CI fixture thickening / Go PR CI reproduce fixture / ambiguous improvement planning guard / product gap planning guard / subagent edited-file handoff / bounded nested subagents 已收口，最新 benchmark 为 `48/48`，全量测试为 `540 passed, 0 failed`。当前 `48` 条 case 的 trend gate 仍在 warmup，live gate 继续通过。
+local hooks / config bootstrap / live coverage gate / benchmark asset reproducibility / IDE bootstrap / VS Code quick actions / VS Code Explorer view / MCP config surface / MCP stdio tool discovery / MCP manual tool call / MCP agent bridge / MCP call approval/allowlist policy / MCP HTTP JSON-RPC transport / MCP legacy SSE transport / opt-in MCP dynamic tool exposure / Python PR CI fixture thickening / Go PR CI reproduce fixture / ambiguous improvement planning guard / product gap planning guard / subagent edited-file handoff / bounded nested subagents 已收口，最新 benchmark 为 `48/48`，全量测试为 `540 passed, 0 failed`。当前 `48` 条 case 的 trend gate 仍在 warmup，live gate 继续通过。
 
 这说明 `DeepseekCode` 已经不是“演示级原型”，但仍明显低于 Claude Code / Codex 的
 产品完成度。差距不再是“有没有 planner / tool loop”，而是：
@@ -184,7 +188,7 @@ local hooks / config bootstrap / live coverage gate / benchmark asset reproducib
 1. 真实/外部 PR / CI / review live 样本不够厚
 2. open-ended / ambiguous task 的默认稳定性已有 first-turn planning guard，但仍依赖 heuristic
 3. subagent orchestration 已支持有上限的两层拆分，但仍是保守 merge-back
-4. IDE / 编辑器配套已有 VS Code command palette / status bar / quick action / context menu 的轻量入口，MCP/plugin 生态已有配置发现、stdio/HTTP/SSE `tools/list`、manual `tools/call`、generic agent bridge、bridge 级审批/allowlist 和 opt-in 动态 tool 注入初版，但完整 IDE agent 体验、完整 schema 注入、更完整 permission UX、plugin 生态和云端/外部任务面仍缺失
+4. IDE / 编辑器配套已有 VS Code command palette / Explorer view / status bar / quick action / context menu 的轻量入口，MCP/plugin 生态已有配置发现、stdio/HTTP/SSE `tools/list`、manual `tools/call`、generic agent bridge、bridge 级审批/allowlist 和 opt-in 动态 tool 注入初版，但完整 IDE agent 体验、完整 schema 注入、更完整 permission UX、plugin 生态和云端/外部任务面仍缺失
 5. live online-model 稳定性与外部 PR/CI 样本厚度还不足以宣称产品级
 
 ## 差距表
@@ -200,7 +204,7 @@ local hooks / config bootstrap / live coverage gate / benchmark asset reproducib
 | subagent | 已能 dispatch / merge-back，支持 child patch/diff touched files 回传与有上限的两层 nested dispatch | 更成熟的拆分、归并、去重、收敛 | 中 |
 | live 回归体系 | benchmark + dogfood 已闭环，且有关键 slice 覆盖下限 | 更厚的外部/在线 live baseline，且可阻断回归 | 小到中 |
 | 安装 / 分发 | install guide、version、completion、config init 已有 | 普通用户开箱即装即用 | 小到中 |
-| IDE / 编辑器配套 | VS Code terminal launcher + status bar / quick action / context menu | 统一的产品体验 | 中到大 |
+| IDE / 编辑器配套 | VS Code terminal launcher + Explorer view + status bar / quick action / context menu | 统一的产品体验 | 中 |
 | 默认产品完成度 | 强原型 | 可长期主用的产品级工具 | 大 |
 
 ## 目标

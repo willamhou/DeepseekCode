@@ -1759,6 +1759,20 @@
   - extension manifest 为命令补齐 product icons，并保持无外部 npm dependency
 - 当前边界仍明确：这仍是 terminal-backed launcher，不是完整 IDE agent sidebar / inline diff / diagnostics / chat panel；IDE/app/cloud surface 仍不是小差距
 
+**Phase 11+ VS Code Explorer view (`main`, 2026-05-09) — 已完成基础版**：
+- 延续 terminal-backed VS Code extension，本轮补一个常驻侧栏入口：
+  - Explorer sidebar 新增 `DeepseekCode` view
+  - view 内提供 open chat / run task / explain selection / benchmark / dogfood report clickable actions
+  - 保持无外部 npm dependency
+- 最新验证：
+  - `node --check editors/vscode/extension.js`
+  - `jq -c . editors/vscode/package.json`
+  - 全量测试：`540 passed, 0 failed`
+  - 默认 benchmark：`48/48`
+  - trend gate：`skipped (need at least 3 prior comparable runs, found 2)`，`48` 条 case 历史仍在 warmup
+  - live gate：`pass (no new dogfood records since previous snapshot, runs=33)`
+- 当前边界仍明确：这提升 IDE 可发现性，但仍不是完整 agent sidebar / inline diff / diagnostics / chat panel。
+
 **Phase 11+ MCP config surface (`main`, 2026-05-09) — 已完成基础版**：
 - 二次差距审计里 MCP/plugin ecosystem 仍是大差距；本轮先补最小可验证配置面，而不是一次性实现完整 MCP transport
 - 新增 `deepseek mcp`：

@@ -10,6 +10,7 @@ function activate(context) {
 
   context.subscriptions.push(
     status,
+    vscode.window.registerTreeDataProvider("deepseek.actions", new DeepseekActionsProvider()),
     vscode.commands.registerCommand("deepseek.quickAction", quickAction),
     vscode.commands.registerCommand("deepseek.openChat", openChat),
     vscode.commands.registerCommand("deepseek.runTask", runTask),
@@ -20,6 +21,54 @@ function activate(context) {
 }
 
 function deactivate() {}
+
+class DeepseekActionsProvider {
+  getTreeItem(item) {
+    return item;
+  }
+
+  getChildren() {
+    return [
+      actionItem(
+        "Open Chat",
+        "Start an interactive session",
+        "deepseek.openChat",
+        "comment-discussion",
+      ),
+      actionItem("Run Task", "Prompt for a workspace task", "deepseek.runTask", "terminal"),
+      actionItem(
+        "Explain Selection",
+        "Send active file and selection as context",
+        "deepseek.explainSelection",
+        "symbol-method",
+      ),
+      actionItem(
+        "Run Benchmark",
+        "Run the local benchmark suite",
+        "deepseek.runBenchmark",
+        "beaker",
+      ),
+      actionItem(
+        "Show Dogfood Report",
+        "Show recent dogfood runs",
+        "deepseek.showDogfoodReport",
+        "graph",
+      ),
+    ];
+  }
+}
+
+function actionItem(label, description, command, codicon) {
+  const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
+  item.description = description;
+  item.tooltip = description;
+  item.iconPath = new vscode.ThemeIcon(codicon);
+  item.command = {
+    command,
+    title: label,
+  };
+  return item;
+}
 
 function config() {
   return vscode.workspace.getConfiguration("deepseek");
