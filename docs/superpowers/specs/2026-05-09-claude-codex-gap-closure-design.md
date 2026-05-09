@@ -19,8 +19,8 @@
 当前基线（2026-05-09 Phase 11+ VS Code Explorer view 后复测）：
 
 - benchmark：`48/48`
-- 全量测试：`540 passed, 0 failed`
-- benchmark trend gate：`pass against 3 comparable runs`
+- 全量测试：`541 passed, 0 failed`
+- benchmark trend gate：`pass against 4 comparable runs`
 - dogfood live gate：`pass (no new dogfood records since previous snapshot, runs=33)`
 - 当前已收掉的红点：
   - `fixture-pr-reproduce-fix-rust-cli-failing-mini` 已稳定为 `run_shell -> read_file -> apply_patch -> git_diff -> run_shell`
@@ -29,6 +29,7 @@
   - benchmark snapshot 与 dogfood report 的 category 纠偏口径已统一
   - benchmark case expectation 失败现在会非零退出
   - dogfood live gate 会阻断上次 benchmark snapshot 后新增的 failed / stuck / manual live 记录
+  - dogfood replay 遇到 DNS / network-unreachable / curl 6/7/28 这类模型 transport 环境失败时不再写入 ledger，避免把 pre-agent 环境噪声记成 workflow failed
 - live dogfood 主要 category：
   - `pr_workflow`
   - `recovery`
@@ -88,6 +89,10 @@
   - 当 live dogfood snapshot 达到 `12` 条 run 后，普通 benchmark 还会要求关键 live slice 保持最小覆盖
   - 当前要求 `pr_workflow` / `recovery` / `write_validate` 各至少 `3` 条 run
   - 这避免“总量看起来健康，但关键 workflow 缺样本”的 snapshot 被误当成产品级 baseline
+- Phase 11+ dogfood environment transport guard：
+  - dogfood run / replay 在模型 transport 因 DNS、网络不可达、连接超时等环境问题失败时仍返回错误
+  - 但这类 pre-agent failure 不写入 dogfood ledger，也不会污染 live gate 的 failed / stuck / manual 增量
+  - 已用受限网络下的 PR workflow replay 验证：命令失败、ledger 维持 `33` 行、report 不被污染
 - Phase 11+ benchmark asset reproducibility / Go baseline：
   - 默认 benchmark manifest、example manifest 和 fixture corpus 已解除 ignore 并进入版本控制
   - 新增 `fixtures/go-write-mini`
@@ -180,7 +185,7 @@
 4. 收 `11f`：release / upgrade story 从“能安装”补到“能发布、能升级、能回滚”
 
 当前结果：Phase 11 主体与后续 baseline hardening / custom slash commands / workspace instructions /
-local hooks / config bootstrap / live coverage gate / benchmark asset reproducibility / IDE bootstrap / VS Code quick actions / VS Code Explorer view / MCP config surface / MCP stdio tool discovery / MCP manual tool call / MCP agent bridge / MCP call approval/allowlist policy / MCP HTTP JSON-RPC transport / MCP legacy SSE transport / opt-in MCP dynamic tool exposure / Python PR CI fixture thickening / Go PR CI reproduce fixture / ambiguous improvement planning guard / product gap planning guard / subagent edited-file handoff / bounded nested subagents 已收口，最新 benchmark 为 `48/48`，全量测试为 `540 passed, 0 failed`，trend gate 已恢复为 `pass against 3 comparable runs`，live gate 继续通过。
+local hooks / config bootstrap / live coverage gate / dogfood environment transport guard / benchmark asset reproducibility / IDE bootstrap / VS Code quick actions / VS Code Explorer view / MCP config surface / MCP stdio tool discovery / MCP manual tool call / MCP agent bridge / MCP call approval/allowlist policy / MCP HTTP JSON-RPC transport / MCP legacy SSE transport / opt-in MCP dynamic tool exposure / Python PR CI fixture thickening / Go PR CI reproduce fixture / ambiguous improvement planning guard / product gap planning guard / subagent edited-file handoff / bounded nested subagents 已收口，最新 benchmark 为 `48/48`，全量测试为 `541 passed, 0 failed`，trend gate 已恢复为 `pass against 4 comparable runs`，live gate 继续通过。
 
 这说明 `DeepseekCode` 已经不是“演示级原型”，但仍明显低于 Claude Code / Codex 的
 产品完成度。差距不再是“有没有 planner / tool loop”，而是：

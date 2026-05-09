@@ -1671,6 +1671,21 @@
   - 覆盖不足会让普通 benchmark 非零退出，仍可用 `--accept-live-baseline` 显式接受已排查的 snapshot
 - 这一步把 live gate 从“只挡坏结果”推进到“也挡关键 workflow 样本过薄”，避免 read-only 或单一 category 掩盖真实产品风险。
 
+**Phase 11+ dogfood environment transport guard (`main`, 2026-05-09) — 已完成**：
+- 继续积累 live PR/CI 样本时，受限网络下的 `dogfood replay-benchmark --category pr_workflow --limit 1` 暴露出一个 gate 噪声问题：
+  - 模型 API DNS failure 会在 agent 尚未执行任何工具前失败
+  - 旧逻辑会把这类环境失败写入 dogfood ledger，污染 live gate 的 `pr_workflow` failed 增量
+- dogfood run / replay 现在会识别 DNS、network unreachable、connection timeout、curl 6/7/28 这类 environment transport failure：
+  - 命令仍返回错误，避免误报任务成功
+  - 但不追加 dogfood ledger 记录，report 保持不变
+- 最新验证：
+  - 同一条受限网络 replay 返回错误，但输出 `ledger: ... (skipped: environment transport failure)`
+  - `.dscode/dogfood/ledger.jsonl` 维持 `33` 行
+  - 全量测试：`541 passed, 0 failed`
+  - 默认 benchmark：`48/48`
+  - trend gate：`pass against 4 comparable runs`
+  - live gate：`pass (no new dogfood records since previous snapshot, runs=33)`
+
 **Phase 11+ benchmark asset reproducibility / Go baseline (`main`, 2026-05-09) — 已完成**：
 - 审计发现默认 `.dscode/benchmarks.txt` 与 fixture corpus 仍被 ignore；这会导致 fresh checkout 缺少可复现的默认 benchmark，和 roadmap/spec 中“fixture-backed benchmark”的描述不一致
 - `.gitignore` 现在只继续忽略生成物：

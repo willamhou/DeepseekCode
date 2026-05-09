@@ -71,6 +71,22 @@ fn run_live_task(config: &crate::config::types::AppConfig, args: DogfoodRunArgs)
     let timestamp_secs = unix_now_secs()?;
     let ledger_path = config.workspace.dogfood_ledger_path();
 
+    if let Err(error) = &run_result {
+        if dogfood_error_is_environment_transport_failure(error.as_ref()) {
+            println!(
+                "ledger: {} (skipped: environment transport failure)",
+                ledger_path.display()
+            );
+            println!(
+                "dogfood record skipped: model transport failed before agent execution; report unchanged"
+            );
+            return match run_result {
+                Ok(_) => unreachable!("checked Err above"),
+                Err(error) => Err(error),
+            };
+        }
+    }
+
     let record = match &run_result {
         Ok(result) => DogfoodRecord::from_result(
             timestamp_secs,
@@ -119,6 +135,23 @@ fn run_live_task(config: &crate::config::types::AppConfig, args: DogfoodRunArgs)
         Ok(_) => Ok(()),
         Err(error) => Err(error),
     }
+}
+
+fn dogfood_error_is_environment_transport_failure(
+    error: &(dyn std::error::Error + 'static),
+) -> bool {
+    let message = error.to_string().to_lowercase();
+    [
+        "could not resolve host",
+        "temporary failure in name resolution",
+        "network is unreachable",
+        "connection timed out",
+        "curl: (6)",
+        "curl: (7)",
+        "curl: (28)",
+    ]
+    .iter()
+    .any(|marker| message.contains(marker))
 }
 
 fn resolve_run_args(
@@ -1908,6 +1941,26 @@ mod tests {
         assert!(matches!(
             derive_default_outcome(1, 1, false, true),
             DogfoodOutcome::Success
+        ));
+    }
+
+    #[test]
+    fn dogfood_error_environment_transport_detection_matches_network_failures() {
+        let dns_error = app_error(
+            "deepseek openai stream failed (exit Some(6)): curl: (6) Could not resolve host: api.deepseek.com",
+        );
+        assert!(dogfood_error_is_environment_transport_failure(
+            dns_error.as_ref()
+        ));
+
+        let timeout_error = app_error("curl: (28) Connection timed out after 30000 milliseconds");
+        assert!(dogfood_error_is_environment_transport_failure(
+            timeout_error.as_ref()
+        ));
+
+        let agent_error = app_error("apply_patch failed: failed hunk");
+        assert!(!dogfood_error_is_environment_transport_failure(
+            agent_error.as_ref()
         ));
     }
 
