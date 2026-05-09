@@ -87,10 +87,10 @@ hooks.user_dir = "~/.config/dscode/hooks"
 hooks.timeout_ms = 5000
 
 # -----------------------------------------------------------------------------
-# mcp: MCP server discovery (config validation/listing + stdio/http tools/list/call)
+# mcp: MCP server discovery (config validation/listing + stdio/http/sse tools/list/call)
 # -----------------------------------------------------------------------------
 
-# 当前版本会读取并校验 MCP server 配置，可手动对 stdio 或 HTTP server 执行 tools/list / tools/call。
+# 当前版本会读取并校验 MCP server 配置，可手动对 stdio、HTTP 或 SSE server 执行 tools/list / tools/call。
 # 当 project/user MCP config 文件存在时，agent registry 会暴露通用 mcp_list_tools / mcp_call bridge。
 # agent bridge 的 mcp_call 默认受 approval.require_mcp_confirmation 和 approval.mcp_call_allowlist 保护。
 # 还不会把每个远端 MCP tool 动态注入为独立 agent tool。

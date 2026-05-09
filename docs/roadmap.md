@@ -1757,7 +1757,15 @@
   - 会续传服务端返回的 `Mcp-Session-Id`
   - HTTP response 如果是 `text/event-stream` 形态，会读取 `data:` 中的 JSON-RPC response
 - agent bridge 的 `mcp_list_tools` / `mcp_call` 复用同一 summary 函数，因此 HTTP MCP server 也进入 agent 可用路径，并继续受 confirmation / allowlist 保护
-- 当前边界仍明确：旧式 `sse` transport 还没有实现；远端 MCP tools 还不是动态独立 agent tools，permission UX 也仍是 bridge 级别
+- 当前边界仍明确：旧式 `sse` transport 已在下一轮补上；远端 MCP tools 还不是动态独立 agent tools，permission UX 也仍是 bridge 级别
+
+**Phase 11+ MCP legacy SSE transport (`main`, 2026-05-09) — 已完成基础版**：
+- 延续 HTTP MCP transport，本轮把旧式 `sse` server 从“配置可识别”推进到可实际调用：
+  - `deepseek mcp tools [server]` 可打开 SSE event stream，读取 `endpoint` 事件，然后向该 endpoint POST `initialize` / `notifications/initialized` / `tools/list`
+  - `deepseek mcp call <server> <tool> [json-args]` 可通过同一 SSE session 执行 `tools/call`
+  - SSE stream 上的 JSON-RPC response 会按 request id 匹配，并跳过 endpoint / heartbeat / 非目标 response
+- agent bridge 的 `mcp_list_tools` / `mcp_call` 复用同一路径，因此 SSE MCP server 也进入 agent 可用路径，并继续受 confirmation / allowlist 保护
+- 当前边界仍明确：远端 MCP tools 还不是动态独立 agent tools，permission UX 也仍是 bridge 级别；完整 plugin ecosystem 和云端/外部任务面仍未接入
 
 ## 最近里程碑
 

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
@@ -13,6 +13,7 @@ use crate::util::json::{
     json_as_array, json_as_object, json_as_string, json_value_to_string, parse_json_value,
     parse_root_object, JsonValue,
 };
+use crate::util::sse::SseFrame;
 
 const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 const MCP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -133,9 +134,9 @@ pub(crate) fn list_remote_tools_summary(
 
     output.push_str("MCP remote tools:\n");
     for server in targets {
-        if !matches!(server.transport.as_str(), "stdio" | "http") {
+        if !matches!(server.transport.as_str(), "stdio" | "http" | "sse") {
             let message = format!(
-                "mcp tools currently supports stdio/http servers only; `{}` uses {}",
+                "mcp tools currently supports stdio/http/sse servers only; `{}` uses {}",
                 server.name, server.transport
             );
             if requested_server.is_some() {
@@ -152,6 +153,7 @@ pub(crate) fn list_remote_tools_summary(
         let tools = match server.transport.as_str() {
             "stdio" => list_stdio_tools(server)?,
             "http" => list_http_tools(server)?,
+            "sse" => list_sse_tools(server)?,
             _ => unreachable!("transport checked above"),
         };
         output.push_str(&format!(
@@ -208,9 +210,9 @@ pub(crate) fn call_remote_tool_summary(
     push_sources(&mut output, &inventory);
     let targets = select_tool_targets(&inventory, Some(server_name))?;
     let server = targets[0];
-    if !matches!(server.transport.as_str(), "stdio" | "http") {
+    if !matches!(server.transport.as_str(), "stdio" | "http" | "sse") {
         return Err(app_error(format!(
-            "mcp call currently supports stdio/http servers only; `{}` uses {}",
+            "mcp call currently supports stdio/http/sse servers only; `{}` uses {}",
             server.name, server.transport
         )));
     }
@@ -218,6 +220,7 @@ pub(crate) fn call_remote_tool_summary(
     let result = match server.transport.as_str() {
         "stdio" => call_stdio_tool(server, tool_name, &arguments)?,
         "http" => call_http_tool(server, tool_name, &arguments)?,
+        "sse" => call_sse_tool(server, tool_name, &arguments)?,
         _ => unreachable!("transport checked above"),
     };
     output.push_str("MCP tool call:\n");
@@ -431,10 +434,334 @@ fn call_http_tool(
     parse_tool_call_result(&root)
 }
 
+fn list_sse_tools(server: &McpServer) -> AppResult<Vec<McpRemoteTool>> {
+    let mut session = open_sse_session(server)?;
+    post_sse_json_rpc(server, &session.endpoint, &build_initialize_request(1))?;
+    let response = read_sse_json_rpc_response(&session.receiver, 1, MCP_RESPONSE_TIMEOUT).map_err(
+        |error| {
+            app_error(format!(
+                "MCP server `{}` initialize failed: {error}",
+                server.name
+            ))
+        },
+    )?;
+    validate_json_rpc_response(response, 1)?;
+    post_sse_json_rpc(server, &session.endpoint, build_initialized_notification())?;
+
+    let mut request_id = 2u64;
+    let mut cursor: Option<String> = None;
+    let mut tools = Vec::new();
+    loop {
+        post_sse_json_rpc(
+            server,
+            &session.endpoint,
+            &build_tools_list_request(request_id, cursor.as_deref()),
+        )?;
+        let root = read_sse_json_rpc_response(&session.receiver, request_id, MCP_RESPONSE_TIMEOUT)
+            .map_err(|error| {
+                app_error(format!(
+                    "MCP server `{}` tools/list failed: {error}",
+                    server.name
+                ))
+            })?;
+        let root = validate_json_rpc_response(root, request_id)?;
+        let (mut page_tools, next_cursor) = parse_tools_list_result(&root)?;
+        tools.append(&mut page_tools);
+        let Some(next_cursor) = next_cursor else {
+            break;
+        };
+        cursor = Some(next_cursor);
+        request_id += 1;
+    }
+
+    session.close();
+    Ok(tools)
+}
+
+fn call_sse_tool(
+    server: &McpServer,
+    tool_name: &str,
+    arguments: &BTreeMap<String, JsonValue>,
+) -> AppResult<McpToolCallResult> {
+    let mut session = open_sse_session(server)?;
+    post_sse_json_rpc(server, &session.endpoint, &build_initialize_request(1))?;
+    let response = read_sse_json_rpc_response(&session.receiver, 1, MCP_RESPONSE_TIMEOUT).map_err(
+        |error| {
+            app_error(format!(
+                "MCP server `{}` initialize failed: {error}",
+                server.name
+            ))
+        },
+    )?;
+    validate_json_rpc_response(response, 1)?;
+    post_sse_json_rpc(server, &session.endpoint, build_initialized_notification())?;
+    post_sse_json_rpc(
+        server,
+        &session.endpoint,
+        &build_tools_call_request(2, tool_name, arguments),
+    )?;
+    let root = read_sse_json_rpc_response(&session.receiver, 2, MCP_RESPONSE_TIMEOUT).map_err(
+        |error| {
+            app_error(format!(
+                "MCP server `{}` tools/call failed: {error}",
+                server.name
+            ))
+        },
+    )?;
+    let root = validate_json_rpc_response(root, 2)?;
+    let result = parse_tool_call_result(&root);
+    session.close();
+    result
+}
+
 #[derive(Debug)]
 struct HttpJsonRpcResponse {
     body: String,
     session_id: Option<String>,
+}
+
+struct SseSession {
+    child: Child,
+    receiver: Receiver<Result<SseFrame, String>>,
+    endpoint: String,
+}
+
+impl SseSession {
+    fn close(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+impl Drop for SseSession {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+fn open_sse_session(server: &McpServer) -> AppResult<SseSession> {
+    let url = server
+        .url
+        .as_deref()
+        .ok_or_else(|| app_error(format!("sse MCP server `{}` has no url", server.name)))?;
+    let mut args = vec![
+        "-sS".to_string(),
+        "-N".to_string(),
+        "--max-time".to_string(),
+        MCP_RESPONSE_TIMEOUT.as_secs().to_string(),
+        "-H".to_string(),
+        "Accept: text/event-stream".to_string(),
+        "-H".to_string(),
+        format!("MCP-Protocol-Version: {MCP_PROTOCOL_VERSION}"),
+    ];
+    for (key, value) in &server.headers {
+        args.push("-H".to_string());
+        args.push(format!("{key}: {value}"));
+    }
+    args.push(url.to_string());
+
+    let mut child = Command::new("curl")
+        .args(&args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                app_error("curl not found in PATH; install curl to use SSE MCP servers")
+            } else {
+                app_error(format!(
+                    "failed to start SSE stream for MCP server `{}`: {error}",
+                    server.name
+                ))
+            }
+        })?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| app_error("failed to open SSE MCP stream stdout"))?;
+    let receiver = spawn_sse_frame_reader(stdout);
+    let endpoint = match read_sse_endpoint(url, &receiver, MCP_RESPONSE_TIMEOUT) {
+        Ok(endpoint) => endpoint,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(app_error(format!(
+                "MCP server `{}` SSE endpoint discovery failed: {error}",
+                server.name
+            )));
+        }
+    };
+
+    Ok(SseSession {
+        child,
+        receiver,
+        endpoint,
+    })
+}
+
+fn spawn_sse_frame_reader(stdout: std::process::ChildStdout) -> Receiver<Result<SseFrame, String>> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        loop {
+            match crate::util::sse::read_frame(&mut reader) {
+                Ok(Some(frame)) => {
+                    if sender.send(Ok(frame)).is_err() {
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    let _ = sender.send(Err(error.to_string()));
+                    break;
+                }
+            }
+        }
+    });
+    receiver
+}
+
+fn read_sse_endpoint(
+    base_url: &str,
+    receiver: &Receiver<Result<SseFrame, String>>,
+    timeout: Duration,
+) -> AppResult<String> {
+    let frame = read_sse_frame(receiver, timeout)?;
+    if frame.event.as_deref() != Some("endpoint") {
+        return Err(app_error(format!(
+            "expected SSE endpoint event, got {}",
+            frame.event.as_deref().unwrap_or("message")
+        )));
+    }
+    resolve_sse_endpoint_url(base_url, frame.data.trim())
+}
+
+fn resolve_sse_endpoint_url(base_url: &str, endpoint: &str) -> AppResult<String> {
+    let endpoint = endpoint.trim();
+    if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+        return Ok(endpoint.to_string());
+    }
+    if endpoint.is_empty() {
+        return Err(app_error("SSE endpoint event contained an empty endpoint"));
+    }
+
+    if endpoint.starts_with('/') {
+        let scheme_end = base_url
+            .find("://")
+            .ok_or_else(|| app_error(format!("invalid SSE base URL: {base_url}")))?;
+        let rest = &base_url[scheme_end + 3..];
+        let origin_end = rest
+            .find('/')
+            .map(|index| scheme_end + 3 + index)
+            .unwrap_or(base_url.len());
+        return Ok(format!("{}{}", &base_url[..origin_end], endpoint));
+    }
+
+    let base = base_url.trim_end_matches('/');
+    let parent = base.rsplit_once('/').map(|(head, _)| head).unwrap_or(base);
+    Ok(format!("{parent}/{endpoint}"))
+}
+
+fn post_sse_json_rpc(server: &McpServer, endpoint: &str, body: &str) -> AppResult<()> {
+    let mut args = vec![
+        "-sS".to_string(),
+        "--max-time".to_string(),
+        MCP_RESPONSE_TIMEOUT.as_secs().to_string(),
+        "-X".to_string(),
+        "POST".to_string(),
+        "-H".to_string(),
+        "Content-Type: application/json".to_string(),
+        "-H".to_string(),
+        "Accept: application/json, text/event-stream".to_string(),
+        "-H".to_string(),
+        format!("MCP-Protocol-Version: {MCP_PROTOCOL_VERSION}"),
+    ];
+    for (key, value) in &server.headers {
+        args.push("-H".to_string());
+        args.push(format!("{key}: {value}"));
+    }
+    args.extend([
+        "--data-binary".to_string(),
+        body.to_string(),
+        "-w".to_string(),
+        "\n__DSCODE_HTTP_STATUS:%{http_code}".to_string(),
+        endpoint.to_string(),
+    ]);
+
+    let output = Command::new("curl").args(&args).output().map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            app_error("curl not found in PATH; install curl to use SSE MCP servers")
+        } else {
+            app_error(format!(
+                "failed to invoke curl for SSE MCP server `{}`: {error}",
+                server.name
+            ))
+        }
+    })?;
+    if !output.status.success() {
+        return Err(app_error(format!(
+            "curl failed for SSE MCP server `{}`: {}",
+            server.name,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let (raw_response, status) = split_http_status(&stdout)?;
+    if !(200..=299).contains(&status) {
+        return Err(app_error(format!(
+            "SSE MCP server `{}` returned status {status}: {}",
+            server.name,
+            compact_inline(raw_response.trim(), 220)
+        )));
+    }
+    Ok(())
+}
+
+fn read_sse_json_rpc_response(
+    receiver: &Receiver<Result<SseFrame, String>>,
+    expected_id: u64,
+    timeout: Duration,
+) -> AppResult<BTreeMap<String, JsonValue>> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(app_error(format!(
+                "timed out waiting for SSE JSON-RPC response id {expected_id}"
+            )));
+        }
+        let frame = read_sse_frame(receiver, deadline.saturating_duration_since(now))?;
+        if frame.event.as_deref() == Some("endpoint") {
+            continue;
+        }
+        let data = frame.data.trim();
+        if data.is_empty() || data == "[DONE]" {
+            continue;
+        }
+        let root = parse_root_object(data).map_err(|error| {
+            app_error(format!(
+                "SSE MCP server returned invalid JSON-RPC data `{}`: {error}",
+                compact_inline(data, 160)
+            ))
+        })?;
+        if response_id_matches(&root, expected_id) {
+            return Ok(root);
+        }
+    }
+}
+
+fn read_sse_frame(
+    receiver: &Receiver<Result<SseFrame, String>>,
+    timeout: Duration,
+) -> AppResult<SseFrame> {
+    match receiver.recv_timeout(timeout) {
+        Ok(Ok(frame)) => Ok(frame),
+        Ok(Err(error)) => Err(app_error(format!("failed to read SSE frame: {error}"))),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(app_error("timed out waiting for SSE frame")),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err(app_error("SSE stream closed before expected frame"))
+        }
+    }
 }
 
 fn post_http_json_rpc(
@@ -1281,6 +1608,50 @@ mod tests {
         (url, handle)
     }
 
+    fn start_fake_sse_mcp(
+        final_method: &'static str,
+        final_response: &'static str,
+    ) -> (String, JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/sse", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let (mut sse_stream, _) = listener.accept().unwrap();
+            let request = read_http_request(&mut sse_stream);
+            assert!(request.starts_with("GET /sse "));
+            assert!(request
+                .to_ascii_lowercase()
+                .contains("accept: text/event-stream"));
+            write_sse_response_start(&mut sse_stream);
+            write_sse_event(&mut sse_stream, Some("endpoint"), "/messages");
+
+            for step in 0..3 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request = read_http_request(&mut stream);
+                match step {
+                    0 => {
+                        assert!(request.contains(r#""method":"initialize""#));
+                        write_http_response(&mut stream, 202, &[], "");
+                        write_sse_event(
+                            &mut sse_stream,
+                            None,
+                            r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"fake","version":"1"}}}"#,
+                        );
+                    }
+                    1 => {
+                        assert!(request.contains(r#""method":"notifications/initialized""#));
+                        write_http_response(&mut stream, 202, &[], "");
+                    }
+                    _ => {
+                        assert!(request.contains(&format!(r#""method":"{final_method}""#)));
+                        write_http_response(&mut stream, 202, &[], "");
+                        write_sse_event(&mut sse_stream, None, final_response);
+                    }
+                }
+            }
+        });
+        (url, handle)
+    }
+
     fn read_http_request(stream: &mut TcpStream) -> String {
         let mut buffer = Vec::new();
         let mut chunk = [0u8; 512];
@@ -1332,6 +1703,26 @@ mod tests {
         response.push_str("\r\n");
         response.push_str(body);
         stream.write_all(response.as_bytes()).unwrap();
+        stream.flush().unwrap();
+    }
+
+    fn write_sse_response_start(stream: &mut TcpStream) {
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n",
+            )
+            .unwrap();
+        stream.flush().unwrap();
+    }
+
+    fn write_sse_event(stream: &mut TcpStream, event: Option<&str>, data: &str) {
+        if let Some(event) = event {
+            writeln!(stream, "event: {event}").unwrap();
+        }
+        for line in data.lines() {
+            writeln!(stream, "data: {line}").unwrap();
+        }
+        writeln!(stream).unwrap();
         stream.flush().unwrap();
     }
 
@@ -1532,6 +1923,61 @@ mod tests {
 
         handle.join().unwrap();
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn list_remote_tools_summary_supports_sse_transport() {
+        let (url, handle) = start_fake_sse_mcp(
+            "tools/list",
+            r#"{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"echo","description":"Echo input","inputSchema":{"type":"object"}}]}}"#,
+        );
+        let root = temp_root("sse-tools");
+        let config =
+            config_with_mcp_server(&root, &format!(r#"{{"transport":"sse","url":"{url}"}}"#));
+
+        let summary = list_remote_tools_summary(&config, Some("remote")).unwrap();
+        assert!(summary.contains("- remote [sse]: 1 tool(s)"));
+        assert!(summary.contains("echo"));
+
+        handle.join().unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn call_remote_tool_summary_supports_sse_transport() {
+        let (url, handle) = start_fake_sse_mcp(
+            "tools/call",
+            r#"{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"echo: hello"}],"structuredContent":{"ok":true},"isError":false}}"#,
+        );
+        let root = temp_root("sse-call");
+        let config =
+            config_with_mcp_server(&root, &format!(r#"{{"transport":"sse","url":"{url}"}}"#));
+
+        let summary =
+            call_remote_tool_summary(&config, "remote", "echo", Some(r#"{"text":"hello"}"#))
+                .unwrap();
+        assert!(summary.contains("- remote/echo [sse]: ok"));
+        assert!(summary.contains("echo: hello"));
+        assert!(summary.contains(r#"structuredContent: {"ok":true}"#));
+
+        handle.join().unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolve_sse_endpoint_url_handles_relative_and_absolute_endpoints() {
+        assert_eq!(
+            resolve_sse_endpoint_url("http://127.0.0.1:1234/sse", "/messages").unwrap(),
+            "http://127.0.0.1:1234/messages"
+        );
+        assert_eq!(
+            resolve_sse_endpoint_url("http://127.0.0.1:1234/mcp/sse", "messages").unwrap(),
+            "http://127.0.0.1:1234/mcp/messages"
+        );
+        assert_eq!(
+            resolve_sse_endpoint_url("http://127.0.0.1:1234/sse", "http://localhost/post").unwrap(),
+            "http://localhost/post"
+        );
     }
 
     #[test]
