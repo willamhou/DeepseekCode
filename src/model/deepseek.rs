@@ -726,6 +726,9 @@ fn build_user_prompt(input: &ModelRequest) -> String {
         "Available tools: {}\n",
         input.available_tools.join(", ")
     ));
+    if let Some(next_action) = next_required_action_for_prompt(input) {
+        prompt.push_str(&format!("Next required action: {next_action}\n"));
+    }
     if !input.todos.is_empty() {
         prompt.push_str("Todos:\n");
         prompt.push_str(&render_todos_for_prompt(&input.todos));
@@ -776,6 +779,33 @@ fn build_user_prompt(input: &ModelRequest) -> String {
         }
     }
     prompt
+}
+
+fn next_required_action_for_prompt(input: &ModelRequest) -> Option<String> {
+    let command = input.suggested_test_command.as_deref()?;
+    if !input.available_tools.iter().any(|tool| tool == "run_shell") {
+        return None;
+    }
+
+    let last_patch_index = input.observations.iter().rposition(|observation| {
+        observation.tool_name == "apply_patch" && !observation.is_failure()
+    })?;
+    let shell_after_patch = input.observations[last_patch_index + 1..]
+        .iter()
+        .find(|observation| observation.tool_name == "run_shell");
+
+    match shell_after_patch {
+        Some(observation)
+            if observation.summary.contains("meta.command_kind=test")
+                && observation.summary.contains("meta.result=ok") =>
+        {
+            Some("validation already passed; finish with a concise summary and do not call more tools".to_string())
+        }
+        Some(_) => None,
+        None => Some(format!(
+            "call run_shell with command `{command}` now; do not call read_file or git_diff before validation"
+        )),
+    }
 }
 
 fn render_todos_for_prompt(todos: &[crate::core::todos::Todo]) -> String {
@@ -2656,6 +2686,46 @@ mod tests {
             !prompt.contains("Todos:"),
             "expected no Todos: section: {prompt}"
         );
+    }
+
+    #[test]
+    fn build_user_prompt_requires_validation_after_successful_patch() {
+        let mut req = empty_request_with_todos(Vec::new());
+        req.suggested_test_command = Some("cargo test".to_string());
+        req.available_tools = vec!["run_shell".to_string(), "read_file".to_string()];
+        req.observations = vec![
+            Observation::ok(
+                "apply_patch",
+                "Updated src/lib.rs using single replacement mode.",
+            ),
+            Observation::ok("read_file", "1 pub fn add(a: i32, b: i32) -> i32 {"),
+        ];
+        let prompt = super::build_user_prompt(&req);
+        assert!(
+            prompt.contains("Next required action: call run_shell with command `cargo test` now")
+        );
+        assert!(prompt.contains("do not call read_file or git_diff before validation"));
+    }
+
+    #[test]
+    fn build_user_prompt_requires_finish_after_successful_validation() {
+        let mut req = empty_request_with_todos(Vec::new());
+        req.suggested_test_command = Some("cargo test".to_string());
+        req.available_tools = vec!["run_shell".to_string(), "read_file".to_string()];
+        req.observations = vec![
+            Observation::ok(
+                "apply_patch",
+                "Updated src/lib.rs using single replacement mode.",
+            ),
+            Observation::ok(
+                "run_shell",
+                "meta.command_kind=test\nmeta.exit_code=0\nmeta.result=ok\nexit_code: 0",
+            ),
+        ];
+        let prompt = super::build_user_prompt(&req);
+        assert!(prompt.contains(
+            "Next required action: validation already passed; finish with a concise summary"
+        ));
     }
 
     #[test]

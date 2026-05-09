@@ -519,7 +519,8 @@ impl DogfoodRecord {
                 repeated_call_failures,
             );
         let recovered_validation_success = args.outcome.is_none()
-            && is_recovered_validation_success(&result.tool_events, repeated_call_failures);
+            && (is_recovered_validation_success(&result.tool_events)
+                || is_successful_write_validation_result(&result.tool_events));
         let outcome = args.outcome.unwrap_or_else(|| {
             derive_default_outcome(
                 failed_tool_calls,
@@ -801,10 +802,10 @@ fn derive_default_outcome(
     diagnostic_expected_failure: bool,
     recovered_validation_success: bool,
 ) -> DogfoodOutcome {
-    if repeated_call_failures > 0 {
-        DogfoodOutcome::Stuck
-    } else if diagnostic_expected_failure || recovered_validation_success {
+    if diagnostic_expected_failure || recovered_validation_success {
         DogfoodOutcome::Success
+    } else if repeated_call_failures > 0 {
+        DogfoodOutcome::Stuck
     } else if failed_tool_calls > 0 {
         DogfoodOutcome::Failed
     } else {
@@ -844,14 +845,7 @@ fn is_expected_failure_diagnosis_result(
     saw_expected_failed_command && saw_follow_up_diagnostic
 }
 
-fn is_recovered_validation_success(
-    events: &[crate::core::loop_runtime::ToolEvent],
-    repeated_call_failures: u64,
-) -> bool {
-    if repeated_call_failures > 0 {
-        return false;
-    }
-
+fn is_recovered_validation_success(events: &[crate::core::loop_runtime::ToolEvent]) -> bool {
     let mut saw_failed_validation = false;
     let mut saw_success_after_failure = false;
     for event in events {
@@ -881,6 +875,31 @@ fn is_recovered_validation_success(
     }
 
     saw_success_after_failure
+}
+
+fn is_successful_write_validation_result(events: &[crate::core::loop_runtime::ToolEvent]) -> bool {
+    let mut saw_successful_patch = false;
+    for event in events {
+        if event.tool_name == "apply_patch" && matches!(event.status, ObservationStatus::Ok) {
+            saw_successful_patch = true;
+            continue;
+        }
+        if !saw_successful_patch || event.tool_name != "run_shell" {
+            continue;
+        }
+        let is_test = event
+            .output
+            .lines()
+            .any(|line| line.trim() == "meta.command_kind=test");
+        let is_ok = event
+            .output
+            .lines()
+            .any(|line| line.trim() == "meta.result=ok");
+        if is_test && is_ok {
+            return true;
+        }
+    }
+    false
 }
 
 fn tool_event_counts_as_failed(event: &crate::core::loop_runtime::ToolEvent) -> bool {
@@ -1845,7 +1864,7 @@ mod tests {
     #[test]
     fn derive_default_outcome_prefers_stuck_over_failed() {
         assert!(matches!(
-            derive_default_outcome(1, 1, false, true),
+            derive_default_outcome(1, 1, false, false),
             DogfoodOutcome::Stuck
         ));
         assert!(matches!(
@@ -1870,6 +1889,10 @@ mod tests {
     fn derive_default_outcome_treats_recovered_validation_as_success() {
         assert!(matches!(
             derive_default_outcome(1, 0, false, true),
+            DogfoodOutcome::Success
+        ));
+        assert!(matches!(
+            derive_default_outcome(1, 1, false, true),
             DogfoodOutcome::Success
         ));
     }
@@ -2431,6 +2454,67 @@ mod tests {
         assert_eq!(record.failed_tool_calls, 1);
         assert!(matches!(record.outcome, DogfoodOutcome::Success));
         assert_eq!(record.benchmark_category.as_deref(), Some("write_validate"));
+    }
+
+    #[test]
+    fn from_result_treats_validated_patch_as_success_after_repeated_read_recovery() {
+        let result = RunResult {
+            final_message: "tests pass".to_string(),
+            tool_events: vec![
+                ToolEvent {
+                    tool_name: "read_file".to_string(),
+                    input: BTreeMap::new(),
+                    output: "1 pub fn add(a: i32, b: i32) -> i32 {".to_string(),
+                    status: ObservationStatus::Ok,
+                },
+                ToolEvent {
+                    tool_name: "read_file".to_string(),
+                    input: BTreeMap::new(),
+                    output: "repeated identical tool call detected".to_string(),
+                    status: ObservationStatus::Failed,
+                },
+                ToolEvent {
+                    tool_name: "apply_patch".to_string(),
+                    input: BTreeMap::new(),
+                    output: "Updated src/lib.rs using single replacement mode.".to_string(),
+                    status: ObservationStatus::Ok,
+                },
+                ToolEvent {
+                    tool_name: "run_shell".to_string(),
+                    input: BTreeMap::new(),
+                    output: "meta.command_kind=test\nmeta.exit_code=0\nmeta.result=ok".to_string(),
+                    status: ObservationStatus::Ok,
+                },
+            ],
+            usage: TokenUsage::default(),
+        };
+        let args = DogfoodRunArgs {
+            task: "replace `a - b` with `a + b` in src/lib.rs and validate with cargo test"
+                .to_string(),
+            from_benchmark: None,
+            benchmark_manifest: None,
+            skill: None,
+            budget: Some(8),
+            workdir: None,
+            isolate_workdir: false,
+            outcome: None,
+            manual_intervention: false,
+            benchmark_gate: false,
+            notes: None,
+        };
+        let record = DogfoodRecord::from_result(
+            1,
+            10,
+            "deepseek-chat".to_string(),
+            ".".to_string(),
+            8,
+            &args,
+            false,
+            &result,
+        );
+        assert_eq!(record.failed_tool_calls, 1);
+        assert_eq!(record.repeated_call_failures, 1);
+        assert!(matches!(record.outcome, DogfoodOutcome::Success));
     }
 
     #[test]
