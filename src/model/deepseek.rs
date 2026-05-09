@@ -83,6 +83,7 @@ impl DeepSeekClient {
                 "\"stream\":true,",
                 "\"stream_options\":{{\"include_usage\":true}},",
                 "\"tool_choice\":\"auto\",",
+                "\"parallel_tool_calls\":false,",
                 "\"tools\":{},",
                 "\"messages\":[",
                 "{{\"role\":\"system\",\"content\":\"{}\"}},",
@@ -1924,15 +1925,13 @@ fn parse_openai_stream_inner<R: BufRead>(
                         let Some(call_obj) = json_as_object(call) else {
                             continue;
                         };
-                        // OpenAI streams tool calls indexed by `index`. We support exactly one
-                        // tool call per turn; any other distinct index is an error.
+                        // OpenAI streams tool calls indexed by `index`. The loop executes one
+                        // tool call per turn; if a gateway ignores `parallel_tool_calls:false`,
+                        // keep the first call and let the next turn continue from its result.
                         let observed_index = call_obj.get("index").and_then(json_as_u64);
                         match (tool_assembly.as_mut(), observed_index) {
                             (Some(existing), Some(idx)) if existing.index != idx => {
-                                return Err(tool_failure(format!(
-                                    "openai stream emitted multiple parallel tool calls (indices {} and {}); only one is supported per turn",
-                                    existing.index, idx
-                                )));
+                                continue;
                             }
                             (Some(_), _) => {}
                             (None, _) => {
@@ -2754,12 +2753,18 @@ mod tests {
         // still trips a follow-up safety check below.
         let source = include_str!("deepseek.rs");
         let openai_lit = r#""\"tool_choice\":\"auto\","#;
+        let openai_parallel_lit = r#""\"parallel_tool_calls\":false,"#;
         let anthropic_lit = r#""\"tool_choice\":{{\"type\":\"auto\"}},"#;
         let openai_count = source.matches(openai_lit).count();
+        let openai_parallel_count = source.matches(openai_parallel_lit).count();
         let anthropic_count = source.matches(anthropic_lit).count();
         assert!(
             openai_count >= 2,
             "OpenAI body must include tool_choice auto (count={openai_count})"
+        );
+        assert!(
+            openai_parallel_count >= 2,
+            "OpenAI body must disable parallel tool calls (count={openai_parallel_count})"
         );
         assert!(
             anthropic_count >= 2,
@@ -4972,8 +4977,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_openai_stream_errors_on_parallel_tool_calls() {
-        // Two tool calls at distinct indices in the same stream — must error loudly.
+    fn parse_openai_stream_keeps_first_parallel_tool_call() {
+        // Some OpenAI-compatible gateways may ignore `parallel_tool_calls:false`.
+        // Execute the first call and ignore later same-turn calls so the loop can
+        // continue serially on the next model turn.
         let body = concat!(
             "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"a\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"a.rs\\\"}\"}}]},\"finish_reason\":null}]}\n\n",
             "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"b\",\"type\":\"function\",\"function\":{\"name\":\"git_diff\",\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\n",
@@ -4982,13 +4989,14 @@ mod tests {
         );
         let mut cur = Cursor::new(body.as_bytes().to_vec());
         let mut events = NoopStreamEvents;
-        let result = super::parse_openai_stream(&mut cur, &mut events);
-        let err = result.unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("multiple parallel tool calls"),
-            "unexpected error: {msg}"
-        );
+        let (resp, _usage) = super::parse_openai_stream(&mut cur, &mut events).unwrap();
+        match resp.action {
+            super::ModelAction::CallTool { tool_name, input } => {
+                assert_eq!(tool_name, "read_file");
+                assert_eq!(input.get("path"), Some("a.rs"));
+            }
+            _ => panic!("expected first tool call to be used"),
+        }
     }
 
     #[test]

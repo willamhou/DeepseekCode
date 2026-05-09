@@ -118,6 +118,16 @@ cp .dscode/config.example.toml .dscode/config.toml
 deepseek doctor
 ```
 
+`deepseek` 会自动读取当前工作目录下的 `.env`，并在变量尚未存在于进程环境时注入。常用 DeepSeek/OpenAI-compatible 配置：
+
+```bash
+DEEPSEEK_API_KEY=...
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-coder
+```
+
+如果 `.env` 或 shell 环境里设置了 `DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL`，它们会覆盖 `.dscode/config.toml` 里的 `model.base_url` / `model.model`。
+
 如果要做一次最小 live 请求验证：
 
 ```bash
