@@ -14,12 +14,14 @@
   "activationEvents": [
     "onStartupFinished",
     "onCommand:deepseek.quickAction",
+    "onCommand:deepseek.openPanel",
     "onCommand:deepseek.openChat",
     "onCommand:deepseek.runTask",
     "onCommand:deepseek.explainSelection",
     "onCommand:deepseek.runBenchmark",
     "onCommand:deepseek.showDogfoodReport",
-    "onView:deepseek.actions"
+    "onView:deepseek.actions",
+    "onView:deepseek.panel"
   ],
   "main": "./extension.js",
   "contributes": {
@@ -28,6 +30,11 @@
         "command": "deepseek.quickAction",
         "title": "DeepseekCode: Quick Action",
         "icon": "$(sparkle)"
+      },
+      {
+        "command": "deepseek.openPanel",
+        "title": "DeepseekCode: Open Agent Panel",
+        "icon": "$(layout-sidebar-right)"
       },
       {
         "command": "deepseek.openChat",
@@ -71,6 +78,10 @@
         {
           "command": "deepseek.quickAction",
           "group": "navigation@90"
+        },
+        {
+          "command": "deepseek.openPanel",
+          "group": "navigation@91"
         }
       ]
     },
@@ -79,6 +90,11 @@
         {
           "id": "deepseek.actions",
           "name": "DeepseekCode"
+        },
+        {
+          "id": "deepseek.panel",
+          "name": "DeepseekCode Agent",
+          "type": "webview"
         }
       ]
     },

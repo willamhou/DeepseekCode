@@ -11,7 +11,9 @@ function activate(context) {
   context.subscriptions.push(
     status,
     vscode.window.registerTreeDataProvider("deepseek.actions", new DeepseekActionsProvider()),
+    vscode.window.registerWebviewViewProvider("deepseek.panel", new DeepseekPanelProvider()),
     vscode.commands.registerCommand("deepseek.quickAction", quickAction),
+    vscode.commands.registerCommand("deepseek.openPanel", openPanel),
     vscode.commands.registerCommand("deepseek.openChat", openChat),
     vscode.commands.registerCommand("deepseek.runTask", runTask),
     vscode.commands.registerCommand("deepseek.explainSelection", explainSelection),
@@ -21,6 +23,34 @@ function activate(context) {
 }
 
 function deactivate() {}
+
+class DeepseekPanelProvider {
+  resolveWebviewView(view) {
+    view.webview.options = {
+      enableScripts: true,
+    };
+    view.webview.html = panelHtml(nonce());
+    view.webview.onDidReceiveMessage(async (message) => {
+      switch (message?.type) {
+        case "openChat":
+          await openChat();
+          break;
+        case "runTask":
+          await runPanelTask(message.task);
+          break;
+        case "explainSelection":
+          await explainSelection();
+          break;
+        case "runBenchmark":
+          await runBenchmark();
+          break;
+        case "showDogfoodReport":
+          await showDogfoodReport();
+          break;
+      }
+    });
+  }
+}
 
 class DeepseekActionsProvider {
   getTreeItem(item) {
@@ -70,6 +100,99 @@ function actionItem(label, description, command, codicon) {
   return item;
 }
 
+function panelHtml(panelNonce) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${panelNonce}';">
+  <style>
+    body {
+      box-sizing: border-box;
+      color: var(--vscode-foreground);
+      font-family: var(--vscode-font-family);
+      margin: 0;
+      padding: 12px;
+    }
+    .stack {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    textarea {
+      background: var(--vscode-input-background);
+      border: 1px solid var(--vscode-input-border);
+      box-sizing: border-box;
+      color: var(--vscode-input-foreground);
+      font-family: var(--vscode-font-family);
+      min-height: 96px;
+      padding: 8px;
+      resize: vertical;
+      width: 100%;
+    }
+    button {
+      align-items: center;
+      background: var(--vscode-button-secondaryBackground);
+      border: 0;
+      color: var(--vscode-button-secondaryForeground);
+      cursor: pointer;
+      display: flex;
+      font: inherit;
+      justify-content: center;
+      min-height: 28px;
+      padding: 5px 8px;
+      text-align: center;
+      width: 100%;
+    }
+    button.primary {
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+    }
+    button:hover {
+      background: var(--vscode-button-hoverBackground);
+    }
+    .grid {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: 1fr 1fr;
+    }
+  </style>
+</head>
+<body>
+  <div class="stack">
+    <textarea id="task" aria-label="Task" placeholder="Task"></textarea>
+    <button class="primary" id="run">Run</button>
+    <div class="grid">
+      <button id="chat">Chat</button>
+      <button id="explain">Explain</button>
+      <button id="benchmark">Benchmark</button>
+      <button id="dogfood">Dogfood</button>
+    </div>
+  </div>
+  <script nonce="${panelNonce}">
+    const vscode = acquireVsCodeApi();
+    const task = document.getElementById("task");
+    document.getElementById("run").addEventListener("click", () => {
+      vscode.postMessage({ type: "runTask", task: task.value });
+    });
+    document.getElementById("chat").addEventListener("click", () => {
+      vscode.postMessage({ type: "openChat" });
+    });
+    document.getElementById("explain").addEventListener("click", () => {
+      vscode.postMessage({ type: "explainSelection" });
+    });
+    document.getElementById("benchmark").addEventListener("click", () => {
+      vscode.postMessage({ type: "runBenchmark" });
+    });
+    document.getElementById("dogfood").addEventListener("click", () => {
+      vscode.postMessage({ type: "showDogfoodReport" });
+    });
+  </script>
+</body>
+</html>`;
+}
+
 function config() {
   return vscode.workspace.getConfiguration("deepseek");
 }
@@ -114,6 +237,11 @@ async function quickAction() {
   const picked = await vscode.window.showQuickPick(
     [
       {
+        label: "$(layout-sidebar-right) Open Agent Panel",
+        description: "Focus the DeepseekCode sidebar task panel",
+        command: "deepseek.openPanel",
+      },
+      {
         label: "$(comment-discussion) Open Chat",
         description: "Start an interactive DeepseekCode session",
         command: "deepseek.openChat",
@@ -152,6 +280,10 @@ async function quickAction() {
   }
 }
 
+async function openPanel() {
+  await vscode.commands.executeCommand("deepseek.panel.focus");
+}
+
 async function openChat() {
   runInTerminal(deepseekCommand());
 }
@@ -163,6 +295,15 @@ async function runTask() {
     ignoreFocusOut: true,
   });
   if (!task || !task.trim()) {
+    return;
+  }
+
+  runInTerminal(`${deepseekCommand()} run ${shellQuote(promptWithEditorContext(task.trim()))}`);
+}
+
+async function runPanelTask(task) {
+  if (!task || !task.trim()) {
+    vscode.window.showInformationMessage("Enter a DeepseekCode task before running.");
     return;
   }
 
@@ -235,6 +376,15 @@ function selectedText(editor) {
 
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function nonce() {
+  let value = "";
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  for (let index = 0; index < 32; index += 1) {
+    value += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return value;
 }
 
 module.exports = {

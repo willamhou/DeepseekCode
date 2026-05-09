@@ -1788,6 +1788,22 @@
   - live gate：`pass (no new dogfood records since previous snapshot, runs=33)`
 - 当前边界仍明确：这提升 IDE 可发现性，但仍不是完整 agent sidebar / inline diff / diagnostics / chat panel。
 
+**Phase 11+ VS Code agent panel (`main`, 2026-05-09) — 已完成基础版**：
+- 延续 terminal-backed VS Code extension，本轮把侧栏从“动作列表”推进到“可直接输入任务”的轻量 agent panel：
+  - Explorer sidebar 新增 `DeepseekCode Agent` webview panel
+  - panel 支持输入 task，并把当前文件路径和选中文本作为上下文传给 `deepseek run`
+  - 同一 panel 暴露 chat / explain selection / benchmark / dogfood report 快捷入口
+  - `DeepseekCode: Quick Action` 和 editor title 也可直接 focus 该 panel
+  - 保持无外部 npm dependency
+- 最新验证：
+  - `node --check editors/vscode/extension.js`
+  - `jq -c . editors/vscode/package.json`
+  - 全量测试：`541 passed, 0 failed`
+  - 默认 benchmark：`48/48`
+  - trend gate：`pass against 5 comparable runs`
+  - live gate：`pass (no new dogfood records since previous snapshot, runs=33)`
+- 当前边界仍明确：这已经是可试用的 IDE 侧栏任务入口，但仍不是完整 inline diff / diagnostics / native chat / patch review 体验。
+
 **Phase 11+ MCP config surface (`main`, 2026-05-09) — 已完成基础版**：
 - 二次差距审计里 MCP/plugin ecosystem 仍是大差距；本轮先补最小可验证配置面，而不是一次性实现完整 MCP transport
 - 新增 `deepseek mcp`：
