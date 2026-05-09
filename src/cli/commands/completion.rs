@@ -51,7 +51,7 @@ fn pr_words() -> &'static [&'static str] {
 }
 
 fn mcp_words() -> &'static [&'static str] {
-    &["list", "doctor", "init"]
+    &["list", "doctor", "tools", "init"]
 }
 
 fn shell_words() -> &'static [&'static str] {
@@ -211,6 +211,7 @@ mod tests {
         assert!(script.contains("benchmark"));
         assert!(script.contains("completion"));
         assert!(script.contains("mcp"));
+        assert!(script.contains("tools"));
     }
 
     #[test]
@@ -219,6 +220,7 @@ mod tests {
         assert!(script.contains("#compdef deepseek"));
         assert!(script.contains("dogfood"));
         assert!(script.contains("completion"));
+        assert!(script.contains("tools"));
     }
 
     #[test]
@@ -227,5 +229,6 @@ mod tests {
         assert!(script.contains("complete -c deepseek"));
         assert!(script.contains("bash"));
         assert!(script.contains("fish"));
+        assert!(script.contains("tools"));
     }
 }

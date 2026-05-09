@@ -1706,7 +1706,16 @@
   - `deepseek mcp doctor` 校验 server schema，并对同名 server 使用 project 覆盖 user 的语义
 - 配置格式采用常见 `mcpServers` JSON object，支持 `stdio` / `http` / `streamable-http` / `sse` 的基础字段校验
 - `deepseek config init` 同步创建 disabled 示例 MCP config；`.dscode/config.example.toml` 与安装文档已补充 `mcp.enabled` / `mcp.project_file` / `mcp.user_file`
-- 当前边界明确：这一轮只做发现与校验，还不会把 MCP tools 注入 agent tool registry
+- 这一轮边界明确：只做发现与校验，还不会把 MCP tools 注入 agent tool registry
+
+**Phase 11+ MCP stdio tool discovery (`main`, 2026-05-09) — 已完成基础版**：
+- 延续上一轮 MCP config surface，本轮把 MCP 从“配置可见”推进到“能真实握手并枚举 stdio server tools”
+- 新增 `deepseek mcp tools [server]`：
+  - 启动 enabled stdio server subprocess
+  - 按 MCP lifecycle 发送 `initialize` 与 `notifications/initialized`
+  - 执行 `tools/list`，支持 `nextCursor` 分页，并展示 tool name / description / input schema
+- 已用临时 stdio fake server 做 smoke：`fake [stdio]: 1 tool(s)`，能列出 `echo` tool 与 schema
+- 当前边界仍明确：HTTP/SSE transport、`tools/call`、agent tool registry 注入和审批模型还没接入；MCP/plugin ecosystem 仍不是小差距
 
 ## 最近里程碑
 

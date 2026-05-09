@@ -48,10 +48,11 @@ pub enum DogfoodAction {
     PromoteBenchmark(DogfoodPromoteArgs),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpAction {
     List,
     Doctor,
+    Tools { server: Option<String> },
     Init { force: bool },
 }
 
@@ -389,6 +390,14 @@ fn parse_mcp_subcommand(args: Vec<String>) -> Result<McpAction, String> {
             }
             Ok(McpAction::Doctor)
         }
+        "tools" => {
+            if args.len() > 2 {
+                return Err("mcp tools accepts at most one server name".to_string());
+            }
+            Ok(McpAction::Tools {
+                server: args.get(1).cloned(),
+            })
+        }
         "init" => {
             let mut force = false;
             for flag in args.iter().skip(1) {
@@ -400,7 +409,7 @@ fn parse_mcp_subcommand(args: Vec<String>) -> Result<McpAction, String> {
             Ok(McpAction::Init { force })
         }
         other => Err(format!(
-            "unknown mcp sub-action `{other}`; expected list|doctor|init"
+            "unknown mcp sub-action `{other}`; expected list|doctor|tools|init"
         )),
     }
 }
@@ -867,6 +876,19 @@ mod tests {
         assert!(matches!(
             doctor.command,
             Some(Command::Mcp(McpAction::Doctor))
+        ));
+
+        let tools = Cli::from_argv(vec![
+            "mcp".to_string(),
+            "tools".to_string(),
+            "filesystem".to_string(),
+        ])
+        .unwrap();
+        assert!(matches!(
+            tools.command,
+            Some(Command::Mcp(McpAction::Tools {
+                server: Some(ref name)
+            })) if name == "filesystem"
         ));
 
         let init = Cli::from_argv(vec![

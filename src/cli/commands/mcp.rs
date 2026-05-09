@@ -1,19 +1,28 @@
 use std::collections::BTreeMap;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, Receiver};
+use std::time::{Duration, Instant};
 
 use crate::cli::app::McpAction;
 use crate::config::load::load_or_default;
 use crate::config::types::AppConfig;
 use crate::error::{app_error, AppResult};
 use crate::util::json::{
-    json_as_array, json_as_object, json_as_string, parse_root_object, JsonValue,
+    json_as_array, json_as_object, json_as_string, json_value_to_string, parse_root_object,
+    JsonValue,
 };
+
+const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
+const MCP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn run(action: McpAction) -> AppResult<()> {
     let config = load_or_default()?;
     match action {
         McpAction::List => list_servers(&config),
         McpAction::Doctor => doctor(&config),
+        McpAction::Tools { server } => list_remote_tools(&config, server.as_deref()),
         McpAction::Init { force } => {
             let path = init_mcp_config_at(&std::env::current_dir()?, &config, force)?;
             println!("initialized MCP config: {}", path.display());
@@ -57,10 +66,10 @@ fn list_servers(config: &AppConfig) -> AppResult<()> {
                 .unwrap_or_else(|| "(missing command)".to_string()),
             _ => server.url.as_deref().unwrap_or("(missing url)").to_string(),
         };
-        let env = if server.env_keys.is_empty() {
+        let env = if server.env.is_empty() {
             "-".to_string()
         } else {
-            server.env_keys.join(",")
+            server.env.keys().cloned().collect::<Vec<_>>().join(",")
         };
         println!(
             "- {} [{} {}] {} (source={}, env={})",
@@ -90,6 +99,325 @@ fn doctor(config: &AppConfig) -> AppResult<()> {
         enabled
     );
     Ok(())
+}
+
+fn list_remote_tools(config: &AppConfig, requested_server: Option<&str>) -> AppResult<()> {
+    if !config.mcp.enabled {
+        println!("MCP is disabled by config: mcp.enabled = false");
+        return Ok(());
+    }
+
+    let inventory = load_inventory(config)?;
+    print_sources(&inventory);
+    let targets = select_tool_targets(&inventory, requested_server)?;
+
+    if targets.is_empty() {
+        println!("No enabled MCP servers configured. Run `deepseek mcp list` to inspect config.");
+        return Ok(());
+    }
+
+    println!("MCP remote tools:");
+    for server in targets {
+        if server.transport != "stdio" {
+            let message = format!(
+                "mcp tools currently supports stdio servers only; `{}` uses {}",
+                server.name, server.transport
+            );
+            if requested_server.is_some() {
+                return Err(app_error(message));
+            }
+            println!(
+                "- {} [{}]: skipped ({message})",
+                server.name, server.transport
+            );
+            continue;
+        }
+
+        let tools = list_stdio_tools(server)?;
+        println!("- {} [stdio]: {} tool(s)", server.name, tools.len());
+        for tool in tools {
+            let description = tool.description.as_deref().unwrap_or("-");
+            println!("  - {}: {}", tool.name, compact_inline(description, 140));
+            if let Some(input_schema) = tool.input_schema {
+                println!("    schema: {}", compact_inline(&input_schema, 220));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn select_tool_targets<'a>(
+    inventory: &'a McpInventory,
+    requested_server: Option<&str>,
+) -> AppResult<Vec<&'a McpServer>> {
+    if let Some(name) = requested_server {
+        let server = inventory
+            .servers
+            .iter()
+            .find(|server| server.name == name)
+            .ok_or_else(|| app_error(format!("unknown MCP server: {name}")))?;
+        if !server.enabled {
+            return Err(app_error(format!("MCP server `{name}` is disabled")));
+        }
+        return Ok(vec![server]);
+    }
+
+    Ok(inventory
+        .servers
+        .iter()
+        .filter(|server| server.enabled)
+        .collect())
+}
+
+fn list_stdio_tools(server: &McpServer) -> AppResult<Vec<McpRemoteTool>> {
+    let command = server
+        .command
+        .as_deref()
+        .ok_or_else(|| app_error(format!("stdio MCP server `{}` has no command", server.name)))?;
+    let mut command_builder = Command::new(command);
+    command_builder
+        .args(&server.args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    for (key, value) in &server.env {
+        command_builder.env(key, value);
+    }
+
+    let mut child = command_builder.spawn().map_err(|error| {
+        app_error(format!(
+            "failed to start stdio MCP server `{}` with `{}`: {error}",
+            server.name, command
+        ))
+    })?;
+
+    let result = run_stdio_tools_session(server, &mut child);
+    let _ = child.kill();
+    let _ = child.wait();
+    result
+}
+
+fn run_stdio_tools_session(
+    server: &McpServer,
+    child: &mut std::process::Child,
+) -> AppResult<Vec<McpRemoteTool>> {
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| app_error("failed to open MCP server stdin"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| app_error("failed to open MCP server stdout"))?;
+    let receiver = spawn_stdout_reader(stdout);
+
+    send_json_rpc(&mut stdin, &build_initialize_request(1))?;
+    read_json_rpc_response(&receiver, 1, MCP_RESPONSE_TIMEOUT).map_err(|error| {
+        app_error(format!(
+            "MCP server `{}` initialize failed: {error}",
+            server.name
+        ))
+    })?;
+    send_json_rpc(&mut stdin, build_initialized_notification())?;
+
+    let mut request_id = 2u64;
+    let mut cursor: Option<String> = None;
+    let mut tools = Vec::new();
+    loop {
+        send_json_rpc(
+            &mut stdin,
+            &build_tools_list_request(request_id, cursor.as_deref()),
+        )?;
+        let response = read_json_rpc_response(&receiver, request_id, MCP_RESPONSE_TIMEOUT)
+            .map_err(|error| {
+                app_error(format!(
+                    "MCP server `{}` tools/list failed: {error}",
+                    server.name
+                ))
+            })?;
+        let (mut page_tools, next_cursor) = parse_tools_list_result(&response)?;
+        tools.append(&mut page_tools);
+        let Some(next_cursor) = next_cursor else {
+            break;
+        };
+        cursor = Some(next_cursor);
+        request_id += 1;
+    }
+
+    Ok(tools)
+}
+
+fn spawn_stdout_reader(stdout: std::process::ChildStdout) -> Receiver<Result<String, String>> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            if sender
+                .send(line.map_err(|error| error.to_string()))
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+    receiver
+}
+
+fn send_json_rpc(stdin: &mut std::process::ChildStdin, message: &str) -> AppResult<()> {
+    stdin.write_all(message.as_bytes())?;
+    stdin.write_all(b"\n")?;
+    stdin.flush()?;
+    Ok(())
+}
+
+fn read_json_rpc_response(
+    receiver: &Receiver<Result<String, String>>,
+    expected_id: u64,
+    timeout: Duration,
+) -> AppResult<BTreeMap<String, JsonValue>> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(app_error(format!(
+                "timed out waiting for JSON-RPC response id {expected_id}"
+            )));
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        let line = match receiver.recv_timeout(remaining) {
+            Ok(Ok(line)) => line,
+            Ok(Err(error)) => return Err(app_error(format!("failed to read stdout: {error}"))),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                return Err(app_error(format!(
+                    "timed out waiting for JSON-RPC response id {expected_id}"
+                )));
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(app_error(format!(
+                    "MCP server stdout closed before response id {expected_id}"
+                )));
+            }
+        };
+
+        if line.trim().is_empty() {
+            continue;
+        }
+        let root = parse_root_object(line.trim()).map_err(|error| {
+            app_error(format!(
+                "MCP server wrote invalid JSON-RPC message `{}`: {error}",
+                compact_inline(&line, 160)
+            ))
+        })?;
+        if !response_id_matches(&root, expected_id) {
+            continue;
+        }
+        if let Some(error) = root.get("error") {
+            return Err(app_error(format!(
+                "JSON-RPC error for id {expected_id}: {}",
+                describe_json_rpc_error(error)
+            )));
+        }
+        if !root.contains_key("result") {
+            return Err(app_error(format!(
+                "JSON-RPC response id {expected_id} missing `result`"
+            )));
+        }
+        return Ok(root);
+    }
+}
+
+fn response_id_matches(root: &BTreeMap<String, JsonValue>, expected_id: u64) -> bool {
+    match root.get("id") {
+        Some(JsonValue::Number(value)) => value == &expected_id.to_string(),
+        Some(JsonValue::String(value)) => value == &expected_id.to_string(),
+        _ => false,
+    }
+}
+
+fn describe_json_rpc_error(error: &JsonValue) -> String {
+    let Some(object) = json_as_object(error) else {
+        return json_value_to_string(error);
+    };
+    object
+        .get("message")
+        .and_then(json_as_string)
+        .map(ToString::to_string)
+        .unwrap_or_else(|| json_value_to_string(error))
+}
+
+fn build_initialize_request(id: u64) -> String {
+    format!(
+        r#"{{"jsonrpc":"2.0","id":{id},"method":"initialize","params":{{"protocolVersion":"{protocol}","capabilities":{{}},"clientInfo":{{"name":"DeepseekCode","version":"{version}"}}}}}}"#,
+        protocol = MCP_PROTOCOL_VERSION,
+        version = env!("CARGO_PKG_VERSION"),
+    )
+}
+
+fn build_initialized_notification() -> &'static str {
+    r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#
+}
+
+fn build_tools_list_request(id: u64, cursor: Option<&str>) -> String {
+    match cursor {
+        Some(cursor) => format!(
+            r#"{{"jsonrpc":"2.0","id":{id},"method":"tools/list","params":{{"cursor":"{}"}}}}"#,
+            crate::util::json::json_escape(cursor)
+        ),
+        None => format!(r#"{{"jsonrpc":"2.0","id":{id},"method":"tools/list","params":{{}}}}"#),
+    }
+}
+
+fn parse_tools_list_result(
+    response: &BTreeMap<String, JsonValue>,
+) -> AppResult<(Vec<McpRemoteTool>, Option<String>)> {
+    let result = response
+        .get("result")
+        .and_then(json_as_object)
+        .ok_or_else(|| app_error("tools/list response `result` must be an object"))?;
+    let tools = result
+        .get("tools")
+        .and_then(json_as_array)
+        .ok_or_else(|| app_error("tools/list response `result.tools` must be an array"))?;
+    let next_cursor = result
+        .get("nextCursor")
+        .and_then(json_as_string)
+        .map(ToString::to_string);
+
+    let mut parsed = Vec::with_capacity(tools.len());
+    for tool in tools {
+        let object = json_as_object(tool)
+            .ok_or_else(|| app_error("tools/list response tool entries must be objects"))?;
+        let name = object
+            .get("name")
+            .and_then(json_as_string)
+            .ok_or_else(|| app_error("tools/list response tool entry missing string `name`"))?;
+        let description = object
+            .get("description")
+            .and_then(json_as_string)
+            .map(ToString::to_string);
+        let input_schema = object.get("inputSchema").map(json_value_to_string);
+        parsed.push(McpRemoteTool {
+            name: name.to_string(),
+            description,
+            input_schema,
+        });
+    }
+
+    Ok((parsed, next_cursor))
+}
+
+fn compact_inline(value: &str, limit: usize) -> String {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut output = String::new();
+    for (index, ch) in normalized.chars().enumerate() {
+        if index >= limit {
+            output.push_str("...");
+            return output;
+        }
+        output.push(ch);
+    }
+    output
 }
 
 fn print_sources(inventory: &McpInventory) {
@@ -235,8 +563,8 @@ fn parse_mcp_server(
     let command = optional_string(object, "command")?;
     let url = optional_string(object, "url")?;
     let args = optional_string_array(object, "args")?;
-    let env_keys = optional_object_keys(object, "env")?;
-    let header_keys = optional_object_keys(object, "headers")?;
+    let env = optional_string_object(object, "env")?;
+    let headers = optional_string_object(object, "headers")?;
 
     if enabled && transport == "stdio" && command.as_deref().unwrap_or("").trim().is_empty() {
         return Err(app_error(format!(
@@ -259,8 +587,8 @@ fn parse_mcp_server(
         command,
         args,
         url,
-        env_keys,
-        header_keys,
+        env,
+        headers,
     })
 }
 
@@ -307,21 +635,26 @@ fn optional_string_array(
     Ok(result)
 }
 
-fn optional_object_keys(object: &BTreeMap<String, JsonValue>, key: &str) -> AppResult<Vec<String>> {
+fn optional_string_object(
+    object: &BTreeMap<String, JsonValue>,
+    key: &str,
+) -> AppResult<BTreeMap<String, String>> {
     let Some(value) = object.get(key) else {
-        return Ok(Vec::new());
+        return Ok(BTreeMap::new());
     };
     let Some(map) = json_as_object(value) else {
         return Err(app_error(format!("MCP field `{key}` must be an object")));
     };
+    let mut result = BTreeMap::new();
     for (entry_key, entry_value) in map {
-        if !matches!(entry_value, JsonValue::String(_)) {
+        let Some(value) = json_as_string(entry_value) else {
             return Err(app_error(format!(
                 "MCP `{key}.{entry_key}` value must be a string"
             )));
-        }
+        };
+        result.insert(entry_key.clone(), value.to_string());
     }
-    Ok(map.keys().cloned().collect())
+    Ok(result)
 }
 
 fn json_as_bool(value: &JsonValue) -> Option<bool> {
@@ -352,9 +685,16 @@ struct McpServer {
     command: Option<String>,
     args: Vec<String>,
     url: Option<String>,
-    env_keys: Vec<String>,
+    env: BTreeMap<String, String>,
     #[allow(dead_code)]
-    header_keys: Vec<String>,
+    headers: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone)]
+struct McpRemoteTool {
+    name: String,
+    description: Option<String>,
+    input_schema: Option<String>,
 }
 
 #[cfg(test)]
@@ -393,7 +733,126 @@ mod tests {
         assert_eq!(servers[0].transport, "stdio");
         assert_eq!(servers[0].command.as_deref(), Some("node"));
         assert_eq!(servers[0].args, vec!["server.js"]);
-        assert_eq!(servers[0].env_keys, vec!["TOKEN"]);
+        assert_eq!(
+            servers[0].env.get("TOKEN").map(String::as_str),
+            Some("value")
+        );
+    }
+
+    #[test]
+    fn build_mcp_protocol_messages_match_stdio_lifecycle_shape() {
+        let init = build_initialize_request(1);
+        let root = parse_root_object(&init).unwrap();
+        assert_eq!(
+            root.get("method").and_then(json_as_string),
+            Some("initialize")
+        );
+        let params = root
+            .get("params")
+            .and_then(json_as_object)
+            .expect("initialize params");
+        assert_eq!(
+            params.get("protocolVersion").and_then(json_as_string),
+            Some(MCP_PROTOCOL_VERSION)
+        );
+
+        let list = build_tools_list_request(2, Some("next page"));
+        let root = parse_root_object(&list).unwrap();
+        assert_eq!(
+            root.get("method").and_then(json_as_string),
+            Some("tools/list")
+        );
+        let params = root
+            .get("params")
+            .and_then(json_as_object)
+            .expect("tools/list params");
+        assert_eq!(
+            params.get("cursor").and_then(json_as_string),
+            Some("next page")
+        );
+        assert_eq!(
+            parse_root_object(build_initialized_notification())
+                .unwrap()
+                .get("method")
+                .and_then(json_as_string),
+            Some("notifications/initialized")
+        );
+    }
+
+    #[test]
+    fn parse_tools_list_result_reads_tools_schema_and_cursor() {
+        let root = parse_root_object(
+            r#"{
+              "jsonrpc": "2.0",
+              "id": 2,
+              "result": {
+                "nextCursor": "page-2",
+                "tools": [
+                  {
+                    "name": "read_file",
+                    "description": "Read a file",
+                    "inputSchema": {
+                      "type": "object",
+                      "properties": {"path": {"type": "string"}}
+                    }
+                  }
+                ]
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let (tools, next_cursor) = parse_tools_list_result(&root).unwrap();
+        assert_eq!(next_cursor.as_deref(), Some("page-2"));
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "read_file");
+        assert_eq!(tools[0].description.as_deref(), Some("Read a file"));
+        assert!(tools[0]
+            .input_schema
+            .as_deref()
+            .unwrap()
+            .contains("\"properties\""));
+    }
+
+    #[test]
+    fn read_json_rpc_response_skips_notifications_until_matching_id() {
+        let (sender, receiver) = mpsc::channel();
+        sender
+            .send(Ok(
+                r#"{"jsonrpc":"2.0","method":"notifications/progress","params":{}}"#.to_string(),
+            ))
+            .unwrap();
+        sender
+            .send(Ok(
+                r#"{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}"#.to_string()
+            ))
+            .unwrap();
+
+        let response = read_json_rpc_response(&receiver, 2, Duration::from_millis(50)).unwrap();
+        assert!(response.contains_key("result"));
+    }
+
+    #[test]
+    fn select_tool_targets_rejects_disabled_requested_server() {
+        let inventory = McpInventory {
+            sources: Vec::new(),
+            servers: vec![McpServer {
+                name: "disabled".to_string(),
+                source: "project".to_string(),
+                transport: "stdio".to_string(),
+                enabled: false,
+                command: None,
+                args: Vec::new(),
+                url: None,
+                env: BTreeMap::new(),
+                headers: BTreeMap::new(),
+            }],
+        };
+
+        let error = select_tool_targets(&inventory, Some("disabled"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("disabled"));
     }
 
     #[test]
