@@ -1715,7 +1715,16 @@
   - 按 MCP lifecycle 发送 `initialize` 与 `notifications/initialized`
   - 执行 `tools/list`，支持 `nextCursor` 分页，并展示 tool name / description / input schema
 - 已用临时 stdio fake server 做 smoke：`fake [stdio]: 1 tool(s)`，能列出 `echo` tool 与 schema
-- 当前边界仍明确：HTTP/SSE transport、`tools/call`、agent tool registry 注入和审批模型还没接入；MCP/plugin ecosystem 仍不是小差距
+- 这一轮边界仍明确：只做 stdio `tools/list`，HTTP/SSE transport、agent tool registry 注入和审批模型还没接入；MCP/plugin ecosystem 仍不是小差距
+
+**Phase 11+ MCP manual tool call (`main`, 2026-05-09) — 已完成基础版**：
+- 延续 stdio tool discovery，本轮继续补显式调用入口，避免 MCP 只能“看见工具”但不能验证工具结果
+- 新增 `deepseek mcp call <server> <tool> [json-args]`：
+  - 启动 enabled stdio server 并完成 `initialize` / `notifications/initialized`
+  - 发送 `tools/call`，参数要求为 JSON object
+  - 输出 text content、structuredContent 和 tool-level `isError`
+- 已用临时 stdio fake server 做 smoke，能调用 `echo` tool 并展示返回内容
+- 当前边界仍明确：这还是人工指定 server/tool/arguments 的调试入口；MCP tools 还没有进入 agent tool registry，也没有对应审批/策略模型
 
 ## 最近里程碑
 

@@ -111,8 +111,8 @@ hooks.project_dir = "{hooks_project_dir}"
 hooks.user_dir = "{hooks_user_dir}"
 hooks.timeout_ms = {hooks_timeout_ms}
 
-# MCP server discovery supports config inspection plus stdio tools/list.
-# Use `deepseek mcp list|doctor|tools` to inspect project/user MCP definitions.
+# MCP server discovery supports config inspection plus manual stdio tools/list/call.
+# Use `deepseek mcp list|doctor|tools|call` to inspect or invoke MCP definitions.
 mcp.enabled = {mcp_enabled}
 mcp.project_file = "{mcp_project_file}"
 mcp.user_file = "{mcp_user_file}"

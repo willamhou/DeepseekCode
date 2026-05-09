@@ -78,11 +78,11 @@ hooks.user_dir = "~/.config/dscode/hooks"
 hooks.timeout_ms = 5000
 
 # -----------------------------------------------------------------------------
-# mcp: MCP server discovery (config validation/listing + stdio tools/list)
+# mcp: MCP server discovery (config validation/listing + stdio tools/list/call)
 # -----------------------------------------------------------------------------
 
-# 当前版本会读取并校验 MCP server 配置，并可对 stdio server 执行 tools/list。
-# 还不会把 MCP tools 注入 agent tool registry，也不会自动执行 tools/call。
+# 当前版本会读取并校验 MCP server 配置，并可手动对 stdio server 执行 tools/list / tools/call。
+# 还不会把 MCP tools 注入 agent tool registry。
 # Project/user scope 的同名 server 以 project 为准。
 mcp.enabled = true
 mcp.project_file = ".dscode/mcp.json"

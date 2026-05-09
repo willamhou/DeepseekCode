@@ -10,8 +10,8 @@ use crate::config::load::load_or_default;
 use crate::config::types::AppConfig;
 use crate::error::{app_error, AppResult};
 use crate::util::json::{
-    json_as_array, json_as_object, json_as_string, json_value_to_string, parse_root_object,
-    JsonValue,
+    json_as_array, json_as_object, json_as_string, json_value_to_string, parse_json_value,
+    parse_root_object, JsonValue,
 };
 
 const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
@@ -23,6 +23,11 @@ pub fn run(action: McpAction) -> AppResult<()> {
         McpAction::List => list_servers(&config),
         McpAction::Doctor => doctor(&config),
         McpAction::Tools { server } => list_remote_tools(&config, server.as_deref()),
+        McpAction::Call {
+            server,
+            tool,
+            arguments_json,
+        } => call_remote_tool(&config, &server, &tool, arguments_json.as_deref()),
         McpAction::Init { force } => {
             let path = init_mcp_config_at(&std::env::current_dir()?, &config, force)?;
             println!("initialized MCP config: {}", path.display());
@@ -147,6 +152,72 @@ fn list_remote_tools(config: &AppConfig, requested_server: Option<&str>) -> AppR
     Ok(())
 }
 
+fn call_remote_tool(
+    config: &AppConfig,
+    server_name: &str,
+    tool_name: &str,
+    arguments_json: Option<&str>,
+) -> AppResult<()> {
+    if !config.mcp.enabled {
+        println!("MCP is disabled by config: mcp.enabled = false");
+        return Ok(());
+    }
+
+    let arguments = parse_call_arguments(arguments_json)?;
+    let inventory = load_inventory(config)?;
+    print_sources(&inventory);
+    let targets = select_tool_targets(&inventory, Some(server_name))?;
+    let server = targets[0];
+    if server.transport != "stdio" {
+        return Err(app_error(format!(
+            "mcp call currently supports stdio servers only; `{}` uses {}",
+            server.name, server.transport
+        )));
+    }
+
+    let result = call_stdio_tool(server, tool_name, &arguments)?;
+    println!("MCP tool call:");
+    println!(
+        "- {}/{} [stdio]: {}",
+        server.name,
+        tool_name,
+        if result.is_error { "tool-error" } else { "ok" }
+    );
+    if result.content.is_empty() {
+        println!("  content: -");
+    } else {
+        println!("  content:");
+        for item in result.content {
+            println!("  - {}", compact_inline(&item, 260));
+        }
+    }
+    if let Some(structured_content) = result.structured_content {
+        println!(
+            "  structuredContent: {}",
+            compact_inline(&structured_content, 260)
+        );
+    }
+
+    Ok(())
+}
+
+fn parse_call_arguments(arguments_json: Option<&str>) -> AppResult<BTreeMap<String, JsonValue>> {
+    let Some(arguments_json) = arguments_json else {
+        return Ok(BTreeMap::new());
+    };
+    let parsed = parse_json_value(arguments_json.trim()).map_err(|error| {
+        app_error(format!(
+            "failed to parse mcp call JSON arguments object: {error}"
+        ))
+    })?;
+    let JsonValue::Object(arguments) = parsed else {
+        return Err(app_error(
+            "mcp call JSON arguments must be an object, for example '{\"path\":\"README.md\"}'",
+        ));
+    };
+    Ok(arguments)
+}
+
 fn select_tool_targets<'a>(
     inventory: &'a McpInventory,
     requested_server: Option<&str>,
@@ -196,6 +267,75 @@ fn list_stdio_tools(server: &McpServer) -> AppResult<Vec<McpRemoteTool>> {
     let _ = child.kill();
     let _ = child.wait();
     result
+}
+
+fn call_stdio_tool(
+    server: &McpServer,
+    tool_name: &str,
+    arguments: &BTreeMap<String, JsonValue>,
+) -> AppResult<McpToolCallResult> {
+    let command = server
+        .command
+        .as_deref()
+        .ok_or_else(|| app_error(format!("stdio MCP server `{}` has no command", server.name)))?;
+    let mut command_builder = Command::new(command);
+    command_builder
+        .args(&server.args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    for (key, value) in &server.env {
+        command_builder.env(key, value);
+    }
+
+    let mut child = command_builder.spawn().map_err(|error| {
+        app_error(format!(
+            "failed to start stdio MCP server `{}` with `{}`: {error}",
+            server.name, command
+        ))
+    })?;
+
+    let result = run_stdio_call_session(server, &mut child, tool_name, arguments);
+    let _ = child.kill();
+    let _ = child.wait();
+    result
+}
+
+fn run_stdio_call_session(
+    server: &McpServer,
+    child: &mut std::process::Child,
+    tool_name: &str,
+    arguments: &BTreeMap<String, JsonValue>,
+) -> AppResult<McpToolCallResult> {
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| app_error("failed to open MCP server stdin"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| app_error("failed to open MCP server stdout"))?;
+    let receiver = spawn_stdout_reader(stdout);
+
+    send_json_rpc(&mut stdin, &build_initialize_request(1))?;
+    read_json_rpc_response(&receiver, 1, MCP_RESPONSE_TIMEOUT).map_err(|error| {
+        app_error(format!(
+            "MCP server `{}` initialize failed: {error}",
+            server.name
+        ))
+    })?;
+    send_json_rpc(&mut stdin, build_initialized_notification())?;
+    send_json_rpc(
+        &mut stdin,
+        &build_tools_call_request(2, tool_name, arguments),
+    )?;
+    let response = read_json_rpc_response(&receiver, 2, MCP_RESPONSE_TIMEOUT).map_err(|error| {
+        app_error(format!(
+            "MCP server `{}` tools/call failed: {error}",
+            server.name
+        ))
+    })?;
+    parse_tool_call_result(&response)
 }
 
 fn run_stdio_tools_session(
@@ -368,6 +508,18 @@ fn build_tools_list_request(id: u64, cursor: Option<&str>) -> String {
     }
 }
 
+fn build_tools_call_request(
+    id: u64,
+    tool_name: &str,
+    arguments: &BTreeMap<String, JsonValue>,
+) -> String {
+    format!(
+        r#"{{"jsonrpc":"2.0","id":{id},"method":"tools/call","params":{{"name":"{}","arguments":{}}}}}"#,
+        crate::util::json::json_escape(tool_name),
+        json_value_to_string(&JsonValue::Object(arguments.clone())),
+    )
+}
+
 fn parse_tools_list_result(
     response: &BTreeMap<String, JsonValue>,
 ) -> AppResult<(Vec<McpRemoteTool>, Option<String>)> {
@@ -405,6 +557,50 @@ fn parse_tools_list_result(
     }
 
     Ok((parsed, next_cursor))
+}
+
+fn parse_tool_call_result(response: &BTreeMap<String, JsonValue>) -> AppResult<McpToolCallResult> {
+    let result = response
+        .get("result")
+        .and_then(json_as_object)
+        .ok_or_else(|| app_error("tools/call response `result` must be an object"))?;
+    let is_error = result
+        .get("isError")
+        .and_then(json_as_bool)
+        .unwrap_or(false);
+    let structured_content = result.get("structuredContent").map(json_value_to_string);
+    let content = match result.get("content") {
+        Some(value) => {
+            let items = json_as_array(value).ok_or_else(|| {
+                app_error("tools/call response `result.content` must be an array")
+            })?;
+            let mut parsed = Vec::with_capacity(items.len());
+            for item in items {
+                let Some(object) = json_as_object(item) else {
+                    parsed.push(json_value_to_string(item));
+                    continue;
+                };
+                match object.get("type").and_then(json_as_string) {
+                    Some("text") => parsed.push(
+                        object
+                            .get("text")
+                            .and_then(json_as_string)
+                            .unwrap_or("")
+                            .to_string(),
+                    ),
+                    _ => parsed.push(json_value_to_string(item)),
+                }
+            }
+            parsed
+        }
+        None => Vec::new(),
+    };
+
+    Ok(McpToolCallResult {
+        is_error,
+        content,
+        structured_content,
+    })
 }
 
 fn compact_inline(value: &str, limit: usize) -> String {
@@ -697,6 +893,13 @@ struct McpRemoteTool {
     input_schema: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct McpToolCallResult {
+    is_error: bool,
+    content: Vec<String>,
+    structured_content: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -780,6 +983,36 @@ mod tests {
     }
 
     #[test]
+    fn build_tools_call_request_includes_tool_name_and_arguments() {
+        let arguments = parse_call_arguments(Some(r#"{"path":"README.md","limit":2}"#)).unwrap();
+        let request = build_tools_call_request(3, "read_file", &arguments);
+        let root = parse_root_object(&request).unwrap();
+        assert_eq!(
+            root.get("method").and_then(json_as_string),
+            Some("tools/call")
+        );
+        let params = root
+            .get("params")
+            .and_then(json_as_object)
+            .expect("tools/call params");
+        assert_eq!(
+            params.get("name").and_then(json_as_string),
+            Some("read_file")
+        );
+        let args = params
+            .get("arguments")
+            .and_then(json_as_object)
+            .expect("arguments");
+        assert_eq!(args.get("path").and_then(json_as_string), Some("README.md"));
+    }
+
+    #[test]
+    fn parse_call_arguments_rejects_non_object_json() {
+        let error = parse_call_arguments(Some("[1,2]")).unwrap_err().to_string();
+        assert!(error.contains("must be an object"));
+    }
+
+    #[test]
     fn parse_tools_list_result_reads_tools_schema_and_cursor() {
         let root = parse_root_object(
             r#"{
@@ -812,6 +1045,34 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("\"properties\""));
+    }
+
+    #[test]
+    fn parse_tool_call_result_reads_text_structured_content_and_error_flag() {
+        let root = parse_root_object(
+            r#"{
+              "jsonrpc": "2.0",
+              "id": 2,
+              "result": {
+                "isError": true,
+                "content": [
+                  {"type": "text", "text": "not found"},
+                  {"type": "image", "data": "abc", "mimeType": "image/png"}
+                ],
+                "structuredContent": {"code": "ENOENT"}
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let result = parse_tool_call_result(&root).unwrap();
+        assert!(result.is_error);
+        assert_eq!(result.content[0], "not found");
+        assert!(result.content[1].contains("\"image\""));
+        assert_eq!(
+            result.structured_content.as_deref(),
+            Some(r#"{"code":"ENOENT"}"#)
+        );
     }
 
     #[test]

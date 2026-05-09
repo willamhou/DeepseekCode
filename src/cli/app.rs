@@ -52,8 +52,17 @@ pub enum DogfoodAction {
 pub enum McpAction {
     List,
     Doctor,
-    Tools { server: Option<String> },
-    Init { force: bool },
+    Tools {
+        server: Option<String>,
+    },
+    Call {
+        server: String,
+        tool: String,
+        arguments_json: Option<String>,
+    },
+    Init {
+        force: bool,
+    },
 }
 
 #[derive(Debug)]
@@ -398,6 +407,19 @@ fn parse_mcp_subcommand(args: Vec<String>) -> Result<McpAction, String> {
                 server: args.get(1).cloned(),
             })
         }
+        "call" => {
+            if args.len() < 3 {
+                return Err("mcp call requires <server> <tool> [json-args]".to_string());
+            }
+            if args.len() > 4 {
+                return Err("mcp call accepts at most one JSON arguments object".to_string());
+            }
+            Ok(McpAction::Call {
+                server: args[1].clone(),
+                tool: args[2].clone(),
+                arguments_json: args.get(3).cloned(),
+            })
+        }
         "init" => {
             let mut force = false;
             for flag in args.iter().skip(1) {
@@ -409,7 +431,7 @@ fn parse_mcp_subcommand(args: Vec<String>) -> Result<McpAction, String> {
             Ok(McpAction::Init { force })
         }
         other => Err(format!(
-            "unknown mcp sub-action `{other}`; expected list|doctor|tools|init"
+            "unknown mcp sub-action `{other}`; expected list|doctor|tools|call|init"
         )),
     }
 }
@@ -889,6 +911,23 @@ mod tests {
             Some(Command::Mcp(McpAction::Tools {
                 server: Some(ref name)
             })) if name == "filesystem"
+        ));
+
+        let call = Cli::from_argv(vec![
+            "mcp".to_string(),
+            "call".to_string(),
+            "filesystem".to_string(),
+            "read_file".to_string(),
+            r#"{"path":"README.md"}"#.to_string(),
+        ])
+        .unwrap();
+        assert!(matches!(
+            call.command,
+            Some(Command::Mcp(McpAction::Call {
+                server,
+                tool,
+                arguments_json: Some(ref args)
+            })) if server == "filesystem" && tool == "read_file" && args.contains("README.md")
         ));
 
         let init = Cli::from_argv(vec![

@@ -145,13 +145,14 @@ DEEPSEEK_MODEL=deepseek-coder
 放置可执行脚本；脚本通过 stdin 接收 JSON payload。`user_prompt_submit` / `pre_tool_use` 非零退出会阻断，
 `post_tool_use` 非零退出只会作为 advisory observation 返回给 agent。
 
-MCP server 配置可放在项目级 `.dscode/mcp.json` 或用户级 `~/.config/dscode/mcp.json`。当前版本支持配置发现、校验，以及 stdio server 的 tool discovery：
+MCP server 配置可放在项目级 `.dscode/mcp.json` 或用户级 `~/.config/dscode/mcp.json`。当前版本支持配置发现、校验，以及 stdio server 的手动 tool discovery / invocation：
 
 ```bash
 deepseek mcp init
 deepseek mcp list
 deepseek mcp doctor
 deepseek mcp tools [server-name]
+deepseek mcp call <server-name> <tool-name> '{"arg":"value"}'
 ```
 
 配置格式兼容常见 `mcpServers` 对象，例如：
@@ -170,8 +171,9 @@ deepseek mcp tools [server-name]
 ```
 
 `deepseek mcp tools` 会按 MCP lifecycle 启动 stdio server，执行 `initialize` / `notifications/initialized` / `tools/list`，并展示返回的 tool name、description 和 input schema。
+`deepseek mcp call` 会显式执行 `tools/call`，参数必须是 JSON object；返回会显示 text content、structuredContent 和 tool-level error flag。
 
-这一版还不会把 MCP tools 注入 agent tool registry，也不会自动执行 `tools/call`；它先把项目/用户级 MCP 配置面和 stdio tool discovery 固定下来，便于后续接入模型可调用工具。
+这一版还不会把 MCP tools 注入 agent tool registry；`mcp call` 是人工指定 server/tool/arguments 的调试入口，便于后续接入模型可调用工具。
 
 如果要做一次最小 live 请求验证：
 
@@ -185,7 +187,7 @@ deepseek smoke
 - `deepseek "task"` 或 `deepseek run "task"`：执行单次任务
 - `deepseek benchmark`：跑本地 benchmark 基线
 - `deepseek dogfood ...`：记录或回放真实任务
-- `deepseek mcp list|doctor|tools`：查看、校验或枚举 MCP server tools
+- `deepseek mcp list|doctor|tools|call`：查看、校验、枚举或手动调用 MCP server tools
 - `deepseek completion bash|zsh|fish`：生成 shell completion 脚本
 
 ## Shell Completion
