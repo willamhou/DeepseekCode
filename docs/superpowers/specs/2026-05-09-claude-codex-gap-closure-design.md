@@ -19,7 +19,7 @@
 当前基线（2026-05-09 Phase 11+ local hooks / config bootstrap 后复测）：
 
 - benchmark：`42/42`
-- 全量测试：`502 passed, 0 failed`
+- 全量测试：`503 passed, 0 failed`
 - benchmark trend gate：`pass against 5 comparable runs`
 - dogfood live gate：`pass (no new dogfood records since previous snapshot, runs=33)`
 - 当前已收掉的红点：
@@ -83,6 +83,10 @@
   - 自动创建 `.dscode/config.toml`、sessions、custom command 目录和 hooks 事件目录
   - `config --print-default` 覆盖 workspace user dirs / instruction file / hooks 字段
   - 把首次配置从手动复制模板降低为命令式初始化
+- Phase 11+ live coverage gate：
+  - 当 live dogfood snapshot 达到 `12` 条 run 后，普通 benchmark 还会要求关键 live slice 保持最小覆盖
+  - 当前要求 `pr_workflow` / `recovery` / `write_validate` 各至少 `3` 条 run
+  - 这避免“总量看起来健康，但关键 workflow 缺样本”的 snapshot 被误当成产品级 baseline
 
 本轮收口顺序：
 
@@ -92,7 +96,7 @@
 4. 收 `11f`：release / upgrade story 从“能安装”补到“能发布、能升级、能回滚”
 
 当前结果：Phase 11 主体与后续 baseline hardening / custom slash commands / workspace instructions /
-local hooks / config bootstrap 已收口，最新 benchmark 为 `42/42`，全量测试为 `502 passed, 0 failed`。
+local hooks / config bootstrap / live coverage gate 已收口，最新 benchmark 为 `42/42`，全量测试为 `503 passed, 0 failed`。
 
 这说明 `DeepseekCode` 已经不是“演示级原型”，但仍明显低于 Claude Code / Codex 的
 产品完成度。差距不再是“有没有 planner / tool loop”，而是：
@@ -114,7 +118,7 @@ local hooks / config bootstrap 已收口，最新 benchmark 为 `42/42`，全量
 | open-ended 任务 | 已有 recovery / replan，但依赖 heuristic | 对模糊任务也能稳定收敛 | 大 |
 | PR / CI 工作流 | `pr review/fix/patch` 已有 + baseline | 更厚的真实 PR/CI 样本与稳定端到端闭环 | 大 |
 | subagent | 已能 dispatch / merge-back | 更成熟的拆分、归并、去重、收敛 | 大 |
-| live 回归体系 | benchmark + dogfood 已闭环 | 更厚的 live baseline，且可阻断回归 | 中 |
+| live 回归体系 | benchmark + dogfood 已闭环，且有关键 slice 覆盖下限 | 更厚的外部/在线 live baseline，且可阻断回归 | 小到中 |
 | 安装 / 分发 | install guide、version、completion、config init 已有 | 普通用户开箱即装即用 | 小到中 |
 | IDE / 编辑器配套 | 几乎没有 | 统一的产品体验 | 大 |
 | 默认产品完成度 | 强原型 | 可长期主用的产品级工具 | 大 |

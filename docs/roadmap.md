@@ -1658,6 +1658,13 @@
 - `deepseek config --print-default` 同步输出 workspace user dirs / instruction file / hooks 配置，避免新字段在诊断时不可见。
 - 这一步把安装和首次配置从“读文档复制模板”推进到“命令初始化”，缩小产品化 gap；但 IDE/编辑器、MCP/plugin 生态、外部 PR/CI live 样本厚度仍不是小差距。
 
+**Phase 11+ live coverage gate (`main`, 2026-05-09) — 已完成**：
+- `deepseek benchmark` 的 live gate 不再只检查新增 failed / stuck / manual 记录：
+  - 当 dogfood snapshot 达到 `12` 条 run 后，关键 live slice 必须保持最低覆盖
+  - 当前要求 `pr_workflow`、`recovery`、`write_validate` 各至少 `3` 条 run
+  - 覆盖不足会让普通 benchmark 非零退出，仍可用 `--accept-live-baseline` 显式接受已排查的 snapshot
+- 这一步把 live gate 从“只挡坏结果”推进到“也挡关键 workflow 样本过薄”，避免 read-only 或单一 category 掩盖真实产品风险。
+
 ## 最近里程碑
 
 - `d9b3ae4` `Initialize project docs`

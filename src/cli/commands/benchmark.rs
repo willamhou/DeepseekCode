@@ -24,6 +24,9 @@ const DEFAULT_MANIFEST: &str = ".dscode/benchmarks.txt";
 const DEFAULT_REPORT: &str = ".dscode/benchmarks/latest.md";
 const TREND_GATE_WINDOW: usize = 5;
 const TREND_GATE_MIN_HISTORY: usize = 3;
+const LIVE_GATE_COVERAGE_MIN_TOTAL_RUNS: u64 = 12;
+const LIVE_GATE_REQUIRED_CATEGORY_RUNS: [(&str, u64); 3] =
+    [("pr_workflow", 3), ("recovery", 3), ("write_validate", 3)];
 
 pub fn run(args: BenchmarkArgs) -> AppResult<()> {
     let config = load_or_default()?;
@@ -1441,6 +1444,7 @@ fn evaluate_live_gate(
             );
         }
     }
+    push_live_coverage_failures(&mut reasons, current_snapshot);
 
     LiveGateEvaluation {
         status: if reasons.is_empty() {
@@ -1451,6 +1455,24 @@ fn evaluate_live_gate(
         current_runs: Some(current_snapshot.runs),
         previous_runs: Some(previous_snapshot.runs),
         reasons,
+    }
+}
+
+fn push_live_coverage_failures(reasons: &mut Vec<String>, snapshot: &DogfoodSnapshot) {
+    if snapshot.runs < LIVE_GATE_COVERAGE_MIN_TOTAL_RUNS {
+        return;
+    }
+    let categories = dogfood_category_stats_by_name(&snapshot.category_stats);
+    for (category, minimum) in LIVE_GATE_REQUIRED_CATEGORY_RUNS {
+        let actual = categories
+            .get(category)
+            .map(|stats| stats.runs)
+            .unwrap_or(0);
+        if actual < minimum {
+            reasons.push(format!(
+                "live category `{category}` has {actual} run(s), below required minimum {minimum}"
+            ));
+        }
     }
 }
 
@@ -3437,6 +3459,60 @@ seed_observations = "search_text:failed:no matches || recovery_hint:ok:after=sea
         let gate = evaluate_live_gate(&current, &[previous]);
         assert_eq!(gate.status, TrendGateStatus::Passed);
         assert!(gate.summary_line().contains("no new dogfood records"));
+    }
+
+    #[test]
+    fn evaluate_live_gate_fails_when_required_live_category_coverage_is_thin() {
+        let snapshot = DogfoodSnapshot {
+            runs: LIVE_GATE_COVERAGE_MIN_TOTAL_RUNS,
+            success: LIVE_GATE_COVERAGE_MIN_TOTAL_RUNS,
+            failed: 0,
+            stuck: 0,
+            manual: 0,
+            category_stats: vec![
+                DogfoodCategorySnapshot {
+                    category: "pr_workflow".to_string(),
+                    runs: 6,
+                    success: 6,
+                    failed: 0,
+                    stuck: 0,
+                    manual: 0,
+                    total_tool_calls: 24,
+                },
+                DogfoodCategorySnapshot {
+                    category: "write_validate".to_string(),
+                    runs: 6,
+                    success: 6,
+                    failed: 0,
+                    stuck: 0,
+                    manual: 0,
+                    total_tool_calls: 24,
+                },
+            ],
+        };
+        let previous = BenchmarkRunRecord {
+            version: 3,
+            timestamp_secs: 1,
+            manifest: ".dscode/benchmarks.txt".to_string(),
+            cases: 1,
+            passed: 1,
+            total_tool_calls: 1,
+            total_failed_tool_calls: 0,
+            duration_ms: 10,
+            category_stats: Vec::new(),
+            dogfood_snapshot: Some(snapshot),
+        };
+        let current = BenchmarkRunRecord {
+            timestamp_secs: 2,
+            ..previous.clone()
+        };
+
+        let gate = evaluate_live_gate(&current, &[previous]);
+
+        assert_eq!(gate.status, TrendGateStatus::Failed);
+        assert!(gate
+            .summary_line()
+            .contains("live category `recovery` has 0 run(s), below required minimum 3"));
     }
 
     #[test]
