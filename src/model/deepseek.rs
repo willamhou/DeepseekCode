@@ -782,6 +782,28 @@ fn build_user_prompt(input: &ModelRequest) -> String {
 }
 
 fn next_required_action_for_prompt(input: &ModelRequest) -> Option<String> {
+    if let Some(edit_request) = derive_edit_request(&input.task) {
+        let has_patch_tool = input
+            .available_tools
+            .iter()
+            .any(|tool| tool == "apply_patch");
+        let patch_already_succeeded = input
+            .observations
+            .iter()
+            .any(|observation| observation.tool_name == "apply_patch" && !observation.is_failure());
+        let read_confirmed_target = input.observations.iter().any(|observation| {
+            observation.tool_name == "read_file"
+                && !observation.is_failure()
+                && observation.summary.contains(&edit_request.find)
+        });
+        if has_patch_tool && !patch_already_succeeded && read_confirmed_target {
+            return Some(format!(
+                "call apply_patch with path `{}`, find `{}`, and replace `{}` now; do not call read_file again before patching",
+                edit_request.path, edit_request.find, edit_request.replace
+            ));
+        }
+    }
+
     let command = input.suggested_test_command.as_deref()?;
     if !input.available_tools.iter().any(|tool| tool == "run_shell") {
         return None;
@@ -2705,6 +2727,28 @@ mod tests {
             prompt.contains("Next required action: call run_shell with command `cargo test` now")
         );
         assert!(prompt.contains("do not call read_file or git_diff before validation"));
+    }
+
+    #[test]
+    fn build_user_prompt_requires_patch_after_reading_direct_edit_target() {
+        let mut req = empty_request_with_todos(Vec::new());
+        req.task =
+            "replace `a - b` with `a + b` in src/lib.rs and validate with cargo test".to_string();
+        req.suggested_test_command = Some("cargo test".to_string());
+        req.available_tools = vec![
+            "apply_patch".to_string(),
+            "run_shell".to_string(),
+            "read_file".to_string(),
+        ];
+        req.observations = vec![Observation::ok(
+            "read_file",
+            "1 pub fn add(a: i32, b: i32) -> i32 {\n2     a - b",
+        )];
+        let prompt = super::build_user_prompt(&req);
+        assert!(prompt.contains(
+            "Next required action: call apply_patch with path `src/lib.rs`, find `a - b`, and replace `a + b` now"
+        ));
+        assert!(prompt.contains("do not call read_file again before patching"));
     }
 
     #[test]
