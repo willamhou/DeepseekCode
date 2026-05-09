@@ -1665,6 +1665,28 @@
   - 覆盖不足会让普通 benchmark 非零退出，仍可用 `--accept-live-baseline` 显式接受已排查的 snapshot
 - 这一步把 live gate 从“只挡坏结果”推进到“也挡关键 workflow 样本过薄”，避免 read-only 或单一 category 掩盖真实产品风险。
 
+**Phase 11+ benchmark asset reproducibility / Go baseline (`main`, 2026-05-09) — 已完成**：
+- 审计发现默认 `.dscode/benchmarks.txt` 与 fixture corpus 仍被 ignore；这会导致 fresh checkout 缺少可复现的默认 benchmark，和 roadmap/spec 中“fixture-backed benchmark”的描述不一致
+- `.gitignore` 现在只继续忽略生成物：
+  - benchmark report/history
+  - dogfood ledger/report
+  - sessions 与 fixture 内嵌 session
+  同时允许默认 benchmark manifest、example manifest 和 `.dscode/fixtures/**` 进入版本控制
+- baseline 新增 Go fixture：
+  - `fixtures/go-write-mini`
+  - `fixture-write-validate-go-mini`
+  - `fixture-pr-patch-validate-go-mini`
+- 这一步把已存在的 Go language profile 从“只会检测”推进到默认 benchmark 可验证：
+  - `go test ./...`
+  - `apply_patch -> git_diff -> run_shell`
+  - 普通 write/validate 与 PR patch/validate 两种语境
+- 最新 benchmark：
+  - 默认 benchmark：`44/44`
+  - total tool calls：`151`
+  - failed tool calls：`0`
+  - trend gate：`skipped`，因为默认 manifest 从 `42` 条扩到 `44` 条，目前只有 1 条 44-case comparable history
+  - live gate：`pass (no new dogfood records since previous snapshot, runs=33)`
+
 ## 最近里程碑
 
 - `d9b3ae4` `Initialize project docs`

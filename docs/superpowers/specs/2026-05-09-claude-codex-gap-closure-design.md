@@ -16,11 +16,11 @@
 - fixture-backed benchmark
 - dogfood ledger / promotion / trend gate / category slices
 
-当前基线（2026-05-09 Phase 11+ local hooks / config bootstrap 后复测）：
+当前基线（2026-05-09 Phase 11+ benchmark assets / Go baseline 后复测）：
 
-- benchmark：`42/42`
+- benchmark：`44/44`
 - 全量测试：`503 passed, 0 failed`
-- benchmark trend gate：`pass against 5 comparable runs`
+- benchmark trend gate：`skipped (need at least 3 prior comparable runs, found 1)`，原因是默认 manifest 从 `42` 条扩到 `44` 条，case-count comparability reset
 - dogfood live gate：`pass (no new dogfood records since previous snapshot, runs=33)`
 - 当前已收掉的红点：
   - `fixture-pr-reproduce-fix-rust-cli-failing-mini` 已稳定为 `run_shell -> read_file -> apply_patch -> git_diff -> run_shell`
@@ -38,10 +38,11 @@
 
 当前 live snapshot：
 
-- dogfood：`22 runs`
+- dogfood：`33 runs`
 - `pr_workflow`: `8 runs`, `7 success`, `1 failed`
-- `recovery`: `1` 条 diagnostic expected-failure 已真实记账
-- `write_validate`: `4 runs`, `3 success`, `1 failed`
+- `recovery`: `10 runs`, `6 success`, `3 failed`, `1 stuck`
+- `write_validate`: `13 runs`, `9 success`, `4 failed`
+- `read_only`: `2 runs`, `2 success`
 
 当前已完成的 Phase 11 进展：
 
@@ -87,6 +88,11 @@
   - 当 live dogfood snapshot 达到 `12` 条 run 后，普通 benchmark 还会要求关键 live slice 保持最小覆盖
   - 当前要求 `pr_workflow` / `recovery` / `write_validate` 各至少 `3` 条 run
   - 这避免“总量看起来健康，但关键 workflow 缺样本”的 snapshot 被误当成产品级 baseline
+- Phase 11+ benchmark asset reproducibility / Go baseline：
+  - 默认 benchmark manifest、example manifest 和 fixture corpus 已解除 ignore 并进入版本控制
+  - 新增 `fixtures/go-write-mini`
+  - 新增 `fixture-write-validate-go-mini` 与 `fixture-pr-patch-validate-go-mini`
+  - 默认 baseline 从 `42` 条扩到 `44` 条，Rust / JavaScript / Python 后开始覆盖 Go 的 write+validate 与 PR patch+validate
 
 本轮收口顺序：
 
@@ -96,7 +102,7 @@
 4. 收 `11f`：release / upgrade story 从“能安装”补到“能发布、能升级、能回滚”
 
 当前结果：Phase 11 主体与后续 baseline hardening / custom slash commands / workspace instructions /
-local hooks / config bootstrap / live coverage gate 已收口，最新 benchmark 为 `42/42`，全量测试为 `503 passed, 0 failed`。
+local hooks / config bootstrap / live coverage gate / benchmark asset reproducibility 已收口，最新 benchmark 为 `44/44`，全量测试为 `503 passed, 0 failed`。
 
 这说明 `DeepseekCode` 已经不是“演示级原型”，但仍明显低于 Claude Code / Codex 的
 产品完成度。差距不再是“有没有 planner / tool loop”，而是：
@@ -228,7 +234,7 @@ Phase 11 拆成 6 条 workstream：
 验收：
 
 - `pr_workflow` 不再只有少量 happy path
-- 至少覆盖 Rust + JavaScript 两类完整 workflow
+- 至少覆盖 Rust + JavaScript + Go 三类 workflow，其中 Rust / JavaScript / Python 已覆盖 retry，Go 已覆盖 patch+validate
 - benchmark / dogfood 两端都能看到样本增长
 
 ### 11c. Recovery And Open-Ended Stability

@@ -1,0 +1,402 @@
+name = "fixture-inspect-rust-cli-mini"
+task = "inspect repository layout and summarize the main entrypoints for a new contributor"
+category = "read_only"
+assertion_bundle = "read_only_inspect"
+workdir = "fixtures/rust-cli-mini"
+notes = "Real workdir fixture baseline; should inspect the small Rust CLI layout"
+budget = 6
+
+name = "fixture-inspect-python-cli-mini"
+task = "inspect repository layout and summarize the main entrypoints for a new contributor"
+category = "read_only"
+assertion_bundle = "read_only_inspect"
+workdir = "fixtures/python-cli-mini"
+notes = "Real Python fixture baseline; should inspect the small Python CLI layout"
+budget = 6
+
+name = "fixture-search-python-route"
+task = "find where `route_benchmark_command` is implemented and inspect the code"
+category = "read_only"
+assertion_bundle = "read_only_search"
+workdir = "fixtures/python-cli-mini"
+notes = "Real Python fixture for search_text -> read_file on a small CLI"
+budget = 6
+
+name = "fixture-inspect-js-cli-mini"
+task = "inspect repository layout and summarize the main entrypoints for a new contributor"
+category = "read_only"
+assertion_bundle = "read_only_inspect"
+workdir = "fixtures/js-cli-mini"
+notes = "Real JavaScript fixture baseline; should inspect the small JS CLI layout"
+budget = 6
+
+name = "fixture-search-js-route"
+task = "find where `routeBenchmarkCommand` is implemented and inspect the code"
+category = "read_only"
+assertion_bundle = "read_only_search"
+workdir = "fixtures/js-cli-mini"
+notes = "Real JavaScript fixture for search_text -> read_file on a small CLI"
+budget = 6
+
+name = "fixture-search-route-benchmark"
+task = "find where `route_benchmark_subcommand` is implemented and inspect the code"
+category = "read_only"
+assertion_bundle = "read_only_search"
+workdir = "fixtures/rust-cli-mini"
+notes = "Real workdir fixture for search_text -> read_file on a small Rust CLI"
+budget = 6
+
+name = "fixture-write-validate-rust-mini"
+task = "replace `a - b` with `a + b` in src/lib.rs and validate with cargo test"
+category = "write_validate"
+assertion_bundle = "write_validate_ok"
+workdir = "fixtures/rust-write-mini"
+isolate_workdir = true
+notes = "Real isolated Rust write+validate fixture for apply_patch -> git_diff -> run_shell"
+budget = 6
+
+name = "fixture-recover-write-validate-rust-mini"
+task = "replace `a - b` with `a * b` in src/lib.rs and validate with cargo test"
+category = "write_validate"
+assertion_bundle = "write_validate_failure_readback"
+workdir = "fixtures/rust-write-mini"
+isolate_workdir = true
+notes = "Real isolated Rust write+validate failure case for apply_patch -> git_diff -> run_shell -> read_file"
+budget = 6
+expect_last_tool_output_contains = "2     a * b"
+
+name = "fixture-retry-write-validate-rust-mini"
+task = "replace `a - b` with `a * b` in src/lib.rs and validate with cargo test until the tests pass"
+category = "write_validate"
+assertion_bundle = "write_validate_retry_ok"
+workdir = "fixtures/rust-write-mini"
+isolate_workdir = true
+notes = "Real isolated Rust write+validate retry case for apply_patch -> git_diff -> run_shell -> read_file -> apply_patch -> git_diff -> run_shell"
+budget = 8
+expect_tool_output_contains = "read_file:2     a * b"
+
+name = "fixture-write-validate-python-mini"
+task = "replace `a - b` with `a + b` in src/math_ops.py and validate with pytest"
+category = "write_validate"
+assertion_bundle = "write_validate_ok"
+workdir = "fixtures/python-write-mini"
+isolate_workdir = true
+notes = "Real isolated Python write+validate fixture for apply_patch -> git_diff -> run_shell"
+budget = 6
+
+name = "fixture-recover-write-validate-python-mini"
+task = "replace `a - b` with `a * b` in src/math_ops.py and validate with pytest"
+category = "write_validate"
+assertion_bundle = "write_validate_failure_readback"
+workdir = "fixtures/python-write-mini"
+isolate_workdir = true
+notes = "Real isolated Python write+validate failure case for apply_patch -> git_diff -> run_shell -> read_file"
+budget = 6
+expect_last_tool_output_contains = "2     return a * b"
+
+name = "fixture-retry-write-validate-python-mini"
+task = "replace `a - b` with `a * b` in src/math_ops.py and validate with pytest until the tests pass"
+category = "write_validate"
+assertion_bundle = "write_validate_retry_ok"
+workdir = "fixtures/python-write-mini"
+isolate_workdir = true
+notes = "Real isolated Python retry case: after pytest failure, read back the patched source, apply one corrective patch, and rerun validation"
+budget = 8
+expect_tool_output_contains = "read_file:2     return a * b"
+
+name = "fixture-write-validate-js-mini"
+task = "replace `a - b` with `a + b` in src/math.js and validate with npm test"
+category = "write_validate"
+assertion_bundle = "write_validate_ok"
+workdir = "fixtures/js-write-mini"
+isolate_workdir = true
+notes = "Real isolated JavaScript write+validate fixture for apply_patch -> git_diff -> run_shell"
+budget = 6
+
+name = "fixture-retry-write-validate-js-mini"
+task = "replace `a - b` with `a * b` in src/math.js and validate with npm test until the tests pass"
+category = "write_validate"
+assertion_bundle = "write_validate_retry_ok"
+workdir = "fixtures/js-write-mini"
+isolate_workdir = true
+notes = "Real isolated JavaScript retry case: after npm test failure, read the failing test file, apply one corrective patch, and rerun validation"
+budget = 8
+expect_tool_output_contains = "read_file:add returns the sum"
+
+name = "fixture-write-validate-go-mini"
+task = "replace `a - b` with `a + b` in calc.go and validate with go test ./..."
+category = "write_validate"
+assertion_bundle = "write_validate_ok"
+workdir = "fixtures/go-write-mini"
+isolate_workdir = true
+notes = "Real isolated Go write+validate fixture for apply_patch -> git_diff -> run_shell"
+budget = 6
+
+name = "fixture-pr-review-rust-cli-mini"
+task = "Review pull request #42 'Route benchmark command' on owner/repo. Highlight correctness risks, security concerns, and style violations. Output a markdown report."
+category = "pr_workflow"
+skill = "pr-review"
+assertion_bundle = "pr_review_readback"
+workdir = "fixtures/rust-cli-mini"
+notes = "Seeded PR review flow over a small Rust CLI diff; should read changed file context before summarizing"
+seed_observations = "git_diff:ok:diff --git a/src/cli/app.rs b/src/cli/app.rs\n@@\n-        Some(\"benchmark\") => route_benchmark_subcommand(),\n+        Some(\"bench\") => route_benchmark_subcommand(),\n         Some(\"doctor\") => \"doctor\",\n || list_files:ok:src/cli/app.rs\nsrc/main.rs"
+budget = 4
+
+name = "fixture-pr-fix-rust-cli-mini"
+task = "CI job `test-rust` (run #555) on PR #42 failed at step `cargo test`. Reproduce locally, fix the root cause, and rerun the failing test. Failed log tail follows."
+category = "pr_workflow"
+assertion_bundle = "pr_fix_recovery"
+workdir = "fixtures/rust-cli-mini"
+notes = "Seeded PR fix flow should inspect the failing file path before broader search"
+seed_observations = "run_shell:ok:meta.command_kind=test\nmeta.exit_code=101\nmeta.result=failed\nmeta.failure_kind=test_failure\nmeta.failed_tests=src/cli/app.rs::cli_from_argv\nmeta.stderr_summary=test failed\nexit_code: 101\nstderr:\ntest failed || recovery_hint:ok:after=run_shell; next=read_file; path=src/cli/app.rs; reason=run_shell reported failing tests (src/cli/app.rs::cli_from_argv), inspect the relevant code or diff before retrying the command"
+budget = 4
+
+name = "fixture-pr-ci-lint-rust-cli-mini"
+task = "CI job `lint-rust` (run #556) on PR #42 failed at step `cargo clippy`. Reproduce locally, fix the root cause, and rerun the failing check. Failed log tail follows."
+category = "pr_workflow"
+assertion_bundle = "recovery_search_then_readback"
+workdir = "fixtures/rust-cli-mini"
+notes = "Seeded PR CI lint failure should search from the failing symbol in the log tail before reading the matching file"
+seed_observations = "run_shell:ok:meta.command_kind=lint\nmeta.exit_code=1\nmeta.result=failed\nmeta.failure_kind=lint_failure\nmeta.stderr_summary=cannot find function `route_benchmark_subcommand` in this scope\nexit_code: 1\nstderr:\ncannot find function `route_benchmark_subcommand` in this scope || recovery_hint:ok:after=run_shell; next=search_text; query=route_benchmark_subcommand; reason=run_shell reported a lint failure (cannot find function `route_benchmark_subcommand` in this scope), inspect the relevant code or diff before retrying the command"
+budget = 4
+
+name = "fixture-pr-patch-rust-cli-mini"
+task = "Address review feedback or apply the requested change in PR #42 'Route benchmark command'. PR diff is the current head; propose minimal additional changes."
+category = "pr_workflow"
+assertion_bundle = "pr_patch_readback"
+workdir = "fixtures/rust-cli-mini"
+notes = "Seeded PR patch flow should read the changed file from the current diff instead of searching the PR title"
+seed_observations = "git_diff:ok:diff --git a/src/cli/app.rs b/src/cli/app.rs\n@@\n-        Some(\"benchmark\") => route_benchmark_subcommand(),\n+        Some(\"bench\") => route_benchmark_subcommand(),\n         Some(\"doctor\") => \"doctor\",\n || list_files:ok:src/cli/app.rs\nsrc/main.rs"
+budget = 4
+
+name = "fixture-pr-fix-js-cli-mini"
+task = "CI job `test-js` (run #557) on PR #43 failed at step `npm test`. Reproduce locally, fix the root cause, and rerun the failing test. Failed log tail follows."
+category = "pr_workflow"
+assertion_bundle = "pr_fix_recovery"
+workdir = "fixtures/js-cli-mini"
+notes = "Seeded JavaScript PR fix flow should inspect the failing test file path before any broader fallback"
+seed_observations = "run_shell:ok:meta.command_kind=test\nmeta.exit_code=1\nmeta.result=failed\nmeta.failure_kind=test_failure\nmeta.failed_tests=test/route-benchmark.test.js::routeBenchmarkCommand routes bench\nmeta.stderr_summary=test failed\nexit_code: 1\nstderr:\ntest failed || recovery_hint:ok:after=run_shell; next=read_file; path=test/route-benchmark.test.js; reason=run_shell reported failing tests (test/route-benchmark.test.js::routeBenchmarkCommand routes bench), inspect the relevant code or diff before retrying the command"
+budget = 4
+
+name = "fixture-pr-fix-validate-js-cli-failing-mini"
+task = "CI job `test-js` (run #558) on PR #43 failed. Replace `run bench` with `run benchmark` in src/index.js and rerun npm test."
+category = "pr_workflow"
+assertion_bundle = "write_validate_ok"
+workdir = "fixtures/js-cli-failing-mini"
+isolate_workdir = true
+notes = "Real JavaScript PR fix+validate case over a naturally failing CLI fixture"
+budget = 6
+
+name = "fixture-pr-reproduce-fix-rust-cli-failing-mini"
+task = "CI job `test-rust` (run #559) on PR #44 failed. Reproduce locally, replace `route_bench_subcommand()` with `route_benchmark_subcommand()` in src/cli/app.rs, and rerun cargo test."
+category = "pr_workflow"
+assertion_bundle = "write_validate_repro_then_fix_ok"
+workdir = "fixtures/rust-cli-failing-mini"
+isolate_workdir = true
+notes = "Real Rust PR workflow repair case that first reproduces the failing command before applying the explicit fix"
+budget = 8
+
+name = "fixture-pr-patch-validate-rust-mini"
+task = "Address PR #44 review feedback: replace `a - b` with `a + b` in src/lib.rs and validate with cargo test."
+category = "pr_workflow"
+assertion_bundle = "write_validate_ok"
+workdir = "fixtures/rust-write-mini"
+isolate_workdir = true
+notes = "Real PR workflow patch+validate case over an isolated Rust fixture"
+budget = 6
+
+name = "fixture-pr-retry-validate-rust-mini"
+task = "Address PR #45 review feedback: replace `a - b` with `a * b` in src/lib.rs and validate with cargo test until the tests pass."
+category = "pr_workflow"
+assertion_bundle = "write_validate_retry_ok"
+workdir = "fixtures/rust-write-mini"
+isolate_workdir = true
+notes = "Real PR workflow retry case over an isolated Rust fixture"
+budget = 8
+expect_tool_output_contains = "read_file:2     a * b"
+
+name = "fixture-pr-retry-validate-js-mini"
+task = "Address PR #46 review feedback: replace `a - b` with `a * b` in src/math.js and validate with npm test until the tests pass."
+category = "pr_workflow"
+assertion_bundle = "write_validate_retry_ok"
+workdir = "fixtures/js-write-mini"
+isolate_workdir = true
+notes = "Real PR workflow JavaScript retry case over an isolated fixture"
+budget = 8
+expect_tool_output_contains = "read_file:add returns the sum"
+
+name = "fixture-pr-retry-validate-python-mini"
+task = "Address PR #47 review feedback: replace `a - b` with `a * b` in src/math_ops.py and validate with pytest until the tests pass."
+category = "pr_workflow"
+assertion_bundle = "write_validate_retry_ok"
+workdir = "fixtures/python-write-mini"
+isolate_workdir = true
+notes = "Real PR workflow Python retry case over an isolated fixture"
+budget = 8
+expect_tool_output_contains = "read_file:2     return a * b"
+
+name = "fixture-pr-second-round-feedback-rust-mini"
+task = "Address second-round PR #47 review feedback: replace `a * b` with `a + b` in src/lib.rs and validate with cargo test."
+category = "pr_workflow"
+assertion_bundle = "write_validate_ok"
+workdir = "fixtures/rust-review-feedback-mini"
+isolate_workdir = true
+notes = "Real PR workflow second-round review feedback case over an isolated Rust fixture with an already-wrong prior patch"
+budget = 6
+
+name = "fixture-pr-patch-validate-go-mini"
+task = "Address PR #48 review feedback: replace `a - b` with `a + b` in calc.go and validate with go test ./..."
+category = "pr_workflow"
+assertion_bundle = "write_validate_ok"
+workdir = "fixtures/go-write-mini"
+isolate_workdir = true
+notes = "Real PR workflow Go patch+validate case over an isolated fixture"
+budget = 6
+
+name = "fixture-pr-followup-rust-cli-mini"
+task = "Review pull request #42 'Route benchmark command'. Inspect the touched files before summarizing risks."
+category = "pr_workflow"
+workdir = "fixtures/rust-cli-mini"
+notes = "Seeded PR workflow follow-up should continue from child files even without explicit subagent wording"
+seed_observations = "dispatch_subagent:ok:meta.child_outcome=ok\nmeta.child_files=src/cli/app.rs,src/main.rs\nmeta.child_final_message=read the CLI routing files || read_file:ok:   1 pub fn cli_from_argv(args: &[String]) -> &'static str {"
+budget = 4
+expect_tool = "read_file"
+expect_tool_sequence = ["read_file"]
+expect_tool_output_contains = "read_file:fn main() {"
+forbid_tool = "list_files"
+max_tool_calls = 3
+max_failed_tools = 0
+
+name = "fixture-recover-empty-search"
+task = "find where `missing_fixture_symbol_20260505` is implemented, and if there are no matches inspect the repository layout instead"
+category = "recovery"
+assertion_bundle = "recovery_search_fallback"
+workdir = "fixtures/rust-cli-mini"
+notes = "Real workdir fixture for natural search_text -> list_files recovery"
+budget = 6
+
+name = "fixture-recover-empty-search-js"
+task = "find where `missing_fixture_symbol_js_20260509` is implemented, and if there are no matches inspect the repository layout instead"
+category = "recovery"
+assertion_bundle = "recovery_search_fallback"
+workdir = "fixtures/js-cli-mini"
+notes = "Real JavaScript fixture for natural search_text -> list_files recovery"
+budget = 6
+
+name = "fixture-recover-failing-js-test"
+task = "investigate why npm test fails in the JavaScript CLI and inspect the failing test file before retrying"
+category = "recovery"
+workdir = "fixtures/js-cli-failing-mini"
+notes = "Natural node --test failure should reproduce and read the failing JavaScript test file"
+budget = 4
+expect_tool = "run_shell"
+expect_tool_sequence = ["run_shell", "read_file"]
+expect_tool_output_contains = "run_shell:meta.failure_kind=test_failure"
+expect_last_tool_output_contains = "routeBenchmarkCommand routes bench"
+max_tool_calls = 2
+max_failed_tools = 0
+
+name = "fixture-recover-test-file-path"
+task = "investigate the failing test in the CLI"
+category = "recovery"
+assertion_bundle = "recovery_readback_then_search"
+workdir = "fixtures/rust-cli-mini"
+notes = "Seeded test-failure recovery in a real fixture workdir"
+seed_observations = "run_shell:ok:meta.command_kind=test\nmeta.exit_code=101\nmeta.result=failed\nmeta.failure_kind=test_failure\nmeta.failed_tests=src/cli/app.rs::route_benchmark_subcommand\nmeta.stderr_summary=test failed\nexit_code: 101\nstderr:\ntest failed || recovery_hint:ok:after=run_shell; next=read_file; path=src/cli/app.rs; reason=run_shell reported failing tests (src/cli/app.rs::route_benchmark_subcommand), inspect the relevant code or diff before retrying the command"
+budget = 4
+
+name = "fixture-recover-js-test-file-path"
+task = "investigate the failing test in the JavaScript CLI"
+category = "recovery"
+assertion_bundle = "recovery_readback_then_search"
+workdir = "fixtures/js-cli-mini"
+notes = "Seeded node --test failure should read the failing JavaScript test file before broader search"
+seed_observations = "run_shell:ok:meta.command_kind=test\nmeta.exit_code=1\nmeta.result=failed\nmeta.failure_kind=test_failure\nmeta.failed_tests=test/route-benchmark.test.js::routeBenchmarkCommand routes bench\nmeta.stderr_summary=test failed\nexit_code: 1\nstderr:\ntest failed || recovery_hint:ok:after=run_shell; next=read_file; path=test/route-benchmark.test.js; reason=run_shell reported failing tests (test/route-benchmark.test.js::routeBenchmarkCommand routes bench), inspect the relevant code or diff before retrying the command"
+budget = 4
+max_tool_calls = 4
+
+name = "inspect-repo-layout"
+task = "inspect repository layout and summarize the main entrypoints for a new contributor"
+category = "read_only"
+notes = "Read-only baseline; should start with layout inspection"
+budget = 6
+expect_tool = "list_files"
+max_tool_calls = 4
+max_failed_tools = 0
+
+name = "search-subagent-flow"
+task = "find where dispatch_subagent is implemented and summarize how parent and child loops coordinate"
+category = "subagent"
+assertion_bundle = "read_only_search"
+notes = "Covers search_text plus code-reading flow"
+budget = 8
+
+name = "subagent-next-action-mergeback"
+task = "inspect the repository layout and continue from the subagent findings"
+category = "subagent"
+expect_tool = "read_file"
+expect_tool_sequence = "read_file"
+expect_tool_output_contains = "read_file:DispatchSubagentTool"
+max_tool_calls = 3
+max_failed_tools = 0
+notes = "Seeded subagent v2 summary should drive parent next-action merge-back"
+seed_observations = "dispatch_subagent:ok:meta.child_outcome=ok\nmeta.child_next_action=read_file:src/tools/dispatch_subagent.rs\nmeta.child_files=src/tools/dispatch_subagent.rs\nmeta.child_final_message=read the subagent implementation"
+budget = 3
+
+name = "recover-empty-search"
+task = "find where zzzxq_missing_symbol_20260505 is implemented, and if there are no matches inspect the repository layout instead"
+category = "recovery"
+assertion_bundle = "recovery_search_fallback"
+notes = "Natural recovery case for search_text -> list_files"
+budget = 6
+
+name = "recover-read-file-failure"
+task = "find where dispatch_subagent is implemented and inspect the code"
+category = "recovery"
+assertion_bundle = "recovery_search_fallback"
+notes = "Seeded recovery case for read_file failure -> search_text"
+seed_observations = "read_file:failed:No such file or directory (os error 2) || recovery_hint:ok:after=read_file; next=search_text; reason=read_file failed, locate the correct file path before retrying the read"
+budget = 4
+max_tool_calls = 3
+
+name = "recover-failed-validation"
+task = "implement the fix and validate with cargo test"
+category = "recovery"
+assertion_bundle = "recovery_diff_then_readback"
+notes = "Seeded recovery case for failed validation -> git_diff"
+seed_observations = "apply_patch:ok:patched src/lib.rs || run_shell:ok:meta.command_kind=test\nmeta.exit_code=101\nmeta.result=failed\nmeta.failure_kind=test_failure\nmeta.failed_tests=parser::rejects_bad_input\nmeta.stderr_summary=test failed\nexit_code: 101\nstderr:\ntest failed || recovery_hint:ok:after=run_shell; next=git_diff; reason=run_shell reported failing tests (parser::rejects_bad_input), inspect the relevant code or diff before retrying the command"
+budget = 4
+
+name = "recover-lint-failure"
+task = "fix the lint failure in the Rust CLI"
+category = "recovery"
+assertion_bundle = "recovery_search_then_readback"
+notes = "Seeded failure_kind route for lint/build -> search_text"
+seed_observations = "run_shell:ok:meta.command_kind=lint\nmeta.exit_code=1\nmeta.result=failed\nmeta.failure_kind=lint_failure\nmeta.stderr_summary=cannot find value `dispatch_subagent` in this scope\nexit_code: 1\nstderr:\ncannot find value `dispatch_subagent` in this scope || recovery_hint:ok:after=run_shell; next=search_text; query=dispatch_subagent; reason=run_shell reported a lint failure (cannot find value `dispatch_subagent` in this scope), inspect the relevant code or diff before retrying the command"
+budget = 4
+
+name = "recover-test-file-path"
+task = "investigate the failing test in the CLI"
+category = "recovery"
+assertion_bundle = "recovery_readback_then_search"
+notes = "Seeded failure_kind route for test -> read_file when the failed test path is known"
+seed_observations = "run_shell:ok:meta.command_kind=test\nmeta.exit_code=101\nmeta.result=failed\nmeta.failure_kind=test_failure\nmeta.failed_tests=src/cli/app.rs::cli_from_argv_routes_benchmark_subcommand\nmeta.stderr_summary=test failed\nexit_code: 101\nstderr:\ntest failed || recovery_hint:ok:after=run_shell; next=read_file; path=src/cli/app.rs; reason=run_shell reported failing tests (src/cli/app.rs::cli_from_argv_routes_benchmark_subcommand), inspect the relevant code or diff before retrying the command"
+budget = 4
+
+name = "summarize-roadmap-status"
+task = "read docs/roadmap.md and summarize which advanced agent-loop phases are already complete"
+category = "read_only"
+notes = "Direct file-read path with roadmap grounding"
+budget = 6
+expect_tool = "read_file"
+max_tool_calls = 4
+max_failed_tools = 0
+
+name = "plan-multi-step-improvement"
+task = "plan an end-to-end improvement for benchmark reliability and report the execution steps before acting"
+category = "planning"
+assertion_bundle = "planning_todo_only"
+notes = "Should trigger explicit planning and todo_write without mutating files"
+budget = 6
+max_tool_calls = 2
+max_failed_tools = 0

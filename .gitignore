@@ -1,6 +1,12 @@
 /target/
 /.dscode/*
 !/.dscode/config.example.toml
+!/.dscode/benchmarks.example.txt
+!/.dscode/benchmarks.txt
+!/.dscode/fixtures/
+!/.dscode/fixtures/**
+/.dscode/fixtures/**/.dscode/
+/.dscode/fixtures/**/.dscode/**
 /.idea/
 /.vscode/
 .DS_Store
