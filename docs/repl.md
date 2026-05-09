@@ -59,6 +59,30 @@ Inside the markdown body, `$ARGUMENTS` expands to all arguments, `$0` / `$1` exp
 arguments, and `$ARGUMENTS[0]` / `$ARGUMENTS[1]` are the long indexed forms. If no argument
 placeholder appears, DeepseekCode appends `ARGUMENTS: ...` to the prompt automatically.
 
+## Workspace Instructions
+
+At the start of each agent loop, DeepseekCode loads bounded markdown instructions into the system
+prompt. This gives repeated project rules a first-class place instead of requiring users to paste
+them into every task.
+
+Default sources:
+
+```text
+~/.config/dscode/AGENTS.md
+<git-root>/AGENTS.override.md
+<git-root>/AGENTS.md
+<git-root>/CLAUDE.md
+<git-root>/.claude/CLAUDE.md
+```
+
+For subdirectories, DeepseekCode walks from the git root to the current directory. At each directory
+level it reads the first existing file in this precedence order: `AGENTS.override.md`, `AGENTS.md`,
+`CLAUDE.md`, `.claude/CLAUDE.md`. Later files are appended later in the prompt, so more local
+instructions naturally win when they conflict. Each loaded file is capped at 32 KiB.
+
+Set `workspace.user_instructions_file = ""` in `.dscode/config.toml` to disable user-level
+instructions, or point it at another personal instruction file.
+
 ## Cross-turn context
 
 Every user message is appended to the transcript; the LLM receives the

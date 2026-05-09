@@ -1628,6 +1628,18 @@
   - 无参数占位符时自动追加 `ARGUMENTS: ...`
 - 这一步把“常用 workflow prompt 复用”从写 TOML skill 降低到写 markdown 文件，缩小了与 Claude Code 交互体验的差距。
 
+**Phase 11+ workspace instructions (`main`, 2026-05-09) — 已完成**：
+- 再次对齐 Claude Code / Codex 后补齐持久项目指令入口：
+  - Codex 使用 `AGENTS.md` 作为 repo/project instruction 层
+  - Claude Code 使用 `CLAUDE.md` / `.claude/CLAUDE.md` 作为项目记忆与团队规则
+  - DeepseekCode 原先只做 profile hints / skill append，没有稳定的“每个任务都读”的 repo 指令文件
+- 新增 workspace instruction loader：
+  - 用户级：默认 `~/.config/dscode/AGENTS.md`，可通过 `workspace.user_instructions_file` 改路径或设空禁用
+  - 项目级：从 git root 到当前目录逐层读取
+  - 每层优先级：`AGENTS.override.md` > `AGENTS.md` > `CLAUDE.md` > `.claude/CLAUDE.md`
+  - 每个文件最多注入 32 KiB，并在系统 prompt 中标出来源路径
+- 这一步把项目规则、构建约定、review/checklist 等长期上下文从“口头重复”移动到可版本化文件，进一步缩小与 Codex/Claude 的基础协作体验差距。
+
 ## 最近里程碑
 
 - `d9b3ae4` `Initialize project docs`

@@ -100,6 +100,9 @@ impl AgentLoop {
         }
 
         let profile = detect_profile(".")?;
+        let cwd = std::env::current_dir()?;
+        let workspace_instructions =
+            crate::core::instructions::load_workspace_instructions(&cwd, &self.config.workspace)?;
         let registry = crate::tools::registry::default_registry_with_context(
             self.config.clone(),
             subagent_depth,
@@ -185,6 +188,13 @@ impl AgentLoop {
 
         if emit_progress {
             println!("Memory summary: {}", memory.summary());
+            if !workspace_instructions.is_empty() {
+                println!("Workspace instructions:");
+                for file in &workspace_instructions {
+                    let suffix = if file.truncated { " (truncated)" } else { "" };
+                    println!("- {}{}", file.path.display(), suffix);
+                }
+            }
         }
 
         let mut observations = initial_observations;
@@ -215,7 +225,7 @@ impl AgentLoop {
                 .collect::<Vec<_>>();
             let todo_snapshot = todos.borrow().snapshot();
             let request = ModelRequest {
-                system_prompt: build_system_prompt_with_flags(
+                system_prompt: build_system_prompt_with_workspace_instructions(
                     skill,
                     research_bootstrap,
                     planning_mode,
@@ -223,6 +233,7 @@ impl AgentLoop {
                     available_tools
                         .iter()
                         .any(|tool| tool == "dispatch_subagent"),
+                    &workspace_instructions,
                 ),
                 task: context.task.clone(),
                 profile_name: profile.name.clone(),
@@ -1013,6 +1024,30 @@ fn build_system_prompt_with_flags(
     prompt
 }
 
+fn build_system_prompt_with_workspace_instructions(
+    skill_name: Option<&SkillSpec>,
+    research_bootstrap: bool,
+    planning_mode: bool,
+    has_plan: bool,
+    subagent_available: bool,
+    workspace_instructions: &[crate::core::instructions::InstructionFile],
+) -> String {
+    let mut prompt = build_system_prompt_with_flags(
+        skill_name,
+        research_bootstrap,
+        planning_mode,
+        has_plan,
+        subagent_available,
+    );
+    if let Some(instructions) =
+        crate::core::instructions::render_workspace_instructions(workspace_instructions)
+    {
+        prompt.push_str("\n\n");
+        prompt.push_str(&instructions);
+    }
+    prompt
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1023,6 +1058,27 @@ mod tests {
         assert!(prompt.contains("todo_write"));
         assert!(prompt.contains("in_progress"));
         assert!(prompt.contains("Skip todo_write only for trivial"));
+    }
+
+    #[test]
+    fn build_system_prompt_includes_workspace_instructions() {
+        let instructions = [crate::core::instructions::InstructionFile {
+            path: std::path::PathBuf::from("AGENTS.md"),
+            content: "Run cargo test before committing.".to_string(),
+            truncated: false,
+        }];
+        let prompt = super::build_system_prompt_with_workspace_instructions(
+            None,
+            false,
+            false,
+            false,
+            false,
+            &instructions,
+        );
+
+        assert!(prompt.contains("Workspace instructions"));
+        assert!(prompt.contains("AGENTS.md"));
+        assert!(prompt.contains("Run cargo test before committing."));
     }
 
     #[test]

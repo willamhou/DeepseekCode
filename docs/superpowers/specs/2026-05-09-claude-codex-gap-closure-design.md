@@ -1,7 +1,7 @@
 # Claude/Codex Gap Closure — Phase 11 设计
 
 最后更新：`2026-05-09`
-状态：`complete`（Phase 11 已收口，后续进入 baseline hardening）
+状态：`active follow-up`（Phase 11 已收口，Phase 11+ 按 gap review 继续推进）
 关联 Phase：11（把 `DeepseekCode` 从强原型推进到可长期主用的 CLI code agent）
 
 ## 背景
@@ -16,12 +16,12 @@
 - fixture-backed benchmark
 - dogfood ledger / promotion / trend gate / category slices
 
-当前基线（2026-05-09 收口后 baseline hardening 复测）：
+当前基线（2026-05-09 Phase 11+ workspace instructions 后复测）：
 
 - benchmark：`42/42`
-- 全量测试：`467 passed, 0 failed`
-- benchmark trend gate：`pass against 3 comparable runs`
-- dogfood live gate：`pass (no new dogfood records since previous snapshot, runs=22)`
+- 全量测试：`490 passed, 0 failed`
+- benchmark trend gate：`pass against 5 comparable runs`
+- dogfood live gate：`pass (no new dogfood records since previous snapshot, runs=33)`
 - 当前已收掉的红点：
   - `fixture-pr-reproduce-fix-rust-cli-failing-mini` 已稳定为 `run_shell -> read_file -> apply_patch -> git_diff -> run_shell`
   - Python retry baseline 已补齐到 `write_validate` 和 `pr_workflow`
@@ -67,6 +67,11 @@
   - REPL 支持 `.dscode/commands/*.md` 与用户级 `~/.config/dscode/commands/*.md`
   - 支持 `/name args`、namespace（如 `/pr/fix`）和 `$ARGUMENTS` / `$0` 参数替换
   - 对齐 Claude Code prompt-backed custom commands 的核心使用方式，降低常用 workflow 复用成本
+- Phase 11+ workspace instructions：
+  - agent loop 启动时读取用户级 `~/.config/dscode/AGENTS.md`
+  - 项目级从 git root 到当前目录逐层读取 `AGENTS.override.md` / `AGENTS.md` / `CLAUDE.md` / `.claude/CLAUDE.md`
+  - 每个文件最多注入 32 KiB，并在 system prompt 中标注来源路径
+  - 对齐 Codex `AGENTS.md` 与 Claude Code `CLAUDE.md` 的基础项目记忆/团队规则入口
 
 本轮收口顺序：
 
@@ -75,7 +80,8 @@
 3. 收 `11e`：benchmark failed expectation 与 dogfood 新增 live failure 都必须能阻断
 4. 收 `11f`：release / upgrade story 从“能安装”补到“能发布、能升级、能回滚”
 
-当前结果：上述 4 项已收口，最新 benchmark 为 `42/42`，全量测试为 `467 passed, 0 failed`。
+当前结果：Phase 11 主体与后续 baseline hardening / custom slash commands / workspace instructions 已收口，
+最新 benchmark 为 `42/42`，全量测试为 `490 passed, 0 failed`。
 
 这说明 `DeepseekCode` 已经不是“演示级原型”，但仍明显低于 Claude Code / Codex 的
 产品完成度。差距不再是“有没有 planner / tool loop”，而是：

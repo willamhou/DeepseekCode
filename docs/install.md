@@ -131,6 +131,11 @@ DEEPSEEK_MODEL=deepseek-coder
 
 如果 `.env` 或 shell 环境里设置了 `DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL`，它们会覆盖 `.dscode/config.toml` 里的 `model.base_url` / `model.model`。
 
+`deepseek` 每次任务开始前也会读取 workspace instruction 文件。团队共享规则可放在 repo root 或子目录的
+`AGENTS.md`；已有 Claude Code 项目也可继续用 `CLAUDE.md` 或 `.claude/CLAUDE.md`，DeepseekCode 会在同一目录没有
+`AGENTS*.md` 时把它们作为 fallback。个人默认指令文件是 `~/.config/dscode/AGENTS.md`，可通过
+`workspace.user_instructions_file` 改路径或设为空字符串禁用。
+
 如果要做一次最小 live 请求验证：
 
 ```bash

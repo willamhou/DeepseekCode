@@ -23,6 +23,15 @@ impl WorkspaceConfig {
         crate::skills::tilde::expand_tilde(&self.user_commands_dir)
     }
 
+    pub fn user_instructions_file(&self) -> Option<PathBuf> {
+        let path = self.user_instructions_file.trim();
+        if path.is_empty() {
+            None
+        } else {
+            Some(crate::skills::tilde::expand_tilde(path))
+        }
+    }
+
     pub fn dogfood_dir(&self) -> PathBuf {
         PathBuf::from(&self.config_dir).join("dogfood")
     }

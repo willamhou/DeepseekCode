@@ -60,6 +60,10 @@ workspace.session_dir = ".dscode/sessions"
 # 项目级命令放在 `.dscode/commands/*.md`
 workspace.user_commands_dir = "~/.config/dscode/commands"
 
+# 用户级长期指令文件；留空可禁用用户级指令
+# 项目级指令从 git root 到当前目录依次读取：AGENTS.override.md、AGENTS.md、CLAUDE.md
+workspace.user_instructions_file = "~/.config/dscode/AGENTS.md"
+
 # -----------------------------------------------------------------------------
 # pr: GitHub PR integration (Phase 8a)
 # -----------------------------------------------------------------------------
