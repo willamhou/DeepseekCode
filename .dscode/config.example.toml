@@ -33,7 +33,7 @@ model.model = "deepseek-coder"
 model.api_key_env = "DEEPSEEK_API_KEY"
 
 # -----------------------------------------------------------------------------
-# approval: 写入与 shell 命令的审批策略
+# approval: 写入、shell 命令与 agent MCP 调用的审批策略
 # -----------------------------------------------------------------------------
 
 # 应用 patch 写入文件前是否要求确认
@@ -43,6 +43,11 @@ approval.require_write_confirmation = true
 # 执行 run_shell 前是否要求确认
 # 用环境变量 DSCODE_AUTO_APPROVE_SHELL=1 可一次性放行
 approval.require_shell_confirmation = true
+
+# agent 通过 mcp_call 调用远端 MCP tool 前是否要求确认
+# 用环境变量 DSCODE_AUTO_APPROVE_MCP=1 可一次性放行
+# 用户显式执行 `deepseek mcp call ...` 不走此审批，因为那已经是直接命令意图。
+approval.require_mcp_confirmation = true
 
 # -----------------------------------------------------------------------------
 # workspace: 配置与会话目录
@@ -83,6 +88,7 @@ hooks.timeout_ms = 5000
 
 # 当前版本会读取并校验 MCP server 配置，可手动对 stdio server 执行 tools/list / tools/call。
 # 当 project/user MCP config 文件存在时，agent registry 会暴露通用 mcp_list_tools / mcp_call bridge。
+# agent bridge 的 mcp_call 默认受 approval.require_mcp_confirmation 保护。
 # 还不会把每个远端 MCP tool 动态注入为独立 agent tool。
 # Project/user scope 的同名 server 以 project 为准。
 mcp.enabled = true

@@ -35,6 +35,10 @@ fn print_config(config: &AppConfig) {
         "approval.require_shell_confirmation = {}",
         config.approval.require_shell_confirmation
     );
+    println!(
+        "approval.require_mcp_confirmation = {}",
+        config.approval.require_mcp_confirmation
+    );
     println!("workspace.config_dir = {}", config.workspace.config_dir);
     println!("workspace.session_dir = {}", config.workspace.session_dir);
     println!(
@@ -98,6 +102,7 @@ model.api_key_env = "{api_key_env}"
 
 approval.require_write_confirmation = {require_write_confirmation}
 approval.require_shell_confirmation = {require_shell_confirmation}
+approval.require_mcp_confirmation = {require_mcp_confirmation}
 
 workspace.config_dir = "{config_dir}"
 workspace.session_dir = "{session_dir}"
@@ -122,6 +127,7 @@ mcp.user_file = "{mcp_user_file}"
         api_key_env = config.model.api_key_env,
         require_write_confirmation = config.approval.require_write_confirmation,
         require_shell_confirmation = config.approval.require_shell_confirmation,
+        require_mcp_confirmation = config.approval.require_mcp_confirmation,
         config_dir = config.workspace.config_dir,
         session_dir = config.workspace.session_dir,
         user_skills_dir = config.workspace.user_skills_dir,

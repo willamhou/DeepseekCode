@@ -1918,6 +1918,7 @@ fn run_case_in_workdir<T>(
     let previous = env::current_dir()?;
     let previous_auto_approve_writes = env::var_os("DSCODE_AUTO_APPROVE_WRITES");
     let previous_auto_approve_shell = env::var_os("DSCODE_AUTO_APPROVE_SHELL");
+    let previous_auto_approve_mcp = env::var_os("DSCODE_AUTO_APPROVE_MCP");
     if let Some(workdir) = workdir {
         env::set_current_dir(workdir)?;
     }
@@ -1925,6 +1926,7 @@ fn run_case_in_workdir<T>(
         unsafe {
             env::set_var("DSCODE_AUTO_APPROVE_WRITES", "1");
             env::set_var("DSCODE_AUTO_APPROVE_SHELL", "1");
+            env::set_var("DSCODE_AUTO_APPROVE_MCP", "1");
         }
     }
     let result = f();
@@ -1932,6 +1934,7 @@ fn run_case_in_workdir<T>(
     if auto_approve {
         restore_env_var("DSCODE_AUTO_APPROVE_WRITES", previous_auto_approve_writes);
         restore_env_var("DSCODE_AUTO_APPROVE_SHELL", previous_auto_approve_shell);
+        restore_env_var("DSCODE_AUTO_APPROVE_MCP", previous_auto_approve_mcp);
     }
     match (result, restore_result) {
         (Ok(value), Ok(())) => Ok(value),
@@ -2724,19 +2727,23 @@ seed_observations = "search_text:failed:no matches || recovery_hint:ok:after=sea
         unsafe {
             env::remove_var("DSCODE_AUTO_APPROVE_WRITES");
             env::remove_var("DSCODE_AUTO_APPROVE_SHELL");
+            env::remove_var("DSCODE_AUTO_APPROVE_MCP");
         }
 
         let snapshot = run_case_in_workdir(None, true, || {
             Ok((
                 env::var("DSCODE_AUTO_APPROVE_WRITES").ok(),
                 env::var("DSCODE_AUTO_APPROVE_SHELL").ok(),
+                env::var("DSCODE_AUTO_APPROVE_MCP").ok(),
             ))
         })
         .unwrap();
         assert_eq!(snapshot.0.as_deref(), Some("1"));
         assert_eq!(snapshot.1.as_deref(), Some("1"));
+        assert_eq!(snapshot.2.as_deref(), Some("1"));
         assert!(env::var("DSCODE_AUTO_APPROVE_WRITES").is_err());
         assert!(env::var("DSCODE_AUTO_APPROVE_SHELL").is_err());
+        assert!(env::var("DSCODE_AUTO_APPROVE_MCP").is_err());
     }
 
     #[test]

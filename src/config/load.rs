@@ -97,6 +97,9 @@ fn parse_config(content: &str, config: &mut AppConfig) -> AppResult<()> {
             "approval.require_shell_confirmation" => {
                 config.approval.require_shell_confirmation = parse_bool(value)?
             }
+            "approval.require_mcp_confirmation" => {
+                config.approval.require_mcp_confirmation = parse_bool(value)?
+            }
             "hooks.enabled" => {
                 config.hooks.enabled = parse_bool(value)?;
             }
@@ -188,6 +191,21 @@ mod tests {
         let toml = "workspace.user_instructions_file = \"/custom/AGENTS.md\"\n";
         parse_config(toml, &mut config).unwrap();
         assert_eq!(config.workspace.user_instructions_file, "/custom/AGENTS.md");
+    }
+
+    #[test]
+    fn parse_config_overrides_approval_from_toml() {
+        let mut config = AppConfig::default();
+        let toml = r#"
+approval.require_write_confirmation = false
+approval.require_shell_confirmation = false
+approval.require_mcp_confirmation = false
+"#;
+        parse_config(toml, &mut config).unwrap();
+
+        assert!(!config.approval.require_write_confirmation);
+        assert!(!config.approval.require_shell_confirmation);
+        assert!(!config.approval.require_mcp_confirmation);
     }
 
     #[test]

@@ -175,7 +175,9 @@ deepseek mcp call <server-name> <tool-name> '{"arg":"value"}'
 
 当 project/user MCP config 文件存在时，agent 运行时会暴露两个通用 bridge tools：`mcp_list_tools` 和 `mcp_call`。这使模型可以先枚举 MCP server tools，再用 JSON object arguments 调用 stdio MCP tools。
 
-这一版还不会把每个远端 MCP tool 动态注入为独立 agent tool；HTTP/SSE transport 和更细的 MCP 审批策略仍是后续工作。
+agent 侧的 `mcp_call` 默认受 `approval.require_mcp_confirmation = true` 保护；非交互运行可用 `DSCODE_AUTO_APPROVE_MCP=1` 放行。`mcp_list_tools` 只是只读发现，不要求确认；用户显式执行的 `deepseek mcp call ...` 也不会再次弹出 agent 审批。
+
+这一版还不会把每个远端 MCP tool 动态注入为独立 agent tool；HTTP/SSE transport 和按 server/tool 的细粒度 MCP policy 仍是后续工作。
 
 如果要做一次最小 live 请求验证：
 

@@ -40,6 +40,7 @@ impl Default for ModelConfig {
 pub struct ApprovalConfig {
     pub require_write_confirmation: bool,
     pub require_shell_confirmation: bool,
+    pub require_mcp_confirmation: bool,
 }
 
 impl Default for ApprovalConfig {
@@ -47,6 +48,7 @@ impl Default for ApprovalConfig {
         Self {
             require_write_confirmation: true,
             require_shell_confirmation: true,
+            require_mcp_confirmation: true,
         }
     }
 }

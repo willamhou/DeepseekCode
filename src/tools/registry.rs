@@ -103,6 +103,17 @@ impl ToolRegistry {
             }
         }
 
+        if name == "mcp_call" && policy.require_mcp_confirmation && !policy.auto_approve_mcp {
+            let target = describe_mcp_call_target(&input)?;
+            let prompt = format!("Call MCP tool {}?", sanitize_for_prompt(&target));
+            if !confirm(&prompt) {
+                return Err(policy_denied(format!(
+                    "mcp tool call declined for {}; set DSCODE_AUTO_APPROVE_MCP=1 to skip prompts or relax approval.require_mcp_confirmation",
+                    sanitize_for_prompt(&target)
+                )));
+            }
+        }
+
         self.execute(name, input).map_err(|error| {
             if error.downcast_ref::<crate::error::AppError>().is_some() {
                 error
@@ -118,9 +129,11 @@ pub struct ExecutionPolicy {
     allowed_tools: Vec<String>,
     require_write_confirmation: bool,
     require_shell_confirmation: bool,
+    require_mcp_confirmation: bool,
     shell_allowlist: Vec<String>,
     auto_approve_writes: bool,
     auto_approve_shell: bool,
+    auto_approve_mcp: bool,
 }
 
 impl ExecutionPolicy {
@@ -150,9 +163,11 @@ impl ExecutionPolicy {
             allowed_tools,
             require_write_confirmation,
             require_shell_confirmation,
+            require_mcp_confirmation: approval.require_mcp_confirmation,
             shell_allowlist,
             auto_approve_writes: env_flag("DSCODE_AUTO_APPROVE_WRITES"),
             auto_approve_shell: env_flag("DSCODE_AUTO_APPROVE_SHELL"),
+            auto_approve_mcp: env_flag("DSCODE_AUTO_APPROVE_MCP"),
         }
     }
 
@@ -176,6 +191,16 @@ fn describe_apply_patch_target(input: &ToolInput) -> String {
         return format!("{cwd} (unified diff)");
     }
     "current workspace".to_string()
+}
+
+fn describe_mcp_call_target(input: &ToolInput) -> AppResult<String> {
+    let server = input
+        .get("server")
+        .ok_or_else(|| app_error("mcp_call requires `server`"))?;
+    let tool = input
+        .get("tool")
+        .ok_or_else(|| app_error("mcp_call requires `tool`"))?;
+    Ok(format!("{server}/{tool}"))
 }
 
 const PROMPT_LIMIT: usize = 200;
@@ -253,9 +278,11 @@ mod tests {
             allowed_tools: vec!["apply_patch".to_string(), "run_shell".to_string()],
             require_write_confirmation: true,
             require_shell_confirmation: true,
+            require_mcp_confirmation: true,
             shell_allowlist: Vec::new(),
             auto_approve_writes: false,
             auto_approve_shell: false,
+            auto_approve_mcp: false,
         }
     }
 
@@ -319,6 +346,45 @@ mod tests {
             .unwrap_err();
         assert_eq!(classify(error.as_ref()), AppErrorKind::PolicyDenied);
         assert!(error.to_string().contains("write declined"));
+    }
+
+    #[test]
+    fn execute_with_policy_denies_mcp_call_under_non_tty() {
+        let root = temp_root("mcp-policy");
+        std::fs::create_dir_all(&root).unwrap();
+        let mcp_file = root.join("mcp.json");
+        std::fs::write(
+            &mcp_file,
+            r#"{"mcpServers":{"fake":{"disabled":true,"transport":"stdio"}}}"#,
+        )
+        .unwrap();
+
+        let mut config = AppConfig::default();
+        config.mcp.project_file = mcp_file.display().to_string();
+        config.mcp.user_file = root.join("missing-user.json").display().to_string();
+        let registry =
+            default_registry_with_context(config, 0, Rc::new(RefCell::new(TodoList::default())));
+        let policy = ExecutionPolicy {
+            allowed_tools: vec!["mcp_call".to_string()],
+            require_write_confirmation: false,
+            require_shell_confirmation: false,
+            require_mcp_confirmation: true,
+            shell_allowlist: Vec::new(),
+            auto_approve_writes: false,
+            auto_approve_shell: false,
+            auto_approve_mcp: false,
+        };
+
+        let input = ToolInput::new()
+            .with_arg("server", "fake")
+            .with_arg("tool", "echo");
+        let error = registry
+            .execute_with_policy("mcp_call", input, &policy)
+            .unwrap_err();
+        assert_eq!(classify(error.as_ref()), AppErrorKind::PolicyDenied);
+        assert!(error.to_string().contains("mcp tool call declined"));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

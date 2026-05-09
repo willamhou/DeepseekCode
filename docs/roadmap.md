@@ -63,6 +63,7 @@
   - `model.api_key_env`
   - `approval.require_write_confirmation`
   - `approval.require_shell_confirmation`
+  - `approval.require_mcp_confirmation`
   - `workspace.config_dir`
   - `workspace.session_dir`
 
@@ -125,6 +126,7 @@
 - 环境变量支持：
   - `DSCODE_AUTO_APPROVE_WRITES=1`
   - `DSCODE_AUTO_APPROVE_SHELL=1`
+  - `DSCODE_AUTO_APPROVE_MCP=1`
 
 ### DeepSeek 远端传输
 
@@ -219,7 +221,8 @@
 - ~~增加真正的审批交互~~（已完成）
   - `apply_patch` 写入前在 stderr 输出 `Apply patch in <path>? [y/N]:` 并读 stdin
   - `run_shell` 执行前输出 `Run shell command in <cwd>: \`<command>\`? [y/N]:`
-  - 非 TTY 默认拒绝（安全 fallback）；env `DSCODE_AUTO_APPROVE_*=1` 仍可一次性放行
+  - agent `mcp_call` 调用远端 MCP tool 前输出 `Call MCP tool <server>/<tool>? [y/N]:`
+  - 非 TTY 默认拒绝（安全 fallback）；`DSCODE_AUTO_APPROVE_WRITES=1` / `DSCODE_AUTO_APPROVE_SHELL=1` / `DSCODE_AUTO_APPROVE_MCP=1` 可一次性放行对应类别
 - ~~区分”策略拒绝”和”工具失败”~~（已完成）
   - `AppErrorKind` 枚举：`Other / PolicyDenied / ToolFailure`
   - `policy_denied()` / `tool_failure()` 构造器
@@ -637,7 +640,7 @@
 - benchmark manifest 新增 `isolate_workdir = true`，runner 会把该 fixture 复制到临时目录执行，再清理副本：
   - 这让 write+validate case 可以真实调用 `apply_patch` 和 `run_shell`
   - 同时避免污染源 fixture 或仓库工作区
-- isolated case 在 runner 内会临时开启 `DSCODE_AUTO_APPROVE_WRITES=1` 和 `DSCODE_AUTO_APPROVE_SHELL=1`，消除非交互 benchmark 被 confirm prompt 卡死的问题
+- isolated case 在 runner 内会临时开启 `DSCODE_AUTO_APPROVE_WRITES=1`、`DSCODE_AUTO_APPROVE_SHELL=1` 和 `DSCODE_AUTO_APPROVE_MCP=1`，消除非交互 benchmark 被 confirm prompt 卡死的问题
 - 新增真实 write+validate fixture：
   - [`rust-write-mini`](/home/willamhou/codes/DeepseekCode/.dscode/fixtures/rust-write-mini/Cargo.toml)
   - 基线链路稳定为 `apply_patch -> git_diff -> run_shell`
@@ -1460,6 +1463,7 @@
 - `dogfood run --from-benchmark` 在 isolated fixture replay 场景下现在会临时开启：
   - `DSCODE_AUTO_APPROVE_WRITES=1`
   - `DSCODE_AUTO_APPROVE_SHELL=1`
+  - `DSCODE_AUTO_APPROVE_MCP=1`
 - 作用范围是刻意收窄的：
   - 只对 benchmark replay 生效
   - 只对 isolated fixture workdir 生效
@@ -1732,7 +1736,16 @@
   - `mcp_list_tools`：枚举 configured MCP server tools 和 input schema
   - `mcp_call`：按 server/tool/JSON arguments 调用 stdio MCP tools
 - OpenAI / Anthropic tool schema 都已加入这两个 bridge tools；没有 MCP config 文件时不会暴露，避免无 MCP 项目的默认 prompt 膨胀
-- 当前边界仍明确：远端 MCP tools 还不是动态独立 agent tools；HTTP/SSE transport、细粒度 MCP approval/policy 和更完整的 plugin ecosystem 仍未接入
+- 当前边界仍明确：远端 MCP tools 还不是动态独立 agent tools；HTTP/SSE transport、按 server/tool 的细粒度 MCP policy 和更完整的 plugin ecosystem 仍未接入
+
+**Phase 11+ MCP call approval policy (`main`, 2026-05-09) — 已完成基础版**：
+- 延续 MCP agent bridge，本轮把远端 tool 调用接回现有 approval/policy 入口：
+  - 新增 `approval.require_mcp_confirmation`，默认 `true`
+  - 新增 `DSCODE_AUTO_APPROVE_MCP=1`，用于非交互 benchmark / dogfood replay 或用户显式放行
+  - agent 通过 `mcp_call` 调用远端 MCP tool 前会确认 `server/tool`
+- `mcp_list_tools` 仍保持只读发现能力，不要求确认
+- 用户直接执行的 `deepseek mcp call <server> <tool> [json-args]` 不走该 prompt，因为它已经是显式 CLI 命令意图
+- 当前边界仍明确：这只是 MCP bridge 级别的安全闸；还没有把每个远端 MCP tool 动态注入为独立 agent tool，也没有 HTTP/SSE runtime 或按 server/tool allowlist
 
 ## 最近里程碑
 

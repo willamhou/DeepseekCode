@@ -104,7 +104,13 @@ fn derive_hint(message: &str) -> Option<String> {
     }
     if lower.contains("write declined") || lower.contains("approval required") {
         return Some(
-            "set DSCODE_AUTO_APPROVE_WRITES=1 (and / or DSCODE_AUTO_APPROVE_SHELL=1) to skip prompts in non-interactive runs"
+            "set DSCODE_AUTO_APPROVE_WRITES=1 (and / or DSCODE_AUTO_APPROVE_SHELL=1 / DSCODE_AUTO_APPROVE_MCP=1) to skip prompts in non-interactive runs"
+                .to_string(),
+        );
+    }
+    if lower.contains("mcp tool call declined") {
+        return Some(
+            "set DSCODE_AUTO_APPROVE_MCP=1 or relax `approval.require_mcp_confirmation` in .dscode/config.toml"
                 .to_string(),
         );
     }
@@ -116,7 +122,7 @@ fn derive_hint(message: &str) -> Option<String> {
     }
     if lower.contains("non-interactive") && lower.contains("auto-denying") {
         return Some(
-            "this is a non-TTY run; export DSCODE_AUTO_APPROVE_WRITES=1 / DSCODE_AUTO_APPROVE_SHELL=1 to bypass"
+            "this is a non-TTY run; export DSCODE_AUTO_APPROVE_WRITES=1 / DSCODE_AUTO_APPROVE_SHELL=1 / DSCODE_AUTO_APPROVE_MCP=1 to bypass"
                 .to_string(),
         );
     }

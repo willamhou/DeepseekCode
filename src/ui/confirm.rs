@@ -5,7 +5,7 @@ pub fn confirm(prompt: &str) -> bool {
         let mut stderr = io::stderr().lock();
         let _ = writeln!(
             stderr,
-            "[non-interactive] auto-denying: {prompt} (set DSCODE_AUTO_APPROVE_WRITES=1 / DSCODE_AUTO_APPROVE_SHELL=1 to bypass)"
+            "[non-interactive] auto-denying: {prompt} (set DSCODE_AUTO_APPROVE_WRITES=1 / DSCODE_AUTO_APPROVE_SHELL=1 / DSCODE_AUTO_APPROVE_MCP=1 to bypass)"
         );
         let _ = stderr.flush();
         return false;

@@ -233,6 +233,7 @@ fn run_task_in_workdir<T>(
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let previous_auto_approve_writes = env::var_os("DSCODE_AUTO_APPROVE_WRITES");
     let previous_auto_approve_shell = env::var_os("DSCODE_AUTO_APPROVE_SHELL");
+    let previous_auto_approve_mcp = env::var_os("DSCODE_AUTO_APPROVE_MCP");
     let changed_workdir = run_workdir != repo_root;
     if changed_workdir {
         env::set_current_dir(run_workdir)?;
@@ -241,6 +242,7 @@ fn run_task_in_workdir<T>(
         unsafe {
             env::set_var("DSCODE_AUTO_APPROVE_WRITES", "1");
             env::set_var("DSCODE_AUTO_APPROVE_SHELL", "1");
+            env::set_var("DSCODE_AUTO_APPROVE_MCP", "1");
         }
     }
     let result = f();
@@ -252,6 +254,7 @@ fn run_task_in_workdir<T>(
     if auto_approve {
         restore_env_var("DSCODE_AUTO_APPROVE_WRITES", previous_auto_approve_writes);
         restore_env_var("DSCODE_AUTO_APPROVE_SHELL", previous_auto_approve_shell);
+        restore_env_var("DSCODE_AUTO_APPROVE_MCP", previous_auto_approve_mcp);
     }
     match (result, restore_result) {
         (Ok(value), Ok(())) => Ok(value),
@@ -2695,6 +2698,7 @@ notes = "Real PR workflow retry case over an isolated Rust fixture"
         unsafe {
             env::remove_var("DSCODE_AUTO_APPROVE_WRITES");
             env::remove_var("DSCODE_AUTO_APPROVE_SHELL");
+            env::remove_var("DSCODE_AUTO_APPROVE_MCP");
         }
 
         let root = temp_test_dir("dogfood-auto-approve");
@@ -2704,14 +2708,17 @@ notes = "Real PR workflow retry case over an isolated Rust fixture"
             Ok((
                 env::var("DSCODE_AUTO_APPROVE_WRITES").ok(),
                 env::var("DSCODE_AUTO_APPROVE_SHELL").ok(),
+                env::var("DSCODE_AUTO_APPROVE_MCP").ok(),
             ))
         })
         .unwrap();
 
         assert_eq!(snapshot.0.as_deref(), Some("1"));
         assert_eq!(snapshot.1.as_deref(), Some("1"));
+        assert_eq!(snapshot.2.as_deref(), Some("1"));
         assert!(env::var("DSCODE_AUTO_APPROVE_WRITES").is_err());
         assert!(env::var("DSCODE_AUTO_APPROVE_SHELL").is_err());
+        assert!(env::var("DSCODE_AUTO_APPROVE_MCP").is_err());
 
         let _ = fs::remove_dir_all(root);
     }
