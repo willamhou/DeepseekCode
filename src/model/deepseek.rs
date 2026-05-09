@@ -1895,13 +1895,13 @@ const TOOL_SPECS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "mcp_list_tools",
-        description: "List tools exposed by configured MCP servers. Use before mcp_call when you need the remote tool schema.",
-        properties_json: r#"{"server":{"type":"string","description":"Optional MCP server name. Omit to list enabled stdio servers."}}"#,
+        description: "List tools exposed by configured stdio or HTTP MCP servers. Use before mcp_call when you need the remote tool schema.",
+        properties_json: r#"{"server":{"type":"string","description":"Optional MCP server name. Omit to list enabled stdio or HTTP MCP servers."}}"#,
         required_json: r#"[]"#,
     },
     ToolSpec {
         name: "mcp_call",
-        description: "Call a configured stdio MCP server tool with JSON object arguments.",
+        description: "Call a configured stdio or HTTP MCP server tool with JSON object arguments.",
         properties_json: r#"{"server":{"type":"string","description":"MCP server name from the project or user MCP config."},"tool":{"type":"string","description":"Remote MCP tool name to call."},"arguments":{"type":"string","description":"JSON object string containing tool arguments, for example {\"path\":\"README.md\"}."}}"#,
         required_json: r#"["server","tool"]"#,
     },
@@ -2704,12 +2704,14 @@ mod tests {
         assert!(openai.contains("\"name\":\"mcp_call\""));
         assert!(openai.contains("\"server\""));
         assert!(openai.contains("\"arguments\""));
+        assert!(openai.contains("stdio or HTTP MCP servers"));
 
         let anthropic =
             build_anthropic_tools(&["mcp_list_tools".to_string(), "mcp_call".to_string()]);
         assert!(anthropic.contains("\"name\":\"mcp_list_tools\""));
         assert!(anthropic.contains("\"name\":\"mcp_call\""));
         assert!(anthropic.contains("\"input_schema\""));
+        assert!(anthropic.contains("stdio or HTTP MCP server tool"));
     }
 
     fn empty_request_with_todos(todos: Vec<crate::core::todos::Todo>) -> ModelRequest {
