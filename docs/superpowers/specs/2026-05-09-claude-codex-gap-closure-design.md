@@ -16,10 +16,10 @@
 - fixture-backed benchmark
 - dogfood ledger / promotion / trend gate / category slices
 
-当前基线（2026-05-09 Phase 11+ workspace instructions 后复测）：
+当前基线（2026-05-09 Phase 11+ local hooks / config bootstrap 后复测）：
 
 - benchmark：`42/42`
-- 全量测试：`490 passed, 0 failed`
+- 全量测试：`502 passed, 0 failed`
 - benchmark trend gate：`pass against 5 comparable runs`
 - dogfood live gate：`pass (no new dogfood records since previous snapshot, runs=33)`
 - 当前已收掉的红点：
@@ -78,6 +78,11 @@
   - hook scripts 通过 stdin JSON payload 获取上下文
   - prompt submit / pre-tool hook 可阻断，post-tool hook 只作为 advisory observation
   - 对齐 Claude Code / Codex hook 扩展面的最小本地策略与审计能力
+- Phase 11+ config bootstrap：
+  - 新增 `deepseek config init [--force]`
+  - 自动创建 `.dscode/config.toml`、sessions、custom command 目录和 hooks 事件目录
+  - `config --print-default` 覆盖 workspace user dirs / instruction file / hooks 字段
+  - 把首次配置从手动复制模板降低为命令式初始化
 
 本轮收口顺序：
 
@@ -86,17 +91,17 @@
 3. 收 `11e`：benchmark failed expectation 与 dogfood 新增 live failure 都必须能阻断
 4. 收 `11f`：release / upgrade story 从“能安装”补到“能发布、能升级、能回滚”
 
-当前结果：Phase 11 主体与后续 baseline hardening / custom slash commands / workspace instructions 已收口，
-最新 benchmark 为 `42/42`，全量测试为 `490 passed, 0 failed`。
+当前结果：Phase 11 主体与后续 baseline hardening / custom slash commands / workspace instructions /
+local hooks / config bootstrap 已收口，最新 benchmark 为 `42/42`，全量测试为 `502 passed, 0 failed`。
 
 这说明 `DeepseekCode` 已经不是“演示级原型”，但仍明显低于 Claude Code / Codex 的
 产品完成度。差距不再是“有没有 planner / tool loop”，而是：
 
 1. 真实 PR / CI / review 场景样本不够厚
 2. open-ended / ambiguous task 的默认稳定性不够
-3. subagent orchestration 仍是 v1
-4. product UX / install / release 仍偏开发者内部工具
-5. live quality gate 还没真正成为“发布阻断器”
+3. subagent orchestration 仍是单层、保守的 merge-back
+4. IDE / 编辑器配套、MCP/plugin 生态、云端/外部任务面仍缺失
+5. live online-model 稳定性与外部 PR/CI 样本厚度还不足以宣称产品级
 
 ## 差距表
 
@@ -105,11 +110,12 @@
 | 命令行入口 | `deepseek` 已可直接进入 REPL | 默认心智一致、文档和错误提示完全统一 | 小 |
 | REPL / 交互体验 | transcript、slash、session 已有 | 更顺滑的 history、恢复、帮助、默认提示 | 中 |
 | 单仓库本地 coding flow | benchmark 覆盖面已较强 | 默认成功率更高，少漂移、少无效 hops | 中 |
+| 本地扩展 / 策略入口 | custom commands、workspace instructions、local hooks 已有 | 更完整的 MCP/plugin ecosystem 与团队级扩展面 | 中 |
 | open-ended 任务 | 已有 recovery / replan，但依赖 heuristic | 对模糊任务也能稳定收敛 | 大 |
 | PR / CI 工作流 | `pr review/fix/patch` 已有 + baseline | 更厚的真实 PR/CI 样本与稳定端到端闭环 | 大 |
 | subagent | 已能 dispatch / merge-back | 更成熟的拆分、归并、去重、收敛 | 大 |
 | live 回归体系 | benchmark + dogfood 已闭环 | 更厚的 live baseline，且可阻断回归 | 中 |
-| 安装 / 分发 | 面向开发者较友好 | 普通用户开箱即装即用 | 中 |
+| 安装 / 分发 | install guide、version、completion、config init 已有 | 普通用户开箱即装即用 | 小到中 |
 | IDE / 编辑器配套 | 几乎没有 | 统一的产品体验 | 大 |
 | 默认产品完成度 | 强原型 | 可长期主用的产品级工具 | 大 |
 

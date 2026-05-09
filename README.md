@@ -134,6 +134,8 @@
 ```bash
 cargo install --path .
 deepseek version
+deepseek config init
+deepseek doctor
 deepseek
 ```
 

@@ -117,9 +117,12 @@ deepseek version
 ## 首次配置
 
 ```bash
-cp .dscode/config.example.toml .dscode/config.toml
+deepseek config init
 deepseek doctor
 ```
+
+`deepseek config init` 会创建项目级 `.dscode/config.toml`、session 目录、custom command 目录和 hooks 事件目录。
+如果确实要覆盖已有配置，可以显式运行 `deepseek config init --force`。
 
 `deepseek` 会自动读取当前工作目录下的 `.env`，并在变量尚未存在于进程环境时注入。常用 DeepSeek/OpenAI-compatible 配置：
 

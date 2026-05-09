@@ -1649,6 +1649,15 @@
   - `user_prompt_submit` / `pre_tool_use` 非零退出会阻断 prompt/tool；`post_tool_use` 非零退出作为 advisory observation 返回
 - 这一步不试图复制完整 MCP/plugin 生态，但给团队策略、审计、上下文注入和危险 tool gate 留出了稳定扩展点。
 
+**Phase 11+ config bootstrap (`main`, 2026-05-09) — 已完成**：
+- 新增 `deepseek config init [--force]`，首次使用不再需要手动复制 `.dscode/config.example.toml`：
+  - 创建项目级 `.dscode/config.toml`
+  - 创建 `.dscode/sessions` 与 `.dscode/commands`
+  - 创建 `.dscode/hooks/user_prompt_submit`、`.dscode/hooks/pre_tool_use`、`.dscode/hooks/post_tool_use`
+  - 默认 hooks 仍保持关闭，避免 clone 仓库后隐式执行脚本
+- `deepseek config --print-default` 同步输出 workspace user dirs / instruction file / hooks 配置，避免新字段在诊断时不可见。
+- 这一步把安装和首次配置从“读文档复制模板”推进到“命令初始化”，缩小产品化 gap；但 IDE/编辑器、MCP/plugin 生态、外部 PR/CI live 样本厚度仍不是小差距。
+
 ## 最近里程碑
 
 - `d9b3ae4` `Initialize project docs`

@@ -218,9 +218,7 @@ impl Cli {
             "run" => Command::Run(parse_run_args(args)),
             "diff" => Command::Diff(DiffArgs {}),
             "resume" => Command::Resume(ResumeArgs { session: None }),
-            "config" => Command::Config(ConfigArgs {
-                print_default: args.iter().any(|arg| arg == "--print-default"),
-            }),
+            "config" => Command::Config(parse_config_args(args)?),
             "doctor" => Command::Doctor(DoctorArgs {}),
             "smoke" => Command::Smoke(parse_smoke_args(args)),
             "pr" => Command::Pr(parse_pr_subcommand(args)?),
@@ -312,6 +310,8 @@ pub struct ResumeArgs {
 #[derive(Debug)]
 pub struct ConfigArgs {
     pub print_default: bool,
+    pub init: bool,
+    pub force: bool,
 }
 
 #[derive(Debug)]
@@ -359,6 +359,36 @@ fn parse_smoke_args(args: Vec<String>) -> SmokeArgs {
     }
 
     smoke
+}
+
+fn parse_config_args(args: Vec<String>) -> Result<ConfigArgs, String> {
+    let mut parsed = ConfigArgs {
+        print_default: false,
+        init: false,
+        force: false,
+    };
+
+    for arg in args {
+        match arg.as_str() {
+            "--print-default" => parsed.print_default = true,
+            "init" => parsed.init = true,
+            "--force" | "-f" => parsed.force = true,
+            other => {
+                return Err(format!(
+                    "unknown config argument `{other}`; expected init|--force|--print-default"
+                ));
+            }
+        }
+    }
+
+    if parsed.print_default && parsed.init {
+        return Err("config init cannot be combined with --print-default".to_string());
+    }
+    if parsed.force && !parsed.init {
+        return Err("config --force requires init".to_string());
+    }
+
+    Ok(parsed)
 }
 
 fn parse_benchmark_args(args: Vec<String>) -> BenchmarkArgs {
@@ -1141,6 +1171,45 @@ mod tests {
                 "flag: {flag}"
             );
         }
+    }
+
+    #[test]
+    fn cli_from_argv_routes_config_init_with_force() {
+        let cli = Cli::from_argv(vec![
+            "config".to_string(),
+            "init".to_string(),
+            "--force".to_string(),
+        ])
+        .expect("parse should succeed");
+
+        match cli.command {
+            Some(Command::Config(args)) => {
+                assert!(args.init);
+                assert!(args.force);
+                assert!(!args.print_default);
+            }
+            other => panic!("expected Command::Config, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_from_argv_rejects_config_init_with_print_default() {
+        let error = Cli::from_argv(vec![
+            "config".to_string(),
+            "init".to_string(),
+            "--print-default".to_string(),
+        ])
+        .expect_err("parse should fail");
+
+        assert!(error.contains("cannot be combined"));
+    }
+
+    #[test]
+    fn cli_from_argv_rejects_config_force_without_init() {
+        let error = Cli::from_argv(vec!["config".to_string(), "--force".to_string()])
+            .expect_err("parse should fail");
+
+        assert!(error.contains("requires init"));
     }
 
     #[test]
