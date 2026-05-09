@@ -2,8 +2,10 @@ use crate::error::app_error;
 use crate::error::AppResult;
 use crate::tools::types::{Tool, ToolInput, ToolOutput};
 use std::ffi::OsString;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct RunShellTool;
 
@@ -27,8 +29,13 @@ impl Tool for RunShellTool {
         if let Some(path) = augmented_path_for_toolchains() {
             process.env("PATH", path);
         }
+        let pycache_prefix = configure_python_cache_prefix(&mut process, command);
 
-        let output = process.output()?;
+        let output_result = process.output();
+        if let Some(prefix) = pycache_prefix {
+            let _ = fs::remove_dir_all(prefix);
+        }
+        let output = output_result?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -254,6 +261,29 @@ fn prepend_path_entry(existing: Option<OsString>, entry: &Path) -> Option<OsStri
     std::env::join_paths(paths).ok()
 }
 
+fn configure_python_cache_prefix(process: &mut Command, command: &str) -> Option<PathBuf> {
+    if !uses_isolated_python_cache(command) {
+        return None;
+    }
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let prefix =
+        std::env::temp_dir().join(format!("deepseek-pycache-{}-{nanos}", std::process::id()));
+    if fs::create_dir_all(&prefix).is_err() {
+        return None;
+    }
+    process.env("PYTHONPYCACHEPREFIX", &prefix);
+    Some(prefix)
+}
+
+fn uses_isolated_python_cache(command: &str) -> bool {
+    let command = command.trim();
+    command.starts_with("pytest") || command.starts_with("python -m pytest")
+}
+
 pub fn is_safe_shell_command(command: &str) -> bool {
     let command = command.trim();
     let allowlist = [
@@ -355,6 +385,15 @@ mod tests {
             "",
         );
         assert_eq!(node_default, vec!["test/math.test.js".to_string()]);
+    }
+
+    #[test]
+    fn uses_isolated_python_cache_only_for_pytest_commands() {
+        assert!(uses_isolated_python_cache("pytest"));
+        assert!(uses_isolated_python_cache("pytest -q"));
+        assert!(uses_isolated_python_cache("python -m pytest tests"));
+        assert!(!uses_isolated_python_cache("python script.py"));
+        assert!(!uses_isolated_python_cache("cargo test"));
     }
 
     #[test]
