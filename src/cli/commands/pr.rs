@@ -75,7 +75,7 @@ fn run_review(config: AppConfig, reference: &str, post: bool, out: Option<&str>)
 
 fn build_review_body(pr: &PrContext, planner_output: &str) -> String {
     let header = format!(
-        "## DeepseekCode review of PR #{} ({})\n\n",
+        "## DeepSeekCode review of PR #{} ({})\n\n",
         pr.number, pr.title
     );
     let trimmed = planner_output.trim();

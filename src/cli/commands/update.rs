@@ -30,7 +30,7 @@ fn run_status(args: UpdateArgs) -> AppResult<()> {
         return Ok(());
     }
 
-    println!("DeepseekCode update");
+    println!("DeepSeekCode update");
     println!("  current_version: {}", env!("CARGO_PKG_VERSION"));
     println!("  install_source: source checkout");
     println!("  repo: {}", repo.display());
@@ -62,7 +62,7 @@ fn run_package(args: &UpdatePackageArgs) -> AppResult<()> {
         .unwrap_or_else(|| PathBuf::from(DEFAULT_RELEASE_DIR));
     let package = create_release_package(&bin, &out_root)?;
 
-    println!("DeepseekCode release package");
+    println!("DeepSeekCode release package");
     println!("  package: {}", package.package_dir.display());
     println!("  binary: {}", package.binary.display());
     println!("  manifest: {}", package.manifest.display());
@@ -93,7 +93,7 @@ fn run_verify_install(args: &UpdateVerifyInstallArgs) -> AppResult<()> {
         .unwrap_or_else(default_verify_workdir);
     let report = verify_install(&bin, &workdir)?;
 
-    println!("DeepseekCode install verification");
+    println!("DeepSeekCode install verification");
     println!("  binary: {}", report.binary.display());
     println!("  workdir: {}", report.workdir.display());
     for step in &report.steps {
@@ -127,7 +127,7 @@ fn run_install_package(args: &UpdateInstallPackageArgs) -> AppResult<()> {
         .unwrap_or_else(default_rollback_dir);
     let result = install_package(&package, &dest, &backup_dir, args.dry_run)?;
 
-    println!("DeepseekCode package install");
+    println!("DeepSeekCode package install");
     println!("  package: {}", package.display());
     println!("  source: {}", result.source.display());
     println!("  dest: {}", result.dest.display());
@@ -149,7 +149,7 @@ fn run_rollback(args: &UpdateRollbackArgs) -> AppResult<()> {
         .unwrap_or_else(default_install_path);
     rollback_install(&backup, &dest, args.dry_run)?;
 
-    println!("DeepseekCode rollback");
+    println!("DeepSeekCode rollback");
     println!("  backup: {}", backup.display());
     println!("  dest: {}", dest.display());
     println!("  dry_run: {}", args.dry_run);
@@ -165,7 +165,7 @@ fn run_homebrew_formula(args: &UpdateHomebrewFormulaArgs) -> AppResult<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(&args.formula));
     std::fs::write(&output, formula)?;
-    println!("DeepseekCode Homebrew formula");
+    println!("DeepSeekCode Homebrew formula");
     println!("  version: {}", args.version);
     println!("  repo: {}", args.repo);
     println!("  dist: {}", dist.display());
@@ -238,7 +238,7 @@ fn render_homebrew_formula(version: &str, repo: &str, shas: &HomebrewShas) -> Ap
       url "https://github.com/{repo}/releases/download/{tag}/deepseek-linux-x64.tar.gz"
       sha256 "{linux_x64}"
     else
-      odie "DeepseekCode Homebrew formula currently publishes Linux x64 only"
+      odie "DeepSeekCode Homebrew formula currently publishes Linux x64 only"
     end
   end
 
@@ -363,7 +363,7 @@ chmod +x "$DEST"
 
 fn verify_instructions(binary: &Path) -> String {
     format!(
-        "# Verify DeepseekCode Release\n\nRun:\n\n```bash\n{} update verify-install --bin {}\n```\n\nThe verifier runs `version`, `config init --force`, `doctor`, `exec --json`, and a one-case benchmark in an isolated directory.\n",
+        "# Verify DeepSeekCode Release\n\nRun:\n\n```bash\n{} update verify-install --bin {}\n```\n\nThe verifier runs `version`, `config init --force`, `doctor`, `exec --json`, and a one-case benchmark in an isolated directory.\n",
         binary.display(),
         binary.display()
     )

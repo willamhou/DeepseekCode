@@ -403,7 +403,7 @@ fn service_templates(config: &ServiceTemplateConfig) -> Vec<ServiceTemplate> {
 fn systemd_runtime_service(config: &ServiceTemplateConfig) -> String {
     format!(
         "[Unit]\n\
-Description=DeepseekCode HTTP runtime\n\
+Description=DeepSeekCode HTTP runtime\n\
 After=network.target\n\
 \n\
 [Service]\n\
@@ -428,7 +428,7 @@ fn systemd_agents_service(config: &ServiceTemplateConfig) -> String {
         .unwrap_or_default();
     format!(
         "[Unit]\n\
-Description=DeepseekCode runtime task daemon\n\
+Description=DeepSeekCode runtime task daemon\n\
 After=network.target deepseek-runtime.service\n\
 \n\
 [Service]\n\
@@ -450,7 +450,7 @@ WantedBy=default.target\n",
 fn systemd_diagnostics_service(config: &ServiceTemplateConfig) -> String {
     format!(
         "[Unit]\n\
-Description=DeepseekCode diagnostics watch worker\n\
+Description=DeepSeekCode diagnostics watch worker\n\
 After=network.target\n\
 \n\
 [Service]\n\

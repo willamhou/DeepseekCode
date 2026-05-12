@@ -1692,7 +1692,7 @@ fn describe_json_rpc_error(error: &JsonValue) -> String {
 
 fn build_initialize_request(id: u64) -> String {
     format!(
-        r#"{{"jsonrpc":"2.0","id":{id},"method":"initialize","params":{{"protocolVersion":"{protocol}","capabilities":{{}},"clientInfo":{{"name":"DeepseekCode","version":"{version}"}}}}}}"#,
+        r#"{{"jsonrpc":"2.0","id":{id},"method":"initialize","params":{{"protocolVersion":"{protocol}","capabilities":{{}},"clientInfo":{{"name":"DeepSeekCode","version":"{version}"}}}}}}"#,
         protocol = MCP_PROTOCOL_VERSION,
         version = env!("CARGO_PKG_VERSION"),
     )

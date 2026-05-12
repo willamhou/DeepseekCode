@@ -116,7 +116,7 @@ pub(crate) fn init_config_at(root: &std::path::Path, force: bool) -> AppResult<s
 
 fn render_default_config(config: &AppConfig) -> String {
     format!(
-        r#"# DeepseekCode project configuration
+        r#"# DeepSeekCode project configuration
 model.base_url = "{base_url}"
 model.model = "{model}"
 model.api_key_env = "{api_key_env}"
@@ -249,7 +249,7 @@ mod tests {
 
         init_config_at(&root, true).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.contains("DeepseekCode project configuration"));
+        assert!(content.contains("DeepSeekCode project configuration"));
 
         let _ = std::fs::remove_dir_all(root);
     }

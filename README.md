@@ -1,157 +1,120 @@
-# DeepSeek Code
+# DeepSeekCode
 
-`DeepSeek Code` 是一个 `DeepSeek-first` 的终端代码代理项目。
+`DeepSeekCode` is a DeepSeek-first terminal code agent and local TUI/runtime
+workbench. The project focuses on one practical loop: inspect a repository,
+edit code, run checks, use the result as feedback, and continue.
 
-目标不是做一个“支持所有模型”的通用外壳，而是做一个对 `DeepSeek` 深度优化、对大多数编程语言仓库可用的 code CLI。第一阶段聚焦本地仓库中的核心闭环：
+The implementation is written in Rust and ships the `deepseek` command, with
+`dscode` kept as a compatibility binary.
 
-- 读代码
-- 搜索代码
-- 生成并应用补丁
-- 运行受控命令
-- 根据结果继续修复
+## Current Status
 
-## 产品定位
+This repository is an active workbench, not a polished hosted product.
 
-一句话定义：
+- The core local agent loop is usable: read/search files, apply patches, run
+  permissioned shell commands, maintain sessions, and resume work.
+- The TUI has moved beyond a demo shell: it has durable sessions/threads,
+  transcript rendering, cursor-aware composer and command palette input,
+  transcript scrollback, approvals, cancellation, runtime tasks, usage/cost
+  panels, diagnostics, compaction, automations, and local rollback commands.
+- The runtime contract is file-backed first, with an HTTP/SSE mode for local
+  supervisors and TUI clients.
+- Compared with `DeepSeek-TUI`, the remaining gap is still material. The
+  strongest parts are the agent core, regression tests, and runtime plumbing;
+  the biggest missing pieces are product-level TUI polish, broader tool
+  surfaces, and long-running workflow ergonomics.
 
-> 一个使用 Rust 构建的 DeepSeek-first code CLI，面向大多数主流语言仓库，完成“理解代码 -> 修改代码 -> 执行验证 -> 迭代修复”的闭环。
+## Feature Surface
 
-关键边界：
+- DeepSeek-first model configuration and API key handling
+- Interactive REPL and one-shot task execution
+- Workspace scanning, file read/search, patch application, diff review
+- Permission-gated shell execution and approval flow
+- Durable sessions, threads, turns, items, events, tasks, usage, and
+  automations under `.dscode/runtime/`
+- `deepseek tui` terminal workbench with Plan / Agent / YOLO modes
+- Background agent tasks and daemon runner
+- HTTP runtime with health, session, thread, task, event, usage, diagnostics,
+  automation, and SSE stream endpoints
+- LSP-backed and fallback diagnostics runners
+- Git rollback snapshots for TUI-started turns
+- MCP inventory/tooling, subagents, todo tracking, hooks, prompts, skills, and
+  language profiles
+- Release packaging for Cargo, npm platform wrappers, Docker, Homebrew
+  formula rendering, and GitHub Actions release assets
 
-- 只优先适配 `DeepSeek`
-- 覆盖大多数文本型代码仓库
-- 对 `TypeScript/JavaScript`、`Python`、`Go`、`Java`、`Rust` 做重点优化
-- 第一版不做重型插件平台
-- 第一版不承诺复杂 AST 级重构
+## Quick Start
 
-## 为什么只做 DeepSeek-first
-
-多模型接入并不难，难的是让不同模型在以下环节都稳定：
-
-- 工具调用格式
-- 长任务一致性
-- patch 输出质量
-- shell 决策安全性
-- 上下文裁剪后的表现
-
-因此本项目的策略是：
-
-- 底层架构保留扩展空间
-- 第一阶段产品体验收敛到 `DeepSeek`
-- 先把 agent loop、tooling、patch、approval 做稳
-
-## 语言支持策略
-
-语言支持分三层：
-
-### L1 通用支持
-
-对大多数文本型代码仓库统一支持：
-
-- 目录扫描
-- 文件读取
-- 全文搜索
-- patch 编辑
-- 运行项目已有命令
-- 基于报错继续修复
-
-### L2 主流语言增强
-
-第一批重点增强：
-
-- TypeScript / JavaScript
-- Python
-- Go
-- Java
-- Rust
-
-增强点包括：
-
-- 仓库类型识别
-- 默认 test/lint/build/typecheck 命令推断
-- 文件优先级策略
-- 常见目录与忽略规则
-
-### L3 后续特化
-
-后续再逐步补充：
-
-- C/C++
-- C#
-- PHP
-- Ruby
-- Kotlin
-- Swift
-
-## Skill 与 Profile
-
-本项目不打算一开始做复杂插件系统，而是先做轻量策略层：
-
-- `Language Profile`
-  面向仓库/语言，定义命令推断、优先文件、忽略规则等
-- `Skill`
-  面向任务，定义提示词补充、工具白名单、执行策略、审批策略等
-
-第一阶段用本地 `TOML` 文件加载，优先保持简单、安全、可测试。
-
-## v0.1 范围
-
-首版目标是跑通最小可用闭环：
-
-- 交互式会话
-- 单次任务执行
-- 项目扫描
-- 文件读取与搜索
-- 统一 patch 编辑
-- 受控 shell 执行
-- diff 展示
-- 会话恢复
-- 配置管理
-
-首版不做：
-
-- 多模型适配
-- 完整 IDE 插件（当前只有最小 VS Code 终端入口）
-- PR review / CI 云端集成
-- 多 agent 并行
-- 远程 skill 市场
-
-## 文档
-
-- [安装指南](./docs/install.md)
-- [发布检查清单](./docs/release.md)
-- [变更记录](./CHANGELOG.md)
-- [架构设计](./docs/architecture.md)
-- [MVP 与路线图](./docs/mvp.md)
-- [状态与完整 Roadmap](./docs/roadmap.md)
-- [Skill 与 Language Profile 设计](./docs/skills-and-profiles.md)
-- [Rust 技术选型](./docs/rust-stack.md)
-- [PR / CI 集成指南](./docs/pr-integration.md)
-- [REPL 模式 (`deepseek` / `deepseek chat`)](./docs/repl.md)
-- [VS Code 扩展雏形](./editors/vscode/README.md)
-
-## 快速开始
+Install from a local checkout:
 
 ```bash
 cargo install --path .
 deepseek version
 deepseek config init
-deepseek doctor
+deepseek doctor --json
 deepseek
 ```
 
-升级源码安装：
+Run a one-shot task:
 
 ```bash
-git pull
-cargo install --path . --force
-deepseek version
+deepseek run "explain the current repository structure"
 ```
 
-如果想启用 shell completion：
+Start the TUI:
 
 ```bash
-deepseek completion bash > ~/.local/share/bash-completion/completions/deepseek
-deepseek completion zsh > ~/.zfunc/_deepseek
-deepseek completion fish > ~/.config/fish/completions/deepseek.fish
+deepseek tui
+deepseek tui --demo --once
 ```
+
+Start the local HTTP runtime and connect the TUI to it:
+
+```bash
+deepseek serve --http --addr 127.0.0.1:13000
+deepseek tui --runtime-url http://127.0.0.1:13000
+```
+
+Set `DEEPSEEK_API_KEY` in your environment for real model calls. Local `.env`
+files are intentionally ignored by git.
+
+## Development Checks
+
+The main regression loop is:
+
+```bash
+cargo fmt --check
+cargo test
+cargo package --allow-dirty
+deepseek tui --demo --once
+```
+
+For npm wrapper metadata:
+
+```bash
+node npm/scripts/check-version-sync.js
+```
+
+## Documentation
+
+- [Install](./docs/install.md)
+- [Architecture](./docs/architecture.md)
+- [Runtime contract](./docs/runtime.md)
+- [TUI workbench](./docs/tui.md)
+- [REPL mode](./docs/repl.md)
+- [Streaming](./docs/streaming.md)
+- [Agent tasks](./docs/agents.md)
+- [Todo tool](./docs/todos.md)
+- [PR / CI integration](./docs/pr-integration.md)
+- [Release checklist](./docs/release.md)
+- [Roadmap](./docs/roadmap.md)
+- [Changelog](./CHANGELOG.md)
+
+## Public Repository Notes
+
+This repository is public for transparency and collaboration. Public visibility
+does not imply a separate open-source grant beyond the terms in
+[LICENSE](./LICENSE).
+
+Do not commit local credentials, API keys, runtime state, or private `.env`
+files. The tracked examples use placeholders only.

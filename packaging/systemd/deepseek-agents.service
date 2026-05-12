@@ -1,5 +1,5 @@
 [Unit]
-Description=DeepseekCode runtime task daemon
+Description=DeepSeekCode runtime task daemon
 After=network.target deepseek-runtime.service
 
 [Service]

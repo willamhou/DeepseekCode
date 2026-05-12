@@ -4,7 +4,6 @@ use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::cli::app::{
@@ -47,7 +46,7 @@ fn run_live_task(config: &crate::config::types::AppConfig, args: DogfoodRunArgs)
     let manual_intervention =
         args.manual_intervention || matches!(args.outcome, Some(DogfoodOutcome::Manual));
 
-    println!("DeepseekCode dogfood");
+    println!("DeepSeekCode dogfood");
     println!("task: {}", args.task);
     println!("budget: {budget}");
     println!("workdir: {workdir}");
@@ -250,20 +249,13 @@ fn prepare_run_workdir(
     Ok((temp_root.clone(), Some(temp_root)))
 }
 
-fn dogfood_cwd_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
-
 fn run_task_in_workdir<T>(
     repo_root: &Path,
     run_workdir: &Path,
     auto_approve: bool,
     f: impl FnOnce() -> AppResult<T>,
 ) -> AppResult<T> {
-    let _cwd_guard = dogfood_cwd_lock()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _cwd_guard = crate::util::cwd::lock_cwd()?;
     let previous_auto_approve_writes = env::var_os("DSCODE_AUTO_APPROVE_WRITES");
     let previous_auto_approve_shell = env::var_os("DSCODE_AUTO_APPROVE_SHELL");
     let previous_auto_approve_mcp = env::var_os("DSCODE_AUTO_APPROVE_MCP");
@@ -332,7 +324,7 @@ fn render_report_command(
     let limit = args.limit.unwrap_or(DEFAULT_REPORT_LIMIT);
     let records = load_records(&ledger_path)?;
     write_report(&ledger_path, &report_path, &records, limit)?;
-    println!("DeepseekCode dogfood report");
+    println!("DeepSeekCode dogfood report");
     println!("ledger: {}", ledger_path.display());
     println!("report: {}", report_path.display());
     Ok(())
@@ -349,7 +341,7 @@ fn replay_benchmark_command(
     let summaries = crate::cli::commands::benchmark::load_manifest_case_summaries(&manifest_path)?;
     let selected = select_replayable_cases(&summaries, args.category.as_deref(), args.limit);
 
-    println!("DeepseekCode dogfood benchmark replay");
+    println!("DeepSeekCode dogfood benchmark replay");
     println!("manifest: {}", manifest_path.display());
     println!(
         "selected: {}{}",
@@ -409,7 +401,7 @@ fn export_benchmark_command(
         fs::create_dir_all(parent)?;
     }
     fs::write(&out_path, export)?;
-    println!("DeepseekCode dogfood benchmark export");
+    println!("DeepSeekCode dogfood benchmark export");
     println!("ledger: {}", ledger_path.display());
     println!("out: {}", out_path.display());
     Ok(())
@@ -430,7 +422,7 @@ fn promote_benchmark_command(
     let repo_root = std::env::current_dir()?;
     let plan = build_promotion_plan(&records, &existing, limit, args.outcome, &repo_root);
 
-    println!("DeepseekCode dogfood benchmark promotion");
+    println!("DeepSeekCode dogfood benchmark promotion");
     println!("ledger: {}", ledger_path.display());
     println!("manifest: {}", manifest_path.display());
     println!(
@@ -1069,7 +1061,7 @@ fn render_report(ledger_path: &Path, records: &[DogfoodRecord], limit: usize) ->
     let previous_category_stats = aggregate_category_stats(previous_window);
 
     let mut out = String::new();
-    out.push_str("# DeepseekCode Dogfood Report\n\n");
+    out.push_str("# DeepSeekCode Dogfood Report\n\n");
     out.push_str(&format!("- Ledger: `{}`\n", ledger_path.display()));
     out.push_str(&format!("- Runs: {total}\n"));
     out.push_str(&format!("- Success rate: {}\n", rate_line(success, total)));
@@ -2103,7 +2095,7 @@ mod tests {
             },
         ];
         let report = render_report(Path::new(".dscode/dogfood/ledger.jsonl"), &records, 20);
-        assert!(report.contains("# DeepseekCode Dogfood Report"));
+        assert!(report.contains("# DeepSeekCode Dogfood Report"));
         assert!(report.contains("Success rate: 1/2 (50.0%)"));
         assert!(report.contains("Diagnostic expected-failure rate: 0/2 (0.0%)"));
         assert!(report.contains("Stuck rate: 1/2 (50.0%)"));

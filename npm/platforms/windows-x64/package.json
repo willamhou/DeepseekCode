@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "description": "Windows x64 binary for the DeepSeek Code CLI",
   "license": "SEE LICENSE IN LICENSE",
-  "homepage": "https://github.com/willamhou/DeepseekCode",
+  "homepage": "https://github.com/willamhou/DeepSeekCode",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/willamhou/DeepseekCode.git",
+    "url": "git+https://github.com/willamhou/DeepSeekCode.git",
     "directory": "npm/platforms/windows-x64"
   },
   "os": [

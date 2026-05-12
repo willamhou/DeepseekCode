@@ -3,6 +3,7 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::error::{app_error, AppResult};
@@ -136,6 +137,11 @@ pub struct ThreadCompactionRecord {
 #[derive(Debug, Clone)]
 pub struct RuntimeStore {
     root: PathBuf,
+}
+
+fn runtime_write_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 impl RuntimeStore {
@@ -703,7 +709,6 @@ impl RuntimeStore {
             return Ok(Vec::new());
         }
         let content = fs::read_to_string(path)?;
-        let has_trailing_newline = content.ends_with('\n');
         let lines = content
             .lines()
             .filter(|line| !line.trim().is_empty())
@@ -712,7 +717,7 @@ impl RuntimeStore {
         for (index, line) in lines.iter().enumerate() {
             let root = match parse_root_object(line) {
                 Ok(root) => root,
-                Err(error) if index + 1 == lines.len() && !has_trailing_newline => break,
+                Err(_) if index + 1 == lines.len() => break,
                 Err(error) => return Err(error),
             };
             let event = parse_runtime_event(&root)?;
@@ -1581,6 +1586,9 @@ impl RuntimeStore {
         kind: &str,
         payload: JsonValue,
     ) -> AppResult<RuntimeEvent> {
+        let _write_guard = runtime_write_lock()
+            .lock()
+            .map_err(|_| app_error("runtime event write lock is poisoned"))?;
         validate_record_id(thread_id)?;
         if let Some(turn_id) = turn_id {
             validate_record_id(turn_id)?;
@@ -1604,7 +1612,10 @@ impl RuntimeStore {
             .create(true)
             .append(true)
             .open(self.events_path(thread_id))?;
-        writeln!(file, "{}", json_value_to_string(&event_to_json(&event)))?;
+        let mut line = json_value_to_string(&event_to_json(&event));
+        line.push('\n');
+        file.write_all(line.as_bytes())?;
+        file.flush()?;
         Ok(event)
     }
 

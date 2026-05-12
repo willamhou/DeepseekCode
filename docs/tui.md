@@ -24,7 +24,7 @@ Current surfaces:
   in-process live channel drained before each draw
 - external runtime writes are picked up by a local runtime watcher that sends
   full snapshot live events into the same draw loop, so task/approval/item
-  changes from other DeepseekCode processes do not wait for the slower refresh
+  changes from other DeepSeekCode processes do not wait for the slower refresh
 - `deepseek tui --runtime-url http://HOST:PORT` connects the workbench to a
   running HTTP runtime, builds the initial UI from `/v1/sessions` and linked
   thread detail endpoints, writes composer/approval/cancel/task/automation/
@@ -85,6 +85,10 @@ Key bindings:
 | `p`, `a`, `y` | Switch directly to Plan, Agent, or YOLO |
 | `i` | Focus composer |
 | `Enter` | Submit composer text while focused |
+| `Left`, `Right` | Move the focused composer or command palette cursor |
+| `Backspace`, `Delete` | Edit the focused composer or command palette text |
+| `Up`, `Down`, `PageUp`, `PageDown` | Scroll transcript history when no modal input is active |
+| `Home`, `End` | Move the focused input cursor, or jump transcript scrollback to oldest/newest when no modal input is active |
 | `:` | Open command palette |
 | `s` | Open session picker |
 | `t` | Open thread navigator |

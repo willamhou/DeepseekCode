@@ -1,5 +1,5 @@
 [Unit]
-Description=DeepseekCode diagnostics watch worker
+Description=DeepSeekCode diagnostics watch worker
 After=network.target
 
 [Service]

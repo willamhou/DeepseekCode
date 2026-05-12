@@ -4,7 +4,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::cli::app::BenchmarkArgs;
@@ -57,7 +57,7 @@ pub fn run_with_config(config: AppConfig, args: BenchmarkArgs) -> AppResult<()> 
         )));
     }
 
-    println!("DeepseekCode benchmark");
+    println!("DeepSeekCode benchmark");
     println!("manifest: {}", manifest_path.display());
     println!("cases: {}", cases.len());
 
@@ -1124,7 +1124,7 @@ fn render_report(
         .map(|record| category_stats_by_name(&record.category_stats))
         .unwrap_or_default();
     let mut out = String::new();
-    out.push_str("# DeepseekCode Benchmark Report\n\n");
+    out.push_str("# DeepSeekCode Benchmark Report\n\n");
     out.push_str(&format!("- Manifest: `{}`\n", manifest_path.display()));
     out.push_str(&format!("- Cases: {}\n", results.len()));
     out.push_str(&format!(
@@ -1902,19 +1902,12 @@ fn prepare_case_workdir(
     Ok((Some(temp_root.clone()), Some(temp_root)))
 }
 
-fn benchmark_cwd_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
-
 fn run_case_in_workdir<T>(
     workdir: Option<&Path>,
     auto_approve: bool,
     f: impl FnOnce() -> AppResult<T>,
 ) -> AppResult<T> {
-    let _cwd_guard = benchmark_cwd_lock()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _cwd_guard = crate::util::cwd::lock_cwd()?;
     let previous = env::current_dir()?;
     let previous_auto_approve_writes = env::var_os("DSCODE_AUTO_APPROVE_WRITES");
     let previous_auto_approve_shell = env::var_os("DSCODE_AUTO_APPROVE_SHELL");
@@ -2579,7 +2572,7 @@ seed_observations = "search_text:failed:no matches || recovery_hint:ok:after=sea
             &trend_gate,
             &live_gate.summary_line(),
         );
-        assert!(report.contains("# DeepseekCode Benchmark Report"));
+        assert!(report.contains("# DeepSeekCode Benchmark Report"));
         assert!(report.contains("- Total tool calls: 2"));
         assert!(report.contains("Trend gate: skipped"));
         assert!(report.contains("Live gate: skipped"));

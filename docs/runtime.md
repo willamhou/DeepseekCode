@@ -1,7 +1,7 @@
 # Runtime Contract
 
 This document is the public draft for local supervisors, future TUI/workbench
-code, and release checks that need a stable DeepseekCode integration surface.
+code, and release checks that need a stable DeepSeekCode integration surface.
 
 The current contract is intentionally small. It records what is stable now and
 what must remain explicit until the full durable runtime lands.
@@ -31,7 +31,7 @@ reasoning item updates are also sent through an in-process live channel that the
 TUI drains before each draw, so visible streaming is not tied to the 1s durable
 refresh interval. A local runtime watcher also polls the durable store and sends
 full snapshot live events when thread/task/approval/usage state changes, so
-writes from other DeepseekCode processes are visible in the foreground TUI
+writes from other DeepSeekCode processes are visible in the foreground TUI
 before the slower periodic refresh. For TUI-started agent runs,
 durable `permission_response` events unblock the running write/shell/MCP
 permission gate. The active running assistant turn can be cancelled with a
@@ -149,7 +149,7 @@ still a local service template, not a hosted multi-user runtime.
 ```json
 {
   "status": "ok",
-  "service": "DeepseekCode",
+  "service": "DeepSeekCode",
   "version": "0.0.0",
   "runtime": "http",
   "schema": "deepseek.runtime.health.v1"
@@ -163,7 +163,7 @@ flags:
 
 ```json
 {
-  "service": "DeepseekCode",
+  "service": "DeepSeekCode",
   "version": "0.0.0",
   "api_version": "v1",
   "transport": "http",

@@ -6,8 +6,8 @@ default-run = "deepseek"
 description = "DeepSeek-first terminal code agent"
 readme = "README.md"
 license-file = "LICENSE"
-repository = "https://github.com/willamhou/DeepseekCode"
-homepage = "https://github.com/willamhou/DeepseekCode"
+repository = "https://github.com/willamhou/DeepSeekCode"
+homepage = "https://github.com/willamhou/DeepSeekCode"
 keywords = ["deepseek", "agent", "cli", "tui"]
 categories = ["command-line-utilities", "development-tools"]
 

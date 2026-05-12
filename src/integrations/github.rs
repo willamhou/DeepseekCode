@@ -397,11 +397,11 @@ mod tests {
 
     #[test]
     fn parses_qualified_owner_repo_form() {
-        let parsed = parse_pr_ref("willamhou/DeepseekCode#42").unwrap();
+        let parsed = parse_pr_ref("willamhou/DeepSeekCode#42").unwrap();
         assert_eq!(
             parsed,
             PrRef::Qualified {
-                repo: "willamhou/DeepseekCode".to_string(),
+                repo: "willamhou/DeepSeekCode".to_string(),
                 number: 42,
             }
         );
@@ -409,11 +409,11 @@ mod tests {
 
     #[test]
     fn parses_github_pull_request_url() {
-        let parsed = parse_pr_ref("https://github.com/willamhou/DeepseekCode/pull/7").unwrap();
+        let parsed = parse_pr_ref("https://github.com/willamhou/DeepSeekCode/pull/7").unwrap();
         assert_eq!(
             parsed,
             PrRef::Qualified {
-                repo: "willamhou/DeepseekCode".to_string(),
+                repo: "willamhou/DeepSeekCode".to_string(),
                 number: 7,
             }
         );
@@ -437,11 +437,11 @@ mod tests {
     #[test]
     fn parses_url_with_query_string() {
         let parsed =
-            parse_pr_ref("https://github.com/willamhou/DeepseekCode/pull/5?diff=split").unwrap();
+            parse_pr_ref("https://github.com/willamhou/DeepSeekCode/pull/5?diff=split").unwrap();
         assert_eq!(
             parsed,
             PrRef::Qualified {
-                repo: "willamhou/DeepseekCode".to_string(),
+                repo: "willamhou/DeepSeekCode".to_string(),
                 number: 5,
             }
         );
@@ -450,11 +450,11 @@ mod tests {
     #[test]
     fn parses_url_with_fragment() {
         let parsed =
-            parse_pr_ref("https://github.com/willamhou/DeepseekCode/pull/5#discussion").unwrap();
+            parse_pr_ref("https://github.com/willamhou/DeepSeekCode/pull/5#discussion").unwrap();
         assert_eq!(
             parsed,
             PrRef::Qualified {
-                repo: "willamhou/DeepseekCode".to_string(),
+                repo: "willamhou/DeepSeekCode".to_string(),
                 number: 5,
             }
         );
@@ -463,11 +463,11 @@ mod tests {
     #[test]
     fn parses_url_with_files_suffix() {
         let parsed =
-            parse_pr_ref("https://github.com/willamhou/DeepseekCode/pull/5/files").unwrap();
+            parse_pr_ref("https://github.com/willamhou/DeepSeekCode/pull/5/files").unwrap();
         assert_eq!(
             parsed,
             PrRef::Qualified {
-                repo: "willamhou/DeepseekCode".to_string(),
+                repo: "willamhou/DeepSeekCode".to_string(),
                 number: 5,
             }
         );
@@ -480,7 +480,7 @@ mod tests {
             "title": "Add CRLF round-trip",
             "headRefName": "feat/crlf",
             "baseRefName": "main",
-            "headRepository": {"name": "DeepseekCode"},
+            "headRepository": {"name": "DeepSeekCode"},
             "headRepositoryOwner": {"login": "willamhou"},
             "files": [
                 {"path": "src/tools/apply_patch.rs"},
@@ -492,7 +492,7 @@ mod tests {
         assert_eq!(parsed.title, "Add CRLF round-trip");
         assert_eq!(parsed.branch, "feat/crlf");
         assert_eq!(parsed.base_branch, "main");
-        assert_eq!(parsed.repo, "willamhou/DeepseekCode");
+        assert_eq!(parsed.repo, "willamhou/DeepSeekCode");
         assert_eq!(
             parsed.changed_files,
             vec![

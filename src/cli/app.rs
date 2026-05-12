@@ -541,7 +541,7 @@ impl Default for UpdateHomebrewFormulaArgs {
     fn default() -> Self {
         Self {
             version: env!("CARGO_PKG_VERSION").to_string(),
-            repo: "willamhou/DeepseekCode".to_string(),
+            repo: "willamhou/DeepSeekCode".to_string(),
             dist: "dist".to_string(),
             formula: "packaging/homebrew/deepseek.rb".to_string(),
             out: None,

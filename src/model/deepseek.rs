@@ -3318,7 +3318,7 @@ fn identifier_like_token(task: &str) -> Option<String> {
                 && (word.contains('_')
                     || word.contains("::")
                     || word.chars().any(|ch| ch.is_ascii_uppercase()))
-                && !matches!(*word, "DeepSeek" | "DeepseekCode" | "Cargo" | "README")
+                && !matches!(*word, "DeepSeek" | "DeepSeekCode" | "Cargo" | "README")
         })
         .map(str::to_string)
 }
@@ -5950,7 +5950,7 @@ mod tests {
     fn build_initial_todo_plan_specializes_product_readiness_requests() {
         let request = ModelRequest {
             system_prompt: String::new(),
-            task: "productionize DeepseekCode for daily coding work".to_string(),
+            task: "productionize DeepSeekCode for daily coding work".to_string(),
             image_inputs: Vec::new(),
             profile_name: "rust".to_string(),
             profile_hints: Vec::new(),

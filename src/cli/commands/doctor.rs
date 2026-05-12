@@ -16,7 +16,7 @@ pub fn run(args: DoctorArgs) -> AppResult<()> {
         return Ok(());
     }
 
-    println!("DeepseekCode doctor");
+    println!("DeepSeekCode doctor");
     print_workspace_section(&config);
     print_skills_section(&config);
     print_model_section(&config);

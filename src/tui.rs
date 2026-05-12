@@ -403,8 +403,11 @@ pub struct TuiApp {
     show_thread_picker: bool,
     show_approval_modal: bool,
     command_query: String,
+    command_cursor: usize,
     composer: String,
+    composer_cursor: usize,
     composer_focused: bool,
+    transcript_scroll: usize,
     pending_actions: Vec<TuiAction>,
     status: String,
     transcript: Vec<String>,
@@ -508,8 +511,11 @@ impl TuiApp {
             show_thread_picker: false,
             show_approval_modal: false,
             command_query: String::new(),
+            command_cursor: 0,
             composer: String::new(),
+            composer_cursor: 0,
             composer_focused: false,
+            transcript_scroll: 0,
             pending_actions: Vec::new(),
             status: "ready".to_string(),
             transcript: Vec::new(),
@@ -823,6 +829,7 @@ impl TuiApp {
         app.show_thread_picker = true;
         app.show_approval_modal = true;
         app.command_query = "mode agent".to_string();
+        app.command_cursor = app.command_query.len();
         app.status = "demo surfaces visible".to_string();
         app
     }
@@ -992,6 +999,7 @@ impl TuiApp {
     fn select_session(&mut self, index: usize) {
         self.selected_session = index.min(self.sessions.len().saturating_sub(1));
         self.selected_thread_id = self.default_thread_id_for_selected_session();
+        self.transcript_scroll = 0;
         self.refresh_runtime_view();
     }
 
@@ -1007,6 +1015,7 @@ impl TuiApp {
         };
         if let Some((thread_id, title)) = selected {
             self.selected_thread_id = Some(thread_id.clone());
+            self.transcript_scroll = 0;
             self.refresh_runtime_view();
             self.status = format!("selected thread: {} {}", thread_id, clip_line(&title, 60));
         } else {
@@ -1034,6 +1043,7 @@ impl TuiApp {
             }
         }
         self.selected_thread_id = Some(thread.id.clone());
+        self.transcript_scroll = 0;
         self.refresh_runtime_view();
         self.status = format!(
             "selected thread: {} {}",
@@ -1061,7 +1071,7 @@ impl TuiApp {
     fn refresh_runtime_view(&mut self) {
         let Some(thread) = self.active_thread().cloned() else {
             self.transcript = vec![
-                "DeepseekCode TUI shell".to_string(),
+                "DeepSeekCode TUI shell".to_string(),
                 "Use Tab or p/a/y to switch Plan, Agent, and YOLO modes.".to_string(),
                 "Press : for command palette, s for sessions, ! for approval modal.".to_string(),
             ];
@@ -1235,15 +1245,23 @@ impl TuiApp {
             KeyCode::Char('y') => self.mode = TuiMode::Yolo,
             KeyCode::Char('i') => {
                 self.composer_focused = true;
+                self.composer_cursor = self.composer.len();
                 self.status = "composer focused".to_string();
             }
             KeyCode::Char(':') => {
                 self.show_command_palette = true;
                 self.command_query.clear();
+                self.command_cursor = 0;
             }
             KeyCode::Char('s') => self.show_session_picker = true,
             KeyCode::Char('t') => self.show_thread_picker = true,
             KeyCode::Char('c') => self.request_cancel_run(),
+            KeyCode::Up => self.scroll_transcript_up(1),
+            KeyCode::Down => self.scroll_transcript_down(1),
+            KeyCode::PageUp => self.scroll_transcript_up(8),
+            KeyCode::PageDown => self.scroll_transcript_down(8),
+            KeyCode::Home => self.scroll_transcript_to_top(),
+            KeyCode::End => self.scroll_transcript_to_latest(),
             KeyCode::Char('!') => {
                 if self.active_approval_id.is_none() {
                     self.active_approval_id = self.next_pending_approval_id();
@@ -1272,14 +1290,32 @@ impl TuiApp {
                     return true;
                 };
                 self.composer.clear();
+                self.composer_cursor = 0;
                 self.pending_actions
                     .push(TuiAction::SubmitUserMessage { thread_id, content });
                 self.status = "submitting composer message".to_string();
             }
             KeyCode::Backspace => {
-                self.composer.pop();
+                backspace_at_cursor(&mut self.composer, &mut self.composer_cursor);
             }
-            KeyCode::Char(ch) => self.composer.push(ch),
+            KeyCode::Delete => {
+                delete_at_cursor(&mut self.composer, self.composer_cursor);
+            }
+            KeyCode::Left => {
+                self.composer_cursor = previous_char_boundary(&self.composer, self.composer_cursor);
+            }
+            KeyCode::Right => {
+                self.composer_cursor = next_char_boundary(&self.composer, self.composer_cursor);
+            }
+            KeyCode::Home => {
+                self.composer_cursor = 0;
+            }
+            KeyCode::End => {
+                self.composer_cursor = self.composer.len();
+            }
+            KeyCode::Char(ch) => {
+                insert_char_at_cursor(&mut self.composer, &mut self.composer_cursor, ch);
+            }
             _ => {}
         }
         true
@@ -1294,9 +1330,27 @@ impl TuiApp {
                 self.execute_palette_command(&command);
             }
             KeyCode::Backspace => {
-                self.command_query.pop();
+                backspace_at_cursor(&mut self.command_query, &mut self.command_cursor);
             }
-            KeyCode::Char(ch) => self.command_query.push(ch),
+            KeyCode::Delete => {
+                delete_at_cursor(&mut self.command_query, self.command_cursor);
+            }
+            KeyCode::Left => {
+                self.command_cursor =
+                    previous_char_boundary(&self.command_query, self.command_cursor);
+            }
+            KeyCode::Right => {
+                self.command_cursor = next_char_boundary(&self.command_query, self.command_cursor);
+            }
+            KeyCode::Home => {
+                self.command_cursor = 0;
+            }
+            KeyCode::End => {
+                self.command_cursor = self.command_query.len();
+            }
+            KeyCode::Char(ch) => {
+                insert_char_at_cursor(&mut self.command_query, &mut self.command_cursor, ch);
+            }
             _ => {}
         }
         true
@@ -1570,6 +1624,43 @@ impl TuiApp {
         }
     }
 
+    fn scroll_transcript_up(&mut self, lines: usize) {
+        let max_scroll = self.max_transcript_scroll();
+        self.transcript_scroll = self.transcript_scroll.saturating_add(lines).min(max_scroll);
+        self.status = if self.transcript_scroll == 0 {
+            "transcript at latest".to_string()
+        } else {
+            format!("transcript scrolled back {} lines", self.transcript_scroll)
+        };
+    }
+
+    fn scroll_transcript_down(&mut self, lines: usize) {
+        self.transcript_scroll = self.transcript_scroll.saturating_sub(lines);
+        self.status = if self.transcript_scroll == 0 {
+            "transcript at latest".to_string()
+        } else {
+            format!("transcript scrolled back {} lines", self.transcript_scroll)
+        };
+    }
+
+    fn scroll_transcript_to_top(&mut self) {
+        self.transcript_scroll = self.max_transcript_scroll();
+        self.status = if self.transcript_scroll == 0 {
+            "transcript at latest".to_string()
+        } else {
+            "transcript at oldest".to_string()
+        };
+    }
+
+    fn scroll_transcript_to_latest(&mut self) {
+        self.transcript_scroll = 0;
+        self.status = "transcript at latest".to_string();
+    }
+
+    fn max_transcript_scroll(&self) -> usize {
+        self.transcript.len().saturating_sub(1)
+    }
+
     fn request_compact_thread_from_arg(&mut self, keep_tail: &str) {
         match keep_tail.parse::<usize>() {
             Ok(value) if value <= MAX_TUI_COMPACTION_KEEP_TAIL_TURNS => {
@@ -1840,6 +1931,76 @@ fn clip_line(value: &str, max_chars: usize) -> String {
     clipped
 }
 
+fn display_with_cursor(value: &str, cursor: usize, show_cursor: bool) -> String {
+    if !show_cursor {
+        return value.to_string();
+    }
+    let cursor = clamp_char_boundary(value, cursor);
+    let mut displayed = String::with_capacity(value.len() + 1);
+    displayed.push_str(&value[..cursor]);
+    displayed.push('|');
+    displayed.push_str(&value[cursor..]);
+    displayed
+}
+
+fn insert_char_at_cursor(value: &mut String, cursor: &mut usize, ch: char) {
+    *cursor = clamp_char_boundary(value, *cursor);
+    value.insert(*cursor, ch);
+    *cursor += ch.len_utf8();
+}
+
+fn backspace_at_cursor(value: &mut String, cursor: &mut usize) {
+    *cursor = clamp_char_boundary(value, *cursor);
+    if *cursor == 0 {
+        return;
+    }
+    let previous = previous_char_boundary(value, *cursor);
+    value.drain(previous..*cursor);
+    *cursor = previous;
+}
+
+fn delete_at_cursor(value: &mut String, cursor: usize) {
+    let cursor = clamp_char_boundary(value, cursor);
+    if cursor >= value.len() {
+        return;
+    }
+    let next = next_char_boundary(value, cursor);
+    value.drain(cursor..next);
+}
+
+fn previous_char_boundary(value: &str, cursor: usize) -> usize {
+    let cursor = clamp_char_boundary(value, cursor);
+    if cursor == 0 {
+        return 0;
+    }
+    value[..cursor]
+        .char_indices()
+        .last()
+        .map(|(index, _)| index)
+        .unwrap_or(0)
+}
+
+fn next_char_boundary(value: &str, cursor: usize) -> usize {
+    let cursor = clamp_char_boundary(value, cursor);
+    if cursor >= value.len() {
+        return value.len();
+    }
+    let mut chars = value[cursor..].char_indices();
+    let _current = chars.next();
+    chars
+        .next()
+        .map(|(offset, _)| cursor + offset)
+        .unwrap_or(value.len())
+}
+
+fn clamp_char_boundary(value: &str, cursor: usize) -> usize {
+    let mut cursor = cursor.min(value.len());
+    while cursor > 0 && !value.is_char_boundary(cursor) {
+        cursor -= 1;
+    }
+    cursor
+}
+
 fn context_strategy(latest_total_tokens: u64) -> &'static str {
     match latest_total_tokens {
         900_000.. => "must_compact_or_chunk",
@@ -2047,7 +2208,7 @@ fn draw_tabs(frame: &mut Frame, app: &TuiApp, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("DeepseekCode TUI"),
+                .title("DeepSeekCode TUI"),
         );
     frame.render_widget(tabs, area);
 }
@@ -2090,6 +2251,7 @@ fn draw_sidebar(frame: &mut Frame, app: &TuiApp, area: Rect) {
     lines.push(Line::from("t: thread navigator"));
     lines.push(Line::from("!: approval modal"));
     lines.push(Line::from("c: cancel run"));
+    lines.push(Line::from("PgUp/PgDn: scroll"));
     lines.push(Line::from("q: quit"));
 
     let sidebar = Paragraph::new(lines)
@@ -2100,6 +2262,7 @@ fn draw_sidebar(frame: &mut Frame, app: &TuiApp, area: Rect) {
 
 fn draw_transcript(frame: &mut Frame, app: &TuiApp, area: Rect) {
     let composer_marker = if app.composer_focused { "*" } else { "" };
+    let composer = display_with_cursor(&app.composer, app.composer_cursor, app.composer_focused);
     let lines = app
         .transcript
         .iter()
@@ -2109,10 +2272,15 @@ fn draw_transcript(frame: &mut Frame, app: &TuiApp, area: Rect) {
             "Composer [{}]{}: {}",
             app.mode.title(),
             composer_marker,
-            clip_line(&app.composer, 100)
+            clip_line(&composer, 100)
         ))))
         .collect::<Vec<_>>();
+    let visible_lines = usize::from(area.height.saturating_sub(2)).max(1);
+    let max_top = lines.len().saturating_sub(visible_lines);
+    let scroll = app.transcript_scroll.min(max_top);
+    let top = max_top.saturating_sub(scroll);
     let transcript = Paragraph::new(lines)
+        .scroll((top.min(usize::from(u16::MAX)) as u16, 0))
         .wrap(Wrap { trim: true })
         .block(Block::default().borders(Borders::ALL).title("Transcript"));
     frame.render_widget(transcript, area);
@@ -2211,13 +2379,14 @@ fn draw_thread_picker(frame: &mut Frame, app: &TuiApp) {
 fn draw_command_palette(frame: &mut Frame, app: &TuiApp) {
     let area = top_center_rect(frame.area(), 76, 8);
     frame.render_widget(Clear, area);
+    let command_query = display_with_cursor(&app.command_query, app.command_cursor, true);
     let palette = Paragraph::new(vec![
         Line::from("Command Palette"),
         Line::from("Examples: mode agent | task pause | diagnostics --changed | revert turn last"),
         Line::from(""),
         Line::from(vec![
             Span::styled("> ", Style::default().fg(Color::Cyan)),
-            Span::raw(app.command_query.as_str()),
+            Span::raw(command_query),
         ]),
     ])
     .wrap(Wrap { trim: true })
@@ -2326,7 +2495,7 @@ mod tests {
         let app = TuiApp::demo();
         let output = render_once(&app, 120, 36).unwrap();
 
-        assert!(output.contains("DeepseekCode TUI"));
+        assert!(output.contains("DeepSeekCode TUI"));
         assert!(output.contains("Plan"));
         assert!(output.contains("Agent"));
         assert!(output.contains("YOLO"));
@@ -2891,6 +3060,123 @@ mod tests {
                 content: "hello from tui".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn composer_supports_cursor_editing() {
+        let mut app = TuiApp::with_runtime(
+            vec![TuiSession {
+                id: "session-one".to_string(),
+                title: "One".to_string(),
+                workspace: ".".to_string(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-one".to_string()),
+                thread_count: 1,
+            }],
+            vec![TuiThread {
+                id: "thread-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                title: "First thread".to_string(),
+                mode: "agent".to_string(),
+                status: "active".to_string(),
+                latest_turn_id: None,
+                event_seq: 1,
+            }],
+            Vec::new(),
+        );
+
+        assert!(app.handle_key(KeyCode::Char('i')));
+        for ch in "helo".chars() {
+            assert!(app.handle_key(KeyCode::Char(ch)));
+        }
+        assert!(app.handle_key(KeyCode::Left));
+        assert!(app.handle_key(KeyCode::Char('l')));
+
+        assert_eq!(app.composer, "hello");
+        assert_eq!(app.composer_cursor, 4);
+        let output = render_once(&app, 120, 36).unwrap();
+        assert!(output.contains("Composer [Plan]*: hell|o"));
+
+        assert!(app.handle_key(KeyCode::Home));
+        assert!(app.handle_key(KeyCode::Char('>')));
+        assert!(app.handle_key(KeyCode::End));
+        assert!(app.handle_key(KeyCode::Backspace));
+
+        assert_eq!(app.composer, ">hell");
+        assert_eq!(app.composer_cursor, app.composer.len());
+    }
+
+    #[test]
+    fn command_palette_supports_cursor_editing() {
+        let mut app = TuiApp::new(Vec::new());
+        app.mode = TuiMode::Yolo;
+
+        assert!(app.handle_key(KeyCode::Char(':')));
+        for ch in "mode pln".chars() {
+            assert!(app.handle_key(KeyCode::Char(ch)));
+        }
+        assert!(app.handle_key(KeyCode::Left));
+        assert!(app.handle_key(KeyCode::Char('a')));
+        assert_eq!(app.command_query, "mode plan");
+
+        let output = render_once(&app, 120, 36).unwrap();
+        assert!(output.contains("> mode pla|n"));
+
+        assert!(app.handle_key(KeyCode::Enter));
+        assert_eq!(app.mode, TuiMode::Plan);
+        assert_eq!(app.status, "mode set: Plan");
+    }
+
+    #[test]
+    fn transcript_scrollback_defaults_to_latest_and_pages_up() {
+        let items = (0..20)
+            .map(|index| TuiItem {
+                id: format!("item-{index:02}"),
+                thread_id: "thread-one".to_string(),
+                turn_id: None,
+                index,
+                item_type: "message".to_string(),
+                role: Some("assistant".to_string()),
+                content: format!("scroll-message-{index:02}"),
+                status: "completed".to_string(),
+            })
+            .collect::<Vec<_>>();
+        let mut app = TuiApp::with_runtime(
+            vec![TuiSession {
+                id: "session-one".to_string(),
+                title: "One".to_string(),
+                workspace: ".".to_string(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-one".to_string()),
+                thread_count: 1,
+            }],
+            vec![TuiThread {
+                id: "thread-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                title: "First thread".to_string(),
+                mode: "agent".to_string(),
+                status: "active".to_string(),
+                latest_turn_id: None,
+                event_seq: 1,
+            }],
+            items,
+        );
+
+        let output = render_once(&app, 140, 14).unwrap();
+        assert!(output.contains("scroll-message-19"));
+        assert!(!output.contains("scroll-message-00"));
+
+        assert!(app.handle_key(KeyCode::PageUp));
+        assert_eq!(app.transcript_scroll, 8);
+        assert!(app.status.contains("8 lines"));
+        let output = render_once(&app, 140, 14).unwrap();
+        assert!(output.contains("scroll-message-08"));
+        assert!(!output.contains("scroll-message-19"));
+
+        assert!(app.handle_key(KeyCode::End));
+        assert_eq!(app.transcript_scroll, 0);
+        let output = render_once(&app, 140, 14).unwrap();
+        assert!(output.contains("scroll-message-19"));
     }
 
     #[test]

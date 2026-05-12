@@ -167,7 +167,7 @@ impl AgentLoop {
             cancel_check,
         } = options;
         if emit_progress {
-            print_banner("DeepseekCode");
+            print_banner("DeepSeekCode");
         }
 
         let profile = detect_profile(".")?;
@@ -1468,7 +1468,7 @@ fn build_system_prompt_with_flags(
     subagent_available: bool,
 ) -> String {
     let mut prompt = String::from(
-        "You are the offline planning layer for DeepseekCode. Prefer repository inspection before edits.",
+        "You are the offline planning layer for DeepSeekCode. Prefer repository inspection before edits.",
     );
     prompt.push_str(ONE_TOOL_PER_TURN_NUDGE);
     // Note: ONE_TOOL_PER_TURN_NUDGE starts with explicit "\n\n" so order with
@@ -1858,7 +1858,7 @@ mod tests {
             &tools,
         ));
         assert!(super::should_use_explicit_planning(
-            "make DeepseekCode more like Claude Code",
+            "make DeepSeekCode more like Claude Code",
             None,
             &tools,
         ));
@@ -1873,7 +1873,7 @@ mod tests {
             &tools,
         ));
         assert!(super::should_use_explicit_planning(
-            "productionize DeepseekCode for daily coding work",
+            "productionize DeepSeekCode for daily coding work",
             None,
             &tools,
         ));

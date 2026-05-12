@@ -22,7 +22,7 @@ pub fn run(args: SmokeArgs) -> AppResult<()> {
         .clone()
         .unwrap_or_else(|| DEFAULT_PROMPT.to_string());
 
-    println!("DeepseekCode smoke");
+    println!("DeepSeekCode smoke");
     println!("  flavor: {}", flavor_label(flavor));
     println!("  base_url: {}", model.base_url);
     let resolved_model = smoke_model_name(&model);

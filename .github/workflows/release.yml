@@ -155,7 +155,7 @@ jobs:
           printf '%064d  deepseek-linux-x64.tar.gz\n' 1 > target/homebrew-shas/deepseek-linux-x64.tar.gz.sha256
           printf '%064d  deepseek-macos-x64.tar.gz\n' 2 > target/homebrew-shas/deepseek-macos-x64.tar.gz.sha256
           printf '%064d  deepseek-macos-arm64.tar.gz\n' 3 > target/homebrew-shas/deepseek-macos-arm64.tar.gz.sha256
-          cargo run --bin deepseek -- update homebrew-formula --version 0.1.0 --repo willamhou/DeepseekCode --dist target/homebrew-shas --formula packaging/homebrew/deepseek.rb --out target/deepseek.rb
+          cargo run --bin deepseek -- update homebrew-formula --version 0.1.0 --repo willamhou/DeepSeekCode --dist target/homebrew-shas --formula packaging/homebrew/deepseek.rb --out target/deepseek.rb
           ruby -c target/deepseek.rb
 
       - name: Docker Artifact Smoke
@@ -186,7 +186,7 @@ jobs:
       - name: Write Release Notes
         run: |
           {
-            echo "# DeepseekCode ${GITHUB_REF_NAME}"
+            echo "# DeepSeekCode ${GITHUB_REF_NAME}"
             echo
             echo "Automated release generated from ${GITHUB_SHA}."
             echo
@@ -210,10 +210,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release edit "${GITHUB_REF_NAME}" --title "DeepseekCode ${GITHUB_REF_NAME}" --notes-file release-notes.md --repo "${GITHUB_REPOSITORY}"
+            gh release edit "${GITHUB_REF_NAME}" --title "DeepSeekCode ${GITHUB_REF_NAME}" --notes-file release-notes.md --repo "${GITHUB_REPOSITORY}"
             gh release upload "${GITHUB_REF_NAME}" dist-assets/* --clobber --repo "${GITHUB_REPOSITORY}"
           else
-            gh release create "${GITHUB_REF_NAME}" dist-assets/* --verify-tag --title "DeepseekCode ${GITHUB_REF_NAME}" --notes-file release-notes.md --repo "${GITHUB_REPOSITORY}"
+            gh release create "${GITHUB_REF_NAME}" dist-assets/* --verify-tag --title "DeepSeekCode ${GITHUB_REF_NAME}" --notes-file release-notes.md --repo "${GITHUB_REPOSITORY}"
           fi
 
   publish-docker:
@@ -263,7 +263,7 @@ jobs:
             ${{ steps.docker.outputs.image }}:${{ github.ref_name }}
             ${{ steps.docker.outputs.image }}:latest
           labels: |
-            org.opencontainers.image.title=DeepseekCode
+            org.opencontainers.image.title=DeepSeekCode
             org.opencontainers.image.description=DeepSeek-first terminal code agent
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}

@@ -40,7 +40,7 @@ fn run_http(args: ServeHttpArgs) -> AppResult<()> {
         ))
     })?;
     let addr = listener.local_addr()?;
-    println!("DeepseekCode HTTP runtime listening on http://{addr}");
+    println!("DeepSeekCode HTTP runtime listening on http://{addr}");
     println!("  health: http://{addr}/health");
     println!("  runtime: http://{addr}/runtime");
     println!("  threads: http://{addr}/v1/threads");
@@ -329,7 +329,7 @@ fn try_response_for_request(request: &str, state: &RuntimeHttpState) -> AppResul
         (_, "/") => HttpResponse::text(
             200,
             "OK",
-            "DeepseekCode HTTP runtime. Use /health, /runtime, or /v1/threads.\n",
+            "DeepSeekCode HTTP runtime. Use /health, /runtime, or /v1/threads.\n",
         ),
         ("GET" | "HEAD", "/health" | "/v1/health") => health_response(),
         ("GET" | "HEAD", "/runtime" | "/v1/runtime") => runtime_response(),
@@ -369,7 +369,7 @@ fn health_response() -> HttpResponse {
         "OK",
         object([
             ("status", JsonValue::String("ok".to_string())),
-            ("service", JsonValue::String("DeepseekCode".to_string())),
+            ("service", JsonValue::String("DeepSeekCode".to_string())),
             (
                 "version",
                 JsonValue::String(env!("CARGO_PKG_VERSION").to_string()),
@@ -388,7 +388,7 @@ fn runtime_response() -> HttpResponse {
         200,
         "OK",
         object([
-            ("service", JsonValue::String("DeepseekCode".to_string())),
+            ("service", JsonValue::String("DeepSeekCode".to_string())),
             (
                 "version",
                 JsonValue::String(env!("CARGO_PKG_VERSION").to_string()),
