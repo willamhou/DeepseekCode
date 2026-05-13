@@ -68,6 +68,7 @@ cargo build --release
 ./target/release/deepseek update package --bin ./target/release/deepseek
 ./target/release/deepseek update verify-install --bin ./target/release/deepseek
 ./target/release/deepseek agents service --kind all --out target/service-smoke --bin ./target/release/deepseek --workdir "$PWD"
+./target/release/deepseek agents rlm-status --json
 cargo package --allow-dirty
 (cd npm && npm run check:version)
 (cd npm && npm test)
@@ -262,7 +263,9 @@ Release notes should include:
   manager rendering, local project/user config mutation, right-side MCP detail rendering/scrolling, and MCP
   prompt/resource/template client bridges
 - `release.json` from `deepseek update package`
-- `SERVICES.md` and generated service-template smoke output
+- `SERVICES.md`, generated service-template smoke output, and
+  `deepseek agents rlm-status --json` output showing the live RLM service
+  lifecycle surface
 - `npm test` output from `npm/`
 - root and platform npm package tarball names
 - Docker image tag and `docker run ... version` output

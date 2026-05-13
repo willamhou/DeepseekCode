@@ -45,4 +45,5 @@ depending on the original CLI process.
 ## Remaining Gap
 
 `rlm_process_run_next` now consumes this payload for a single queued turn. The
-remaining gap is ACP-specific push subscriptions and daemon package/service UX.
+remaining gap is ACP-specific push subscriptions; daemon package/service UX is now
+covered by generated agents-daemon service templates.

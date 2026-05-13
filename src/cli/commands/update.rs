@@ -861,10 +861,20 @@ deepseek agents service --kind launchd --out ./services --workdir "$PWD" --bin "
 ```
 
 The generated set runs the HTTP runtime (`deepseek serve --http`), the durable
-task daemon (`deepseek agents daemon --json`), and the diagnostics watch worker
-(`deepseek diagnostics --watch --changed --json`). Review the generated
-WorkingDirectory, bind address, poll interval, and budget before installing the
-files with systemd or launchd.
+task and live RLM worker daemon (`deepseek agents daemon --json`), and the
+diagnostics watch worker (`deepseek diagnostics --watch --changed --json`).
+The agents daemon triggers due automations, executes pending runtime tasks,
+recovers stale live RLM ownership, and runs one queued live RLM turn per tick.
+Review the generated WorkingDirectory, bind address, poll interval, and budget
+before installing the files with systemd or launchd.
+
+Useful RLM service checks after startup:
+
+```bash
+deepseek agents rlm-status --json
+deepseek agents rlm-events <session_id> --cursor 0 --json
+deepseek agents rlm-wait <session_id> --cursor 0 --timeout-ms 5000 --json
+```
 "#
 }
 
@@ -1415,12 +1425,28 @@ mod tests {
             .service_templates
             .join("launchd/com.deepseek.diagnostics.plist")
             .is_file());
+        let packaged_agents_service = std::fs::read_to_string(
+            package
+                .service_templates
+                .join("systemd/deepseek-agents.service"),
+        )
+        .unwrap();
+        assert!(packaged_agents_service.contains("queued live RLM turn per tick"));
+        let packaged_agents_plist = std::fs::read_to_string(
+            package
+                .service_templates
+                .join("launchd/com.deepseek.agents.plist"),
+        )
+        .unwrap();
+        assert!(packaged_agents_plist.contains("queued live RLM turn per tick"));
         assert!(package.package_dir.join("VERIFY.md").is_file());
         let manifest = std::fs::read_to_string(package.manifest).unwrap();
         assert!(manifest.contains("\"name\": \"deepseek\""));
         assert!(manifest.contains("\"version\":"));
         let services = std::fs::read_to_string(package.services_doc).unwrap();
         assert!(services.contains("deepseek agents service"));
+        assert!(services.contains("live RLM worker daemon"));
+        assert!(services.contains("deepseek agents rlm-status --json"));
     }
 
     #[test]

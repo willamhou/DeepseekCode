@@ -1425,8 +1425,9 @@ session runtime thread, enqueues a pending `rlm_process` runtime task, writes
 the live manifest, persists the turn payload under
 `.dscode/rlm-daemon/<session_id>/turns/<task-id>.json`, and appends a
 `turn_queued` event without spending model tokens. The payload contains the
-task, steps, model, workspace, input label, input content, and input size so a
-future worker can recover and execute queued turns after the CLI exits.
+task, steps, model, workspace, input label, input content, and input size so
+`rlm_process_run_next`, `rlm_process_drain`, or the `deepseek agents daemon`
+service loop can recover and execute queued turns after the CLI exits.
 `rlm_process_cancel session_id=<id> turn_id=<task-id>` cancels a queued pending
 or active running live turn, marks the payload cancelled when present, appends
 `turn_cancelled`, and refreshes `queued_turns`; `all=true` cancels every queued
@@ -1481,7 +1482,10 @@ are available from the terminal as `deepseek agents rlm-cancel`,
 `deepseek agents rlm-recover`, `deepseek agents rlm-stop`,
 `deepseek agents rlm-run-next`, and `deepseek agents rlm-drain`; `--json`
 returns the exact tool-output contract while the default output is a concise
-operator summary. Daemon package/service UX remains future work.
+operator summary. `deepseek agents service` now renders systemd/launchd
+supervisor files for the same `deepseek agents daemon --json` loop; once
+installed, that service recovers stale live RLM ownership and runs one queued
+live RLM turn per tick.
 `rlm_process_events session_id=<id> cursor=<seq>` replays parsed
 `.dscode/rlm-daemon/<session_id>/events.jsonl` records with `seq` greater than
 the cursor and returns `next_cursor` for clients that want deterministic live

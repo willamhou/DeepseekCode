@@ -182,8 +182,9 @@ resumption.
      worker ownership is stamped into live manifests while a turn is running and
      inventory reports stale owner pids; HTTP SSE streaming is implemented for
      live-session event logs; `rlm_process_cancel force=true` can interrupt an
-     external daemon owner on Unix; ACP-specific push subscriptions and resident
-     daemon service packaging remain open
+     external daemon owner on Unix; daemon service packaging is covered by the
+     generated agents-daemon service templates; ACP-specific push subscriptions
+     remain open
 5. Recovery:
    - daemon restart scan
    - stale pid detection
@@ -197,11 +198,12 @@ resumption.
      the start of each tick before claiming queued live RLM turns
 6. Service packaging:
    - systemd/launchd templates for RLM daemon alongside runtime and diagnostics
-   - status: partial; `deepseek agents daemon` now runs one queued live RLM
+   - status: implemented; `deepseek agents daemon` now runs one queued live RLM
      turn per tick through `rlm_process_run_next`, and the existing
      systemd/launchd templates already run that daemon; `rlm_process_status`
      now provides a read-only lifecycle dashboard for one or all live sessions;
-     daemon package/service UX remains open
+     generated and packaged service guidance now documents that the same agents
+     daemon loop performs stale RLM recovery and live turn execution
 
 ## Verification Plan
 
@@ -222,5 +224,6 @@ Future implementation should add these gates:
 
 Do not rename the existing bounded child-agent `rlm_process` implementation as a
 live daemon. It is already useful and should remain the default until a real
-live worker exists. The remaining executable RLM slices should focus on TUI/ACP
-ACP-specific push subscriptions and daemon package/service UX.
+live worker exists. The remaining executable RLM slices should focus on
+ACP-specific push subscriptions; daemon package/service UX is now covered by
+generated agents-daemon service templates.

@@ -36,4 +36,5 @@ running turns before claiming more work.
 
 ## Remaining
 
-ACP-specific push subscriptions and daemon package/service UX remain open.
+ACP-specific push subscriptions remain open; daemon package/service UX is now
+covered by generated agents-daemon service templates.

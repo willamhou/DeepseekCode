@@ -51,4 +51,4 @@ cancelled live RLM turns without reading payload files directly.
 ## Remaining Gap
 
 This is read-only inventory. The remaining live RLM gaps are TUI/ACP
-ACP-specific push subscriptions and daemon package/service UX.
+ACP-specific push subscriptions; daemon package/service UX is now covered by generated agents-daemon service templates.

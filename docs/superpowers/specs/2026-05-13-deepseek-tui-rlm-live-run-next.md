@@ -11,8 +11,8 @@ that can claim one queued live `rlm_process` turn, reconstruct it from the
 persisted payload, run the bounded model-backed child flow, and record the
 result.
 
-This is not a resident daemon yet. It is the smallest execution primitive that
-future service packaging can loop over.
+This was the smallest execution primitive for a later resident daemon; the
+generated agents-daemon service loop now calls the same worker path.
 
 ## Behavior
 
@@ -58,5 +58,6 @@ future service packaging can loop over.
 
 ## Remaining Gap
 
-DeepSeekCode still needs ACP-specific push subscriptions and daemon
-package/service UX.
+DeepSeekCode still needs ACP-specific push subscriptions. Daemon
+package/service UX is now covered by generated agents-daemon service
+templates.

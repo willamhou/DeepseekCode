@@ -1,5 +1,6 @@
 [Unit]
 Description=DeepSeekCode runtime task daemon
+# Runs due automations, pending runtime tasks, stale RLM recovery, and one queued live RLM turn per tick.
 After=network.target deepseek-runtime.service
 
 [Service]

@@ -806,6 +806,7 @@ fn systemd_agents_service(config: &ServiceTemplateConfig) -> String {
     format!(
         "[Unit]\n\
 Description=DeepSeekCode runtime task daemon\n\
+# Runs due automations, pending runtime tasks, stale RLM recovery, and one queued live RLM turn per tick.\n\
 After=network.target deepseek-runtime.service\n\
 \n\
 [Service]\n\
@@ -859,6 +860,7 @@ fn launchd_runtime_service(config: &ServiceTemplateConfig) -> String {
         ],
         "/tmp/deepseek-runtime.out.log",
         "/tmp/deepseek-runtime.err.log",
+        None,
     )
 }
 
@@ -882,6 +884,9 @@ fn launchd_agents_service(config: &ServiceTemplateConfig) -> String {
         &args,
         "/tmp/deepseek-agents.out.log",
         "/tmp/deepseek-agents.err.log",
+        Some(
+            "Runs due automations, pending runtime tasks, stale RLM recovery, and one queued live RLM turn per tick.",
+        ),
     )
 }
 
@@ -901,6 +906,7 @@ fn launchd_diagnostics_service(config: &ServiceTemplateConfig) -> String {
         ],
         "/tmp/deepseek-diagnostics.out.log",
         "/tmp/deepseek-diagnostics.err.log",
+        None,
     )
 }
 
@@ -910,12 +916,16 @@ fn launchd_plist(
     args: &[String],
     stdout_path: &str,
     stderr_path: &str,
+    comment: Option<&str>,
 ) -> String {
     let mut body = String::new();
     body.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     body.push_str("<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" ");
     body.push_str("\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n");
     body.push_str("<plist version=\"1.0\">\n<dict>\n");
+    if let Some(comment) = comment {
+        body.push_str(&format!("  <!-- {} -->\n", xml_escape(comment)));
+    }
     body.push_str("  <key>Label</key>\n");
     body.push_str(&format!("  <string>{}</string>\n", xml_escape(label)));
     body.push_str("  <key>WorkingDirectory</key>\n");
@@ -2254,6 +2264,7 @@ mod tests {
         assert!(templates[1]
             .body
             .contains("agents daemon --interval-ms 750 --budget 6 --json"));
+        assert!(templates[1].body.contains("queued live RLM turn per tick"));
         assert!(templates[2]
             .body
             .contains("diagnostics --watch --changed --interval-ms 750 --json"));
@@ -2263,6 +2274,7 @@ mod tests {
         assert!(templates[4]
             .body
             .contains("<string>com.deepseek.agents</string>"));
+        assert!(templates[4].body.contains("queued live RLM turn per tick"));
         assert!(templates[5]
             .body
             .contains("<string>com.deepseek.diagnostics</string>"));

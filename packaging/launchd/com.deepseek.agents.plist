@@ -2,6 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <!-- Runs due automations, pending runtime tasks, stale RLM recovery, and one queued live RLM turn per tick. -->
   <key>Label</key>
   <string>com.deepseek.agents</string>
   <key>WorkingDirectory</key>

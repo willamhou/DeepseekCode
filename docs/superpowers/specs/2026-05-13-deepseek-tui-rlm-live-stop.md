@@ -46,5 +46,6 @@ session.
 
 ## Remaining Gap
 
-DeepSeekCode still needs ACP-specific push subscriptions and daemon
-package/service UX.
+DeepSeekCode still needs ACP-specific push subscriptions. Daemon
+package/service UX is now covered by generated agents-daemon service
+templates.

@@ -9,9 +9,9 @@ Implemented.
 Narrow the live RLM daemon-loop gap by adding a bounded batch worker primitive
 that drains queued live `rlm_process` turns in FIFO order.
 
-This is still not a resident daemon. It reuses the single-step
-`rlm_process_run_next` execution path so future service packaging can loop over
-one tested claiming/completion primitive instead of duplicating behavior.
+This reuses the single-step `rlm_process_run_next` execution path, which the
+generated agents-daemon service loop now also calls, so manual drain and
+service execution share one tested claiming/completion primitive.
 
 ## Behavior
 
@@ -47,5 +47,6 @@ one tested claiming/completion primitive instead of duplicating behavior.
 
 ## Remaining Gap
 
-DeepSeekCode still needs ACP-specific push subscriptions and daemon
-package/service UX.
+DeepSeekCode still needs ACP-specific push subscriptions. Daemon
+package/service UX is now covered by generated agents-daemon service
+templates.

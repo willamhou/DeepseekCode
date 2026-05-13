@@ -61,5 +61,5 @@ That remains a separate streaming/worker-runtime slice.
 
 ## Remaining Gap
 
-The live daemon still needs ACP-specific push subscriptions and daemon
-package/service UX.
+The live daemon still needs ACP-specific push subscriptions. Daemon
+package/service UX is now covered by generated agents-daemon service templates.

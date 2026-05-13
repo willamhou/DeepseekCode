@@ -38,4 +38,5 @@ commands that can inspect live RLM state without starting a model worker.
 
 ## Remaining
 
-ACP-specific push subscriptions and daemon package/service UX remain open.
+ACP-specific push subscriptions remain open; daemon package/service UX is now
+covered by generated agents-daemon service templates.

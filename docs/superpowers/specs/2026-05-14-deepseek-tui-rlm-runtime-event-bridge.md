@@ -40,4 +40,5 @@ subscription path as turns, tasks, approvals, and user-input requests.
 
 ## Remaining
 
-ACP-specific push subscriptions and daemon package/service UX remain open.
+ACP-specific push subscriptions remain open; daemon package/service UX is now
+covered by generated agents-daemon service templates.

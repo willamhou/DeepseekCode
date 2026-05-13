@@ -75,12 +75,13 @@ deepseek agents daemon --once --json
 ```
 
 `daemon` triggers active automations whose `next_run_at` is due, supports
-recurring schedules such as `every:60s`, `every:5m`, and `@every 1h`, and then
-executes one thread-linked pending task per tick through the same durable
-`run-task` path.
+recurring schedules such as `every:60s`, `every:5m`, and `@every 1h`, executes
+one thread-linked pending task per tick through the same durable `run-task`
+path, recovers stale live RLM ownership, and runs one queued live RLM turn per
+tick.
 
-Render local supervisor files for running both the HTTP runtime and the durable
-task daemon as long-lived services:
+Render local supervisor files for running the HTTP runtime, the durable task
+and live RLM worker daemon, and diagnostics watch as long-lived services:
 
 ```sh
 deepseek agents service --kind systemd --out ./services --workdir "$PWD" --bin "$(command -v deepseek)"
@@ -91,6 +92,15 @@ The generated files are reviewable templates; the command does not enable or
 start services. Static placeholder templates also live under
 `packaging/systemd/` and `packaging/launchd/`, while release packages include
 them under `services/`.
+
+After a supervisor starts the agents daemon, use the RLM lifecycle commands to
+check live worker state:
+
+```sh
+deepseek agents rlm-status --json
+deepseek agents rlm-events <session_id> --cursor 0 --json
+deepseek agents rlm-wait <session_id> --cursor 0 --timeout-ms 5000 --json
+```
 
 List subagent thread artifacts created by parallel dispatch:
 

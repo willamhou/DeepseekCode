@@ -533,10 +533,11 @@ Remaining:
   `worker_interrupted`;
   `rlm_process_run_next` now claims one queued payload, records `turn_started`,
   runs the bounded model-backed RLM child flow, and records `turn_completed` /
-  `turn_failed`, giving live sessions a single-step worker bridge before a
-  resident daemon lands; `rlm_process_drain` repeats that worker path for a
-  bounded FIFO batch so queued sessions can be drained without service
-  packaging yet; `rlm_process_recover` can requeue or fail interrupted
+  `turn_failed`, giving live sessions a single-step worker bridge that the
+  resident `deepseek agents daemon` now runs per tick; `rlm_process_drain`
+  repeats that worker path for a bounded FIFO batch so queued sessions can be
+  drained manually or through the packaged service loop; `rlm_process_recover`
+  can requeue or fail interrupted
   `running` live turns for one session or all live manifests and records
   `turn_recovered`; `deepseek agents daemon` now runs one queued live RLM turn
   per tick through the RLM worker path instead of the generic runtime task path;
@@ -553,7 +554,9 @@ Remaining:
   `deepseek agents rlm-status`, `deepseek agents rlm-events`, and
   `deepseek agents rlm-wait`; stateful lifecycle controls are also available as
   `deepseek agents rlm-cancel`, `rlm-recover`, `rlm-stop`, `rlm-run-next`, and
-  `rlm-drain`
+  `rlm-drain`; `deepseek agents service` and packaged systemd/launchd templates
+  now explicitly document that the agents daemon is also the live RLM worker
+  loop, including stale-owner recovery and one queued live RLM turn per tick
 - Review remote PR context signals now exist: `review` parses
   `github_pr_context` JSON to report requested changes, failing/cancelled status
   checks, and missing `include_diff=true` context before optional semantic
