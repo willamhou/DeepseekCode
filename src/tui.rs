@@ -496,6 +496,7 @@ pub enum TuiMcpDetailKind {
     Home,
     Mode,
     Help,
+    Settings,
     Rollback,
     Reasoning,
     ComposerStash,
@@ -525,6 +526,7 @@ impl TuiMcpDetailKind {
             Self::Home => "home",
             Self::Mode => "mode",
             Self::Help => "help",
+            Self::Settings => "settings",
             Self::Rollback => "rollback",
             Self::Reasoning => "reasoning",
             Self::ComposerStash => "stash",
@@ -554,6 +556,7 @@ impl TuiMcpDetailKind {
             Self::Home => "Home",
             Self::Mode => "Mode",
             Self::Help => "Help",
+            Self::Settings => "Settings",
             Self::Rollback => "Rollback",
             Self::Reasoning => "Reasoning",
             Self::ComposerStash => "Composer Stash",
@@ -583,6 +586,7 @@ impl TuiMcpDetailKind {
             Self::Home => Self::Manager,
             Self::Mode => Self::Manager,
             Self::Help => Self::Manager,
+            Self::Settings => Self::Manager,
             Self::Rollback => Self::Manager,
             Self::Reasoning => Self::Manager,
             Self::ComposerStash => Self::Manager,
@@ -612,6 +616,7 @@ impl TuiMcpDetailKind {
             Self::Home => Self::Manager,
             Self::Mode => Self::Manager,
             Self::Help => Self::Manager,
+            Self::Settings => Self::Manager,
             Self::Rollback => Self::Manager,
             Self::Reasoning => Self::Manager,
             Self::ComposerStash => Self::Manager,
@@ -1073,6 +1078,21 @@ fn parse_tui_home_command(line: &str) -> Option<Result<(), String>> {
     }
 }
 
+fn parse_tui_settings_command(line: &str) -> Option<Result<(), String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/settings")
+        .or_else(|| strip_tui_command_prefix(trimmed, "settings"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "/config"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "config"))?;
+    let args = rest.split_whitespace().collect::<Vec<_>>();
+    match args.as_slice() {
+        [] | ["show" | "help" | "--help" | "-h"] => Some(Ok(())),
+        _ => Some(Err(
+            "usage: settings, config, /settings, or /config".to_string()
+        )),
+    }
+}
+
 fn strip_tui_command_prefix<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
     let rest = value.strip_prefix(prefix)?;
     if rest.is_empty() || rest.starts_with(char::is_whitespace) {
@@ -1344,6 +1364,13 @@ const TUI_HELP_COMMANDS: &[TuiHelpCommandInfo] = &[
         aliases: &[],
         usage: "/feedback [bug|feature|security]",
         description: "Show bug, feature, and security feedback targets.",
+    },
+    TuiHelpCommandInfo {
+        category: "Workbench",
+        name: "settings",
+        aliases: &["config"],
+        usage: "/settings",
+        description: "Show TUI and workspace configuration entry points.",
     },
     TuiHelpCommandInfo {
         category: "Runtime",
@@ -1664,6 +1691,8 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "help links",
     "help mcp",
     "?",
+    "settings",
+    "config",
 ];
 const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
     "/help",
@@ -1671,6 +1700,8 @@ const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
     "/help links",
     "/help mcp",
     "/?",
+    "/settings",
+    "/config",
     "/memory",
     "/memory show",
     "/memory path",
@@ -4092,6 +4123,19 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(command) = parse_tui_settings_command(&content) {
+                    match command {
+                        Ok(()) => {
+                            self.show_settings_detail();
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some(title) = parse_tui_rename_command(&content) {
                     match title {
                         Ok(title) => {
@@ -4495,6 +4539,17 @@ impl TuiApp {
             match command {
                 Ok(()) => {
                     self.show_home_detail();
+                }
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_settings_command(command) {
+            match command {
+                Ok(()) => {
+                    self.show_settings_detail();
                 }
                 Err(message) => {
                     self.status = message;
@@ -5851,6 +5906,81 @@ impl TuiApp {
         let detail = render_help_detail(&command);
         self.set_mcp_detail(TuiMcpDetailKind::Help, detail);
         self.status = topic_status;
+    }
+
+    fn show_settings_detail(&mut self) {
+        let detail = self.render_settings_detail();
+        self.set_mcp_detail(TuiMcpDetailKind::Settings, detail);
+        self.status = "settings shown".to_string();
+    }
+
+    fn render_settings_detail(&self) -> String {
+        let mut detail = String::new();
+        let _ = writeln!(detail, "DeepSeekCode Settings");
+        let _ = writeln!(detail, "=====================");
+        let _ = writeln!(detail);
+        push_status_row(&mut detail, "Mode:", self.mode.title());
+        match self.selected_session() {
+            Some(session) => {
+                push_status_row(&mut detail, "Workspace:", &session.workspace);
+                let _ = writeln!(
+                    detail,
+                    "  Project config:   {}/.dscode/config.toml",
+                    session.workspace
+                );
+            }
+            None => {
+                push_status_row(&mut detail, "Workspace:", ".");
+                let _ = writeln!(detail, "  Project config:   ./.dscode/config.toml");
+            }
+        }
+        let _ = writeln!(detail, "  User config:      ~/.dscode/config.toml");
+        let _ = writeln!(detail);
+        let _ = writeln!(detail, "Config Commands");
+        let _ = writeln!(detail, "---------------");
+        let _ = writeln!(detail, "- /mode [agent|plan|yolo|1|2|3]");
+        let _ = writeln!(detail, "- /model [name|list]");
+        let _ = writeln!(detail, "- /provider [name [model]|list]");
+        let _ = writeln!(detail, "- /network [list|allow|deny|remove|default]");
+        let _ = writeln!(detail, "- /memory [show|path|clear|edit|help]");
+        let _ = writeln!(
+            detail,
+            "- /mcp manager | /mcp init | /mcp add | /mcp enable | /mcp disable"
+        );
+        let _ = writeln!(detail);
+        let _ = writeln!(detail, "Workbench State");
+        let _ = writeln!(detail, "---------------");
+        push_status_row(
+            &mut detail,
+            "Sessions:",
+            &format!("{} loaded", self.sessions.len()),
+        );
+        push_status_row(
+            &mut detail,
+            "Threads:",
+            &format!("{} loaded", self.threads.len()),
+        );
+        push_status_row(
+            &mut detail,
+            "Command hist:",
+            &format!("{} entry(s)", self.command_history.len()),
+        );
+        push_status_row(
+            &mut detail,
+            "Slash extras:",
+            &format!("{} configured", self.extra_slash_completions.len()),
+        );
+        push_status_row(
+            &mut detail,
+            "Stash:",
+            &format!("{} draft(s)", self.composer_stash.len()),
+        );
+        let _ = writeln!(detail);
+        let _ = writeln!(
+            detail,
+            "Settings are edited through focused commands so local file writes stay explicit."
+        );
+        detail
     }
 
     fn render_mode_detail(&self) -> String {
@@ -9754,6 +9884,51 @@ mod tests {
         assert_eq!(app.composer, "");
         let (_, detail) = app.mcp_detail.as_ref().expect("links help detail");
         assert!(detail.contains("Aliases: dashboard, api"));
+    }
+
+    #[test]
+    fn settings_command_renders_configuration_entry_points() {
+        let mut app = TuiApp::with_runtime(
+            vec![TuiSession {
+                id: "session-one".to_string(),
+                title: "One".to_string(),
+                workspace: "/tmp/deepseek-settings".to_string(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-one".to_string()),
+                thread_count: 1,
+            }],
+            vec![TuiThread {
+                id: "thread-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                title: "First thread".to_string(),
+                mode: "agent".to_string(),
+                status: "running".to_string(),
+                latest_turn_id: None,
+                event_seq: 1,
+            }],
+            Vec::new(),
+        );
+
+        run_palette_command(&mut app, "settings");
+
+        assert_eq!(app.status, "settings shown");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("settings detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Settings);
+        assert!(detail.contains("DeepSeekCode Settings"));
+        assert!(detail.contains("/tmp/deepseek-settings/.dscode/config.toml"));
+        assert!(detail.contains("/provider [name [model]|list]"));
+        assert!(detail.contains("/mcp manager"));
+
+        app.composer_focused = true;
+        app.composer = "/config".to_string();
+        app.composer_cursor = app.composer.len();
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert_eq!(app.status, "settings shown");
+        assert_eq!(app.composer, "");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("composer settings detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Settings);
+        assert!(detail.contains("Settings are edited through focused commands"));
     }
 
     #[test]

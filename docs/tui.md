@@ -26,6 +26,7 @@ Current surfaces:
   `mode agent|plan|yolo|1|2|3`
 - help index and command topics with `help` / `/help`, `help <command>`, and
   `/?`
+- settings overview with `settings` / `/settings` and `config` / `/config`
 - composer draft stash: `Ctrl+S` parks the current draft, and
   `stash list|pop|clear` / `/stash list|pop|clear` manage parked drafts
 - session rename from the command palette or slash-style composer command with
@@ -250,6 +251,7 @@ Command palette commands currently implemented:
 |---|---|
 | `help`, `/help`, `/?` | Show the TUI help index in the right-side detail panel |
 | `help <command>`, `/help <command>` | Show command-specific usage, aliases, and description |
+| `settings`, `/settings`, `config`, `/config` | Show mode, config file locations, and focused configuration command entry points |
 | `mode`, `/mode` | Show current mode and mode-switching commands in the right-side detail panel |
 | `mode agent|plan|yolo|1|2|3`, `/mode agent|plan|yolo|1|2|3` | Switch Plan / Agent / YOLO mode |
 | `mode plan`, `plan` | Switch to Plan mode |

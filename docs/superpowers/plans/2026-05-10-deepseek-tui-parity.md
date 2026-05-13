@@ -436,6 +436,9 @@ Landed first slice:
 - TUI now supports DeepSeek-TUI-style `/help [command]` plus `/?`, rendering a
   categorized command index or command-specific usage/aliases in the detail
   panel
+- TUI now supports DeepSeek-TUI-style `/settings` plus `/config`, rendering
+  current mode, workspace/user config locations, workbench state, and focused
+  configuration command entry points in the detail panel
 - AgentLoop cancellation now propagates into cancel-aware model/tool execution; `run_shell` starts commands in a process group and kills that group when a durable cancel event is observed, while remote model streams and blocked model process-pipe reads stop through cancel-aware polling
 - deterministic `--once` snapshot path for CI/release smoke tests
 
