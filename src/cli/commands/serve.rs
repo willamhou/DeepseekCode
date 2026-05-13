@@ -882,6 +882,22 @@ fn execute_mcp_tool(
             let task = state.store.load_task(task_id)?;
             return Ok(json_value_to_string(&task_to_json(&task)));
         }
+        "runtime_create_task" => {
+            if !mcp_write_tools_enabled(state) {
+                return Err(app_error(
+                    "MCP write tool `runtime_create_task` is disabled; set DSCODE_MCP_ENABLE_DURABLE_APPROVALS=1 or DSCODE_MCP_APPROVAL_THREAD_ID=<thread-id> to route task writes through runtime approvals",
+                ));
+            }
+            return execute_mcp_runtime_create_task(input, state);
+        }
+        "runtime_cancel_task" => {
+            if !mcp_write_tools_enabled(state) {
+                return Err(app_error(
+                    "MCP write tool `runtime_cancel_task` is disabled; set DSCODE_MCP_ENABLE_DURABLE_APPROVALS=1 or DSCODE_MCP_APPROVAL_THREAD_ID=<thread-id> to route task writes through runtime approvals",
+                ));
+            }
+            return execute_mcp_runtime_cancel_task(input, state);
+        }
         _ => return Err(app_error(format!("unknown MCP tool: {name}"))),
     };
     Ok(output.summary)
@@ -1290,6 +1306,77 @@ fn execute_mcp_github_close_issue(input: ToolInput, state: &McpStdioState) -> Ap
     Ok(GithubCloseIssueTool.execute(input)?.summary)
 }
 
+fn execute_mcp_runtime_create_task(input: ToolInput, state: &McpStdioState) -> AppResult<String> {
+    let summary = mcp_input_required_any(&input, &["summary", "prompt"], "runtime_create_task")?;
+    let Some(approval_thread_id) = state.approval_thread_id.as_deref() else {
+        return Err(app_error(
+            "MCP write tool `runtime_create_task` is disabled; durable runtime approvals are required",
+        ));
+    };
+    if state.approval.require_write_confirmation && !env_flag("DSCODE_AUTO_APPROVE_WRITES") {
+        let approval = state.store.append_permission_request(
+            approval_thread_id,
+            state.approval_turn_id.as_deref(),
+            "runtime_create_task".to_string(),
+            "write".to_string(),
+            format!("create runtime task: {summary}"),
+            input.args.clone(),
+        )?;
+        wait_for_mcp_permission_response(
+            state,
+            approval_thread_id,
+            &approval,
+            "runtime_create_task",
+        )?;
+    }
+    let kind = mcp_input_optional(&input, "kind").unwrap_or_else(|| "agent".to_string());
+    let status = mcp_input_optional(&input, "status").unwrap_or_else(|| "pending".to_string());
+    let task = state.store.create_task(
+        mcp_input_optional(&input, "session_id").as_deref(),
+        mcp_input_optional(&input, "thread_id").as_deref(),
+        mcp_input_optional(&input, "parent_task_id").as_deref(),
+        kind,
+        status,
+        summary,
+    )?;
+    Ok(json_value_to_string(&task_to_json(&task)))
+}
+
+fn execute_mcp_runtime_cancel_task(input: ToolInput, state: &McpStdioState) -> AppResult<String> {
+    let task_id = mcp_input_required_any(&input, &["task_id", "id"], "runtime_cancel_task")?;
+    let Some(approval_thread_id) = state.approval_thread_id.as_deref() else {
+        return Err(app_error(
+            "MCP write tool `runtime_cancel_task` is disabled; durable runtime approvals are required",
+        ));
+    };
+    if state.approval.require_write_confirmation && !env_flag("DSCODE_AUTO_APPROVE_WRITES") {
+        let approval = state.store.append_permission_request(
+            approval_thread_id,
+            state.approval_turn_id.as_deref(),
+            "runtime_cancel_task".to_string(),
+            "write".to_string(),
+            format!("cancel runtime task: {task_id}"),
+            input.args.clone(),
+        )?;
+        wait_for_mcp_permission_response(
+            state,
+            approval_thread_id,
+            &approval,
+            "runtime_cancel_task",
+        )?;
+    }
+    let reason = mcp_input_optional(&input, "reason")
+        .unwrap_or_else(|| "cancelled by runtime_cancel_task".to_string());
+    let (task, event) = state.store.cancel_task(&task_id, reason)?;
+    Ok(json_value_to_string(&json_object([
+        ("task", task_to_json(&task)),
+        (
+            "event",
+            event.as_ref().map(event_to_json).unwrap_or(JsonValue::Null),
+        ),
+    ])))
+}
+
 fn mcp_revert_turn_target(input: &ToolInput) -> String {
     if let Some(id) = input
         .get("snapshot_id")
@@ -1544,6 +1631,20 @@ fn mcp_required_string<'a>(
         .and_then(json_as_string)
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| app_error(format!("MCP tool requires string argument `{key}`")))
+}
+
+fn mcp_input_required_any(input: &ToolInput, keys: &[&str], tool_name: &str) -> AppResult<String> {
+    keys.iter()
+        .find_map(|key| mcp_input_optional(input, key))
+        .ok_or_else(|| app_error(format!("{tool_name} requires `{}`", keys.join("` or `"))))
+}
+
+fn mcp_input_optional(input: &ToolInput, key: &str) -> Option<String> {
+    input
+        .get(key)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn mcp_success_response(id: JsonValue, result: JsonValue) -> JsonValue {
@@ -2134,6 +2235,40 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
                     ("dry_run", string_property("Set true to validate only.")),
                 ],
                 &["number", "acceptance_criteria", "evidence"],
+            ),
+        ));
+        tools.push(mcp_tool_definition(
+            "runtime_create_task",
+            "Create a durable runtime task. Requires durable runtime approvals.",
+            mcp_schema(
+                vec![
+                    ("summary", string_property("Task summary or prompt.")),
+                    ("prompt", string_property("Alias for summary.")),
+                    ("kind", string_property("Task kind, default agent.")),
+                    ("status", string_property("Task status, default pending.")),
+                    (
+                        "session_id",
+                        string_property("Optional runtime session id."),
+                    ),
+                    ("thread_id", string_property("Optional runtime thread id.")),
+                    (
+                        "parent_task_id",
+                        string_property("Optional parent runtime task id."),
+                    ),
+                ],
+                &[],
+            ),
+        ));
+        tools.push(mcp_tool_definition(
+            "runtime_cancel_task",
+            "Cancel a durable runtime task and append a cancel event when linked to a thread. Requires durable runtime approvals.",
+            mcp_schema(
+                vec![
+                    ("task_id", string_property("Runtime task id.")),
+                    ("id", string_property("Alias for task_id.")),
+                    ("reason", string_property("Optional cancellation reason.")),
+                ],
+                &["task_id"],
             ),
         ));
     }
@@ -5719,6 +5854,8 @@ mod tests {
         assert!(!rendered.contains(r#""name":"revert_turn""#));
         assert!(!rendered.contains(r#""name":"github_comment""#));
         assert!(!rendered.contains(r#""name":"github_close_issue""#));
+        assert!(!rendered.contains(r#""name":"runtime_create_task""#));
+        assert!(!rendered.contains(r#""name":"runtime_cancel_task""#));
 
         let state = mcp_state_with_side_effects("mcp-apply-patch-side-effects", true);
         let response = mcp_response_for_message(
@@ -5737,6 +5874,8 @@ mod tests {
         assert!(!rendered.contains(r#""name":"revert_turn""#));
         assert!(!rendered.contains(r#""name":"github_comment""#));
         assert!(!rendered.contains(r#""name":"github_close_issue""#));
+        assert!(!rendered.contains(r#""name":"runtime_create_task""#));
+        assert!(!rendered.contains(r#""name":"runtime_cancel_task""#));
 
         let state = mcp_state_with_durable_approvals("mcp-apply-patch-visible");
         let response = mcp_response_for_message(
@@ -5754,6 +5893,8 @@ mod tests {
         assert!(rendered.contains(r#""name":"revert_turn""#));
         assert!(rendered.contains(r#""name":"github_comment""#));
         assert!(rendered.contains(r#""name":"github_close_issue""#));
+        assert!(rendered.contains(r#""name":"runtime_create_task""#));
+        assert!(rendered.contains(r#""name":"runtime_cancel_task""#));
         assert!(rendered.contains("durable runtime approvals"));
     }
 
@@ -5822,6 +5963,57 @@ mod tests {
 
         assert!(rendered.contains("Dry run: would close issue #9"));
         assert!(rendered.contains(r#""isError":false"#));
+    }
+
+    #[test]
+    fn mcp_tools_call_creates_runtime_task_after_runtime_approval() {
+        let state = mcp_state_with_durable_approvals("mcp-runtime-create-task");
+        let responder = spawn_mcp_permission_responder(
+            state.store.clone(),
+            state.approval_thread_id.clone().unwrap(),
+            "approved",
+        );
+        let request = r#"{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"runtime_create_task","arguments":{"summary":"run queued parity check","kind":"agent"}}}"#;
+        let response = mcp_response_for_message(request, &state).unwrap();
+        responder.join().unwrap();
+        let rendered = json_value_to_string(&response);
+
+        assert!(rendered.contains("run queued parity check"));
+        assert!(rendered.contains(r#""isError":false"#));
+        let tasks = state.store.list_tasks(None, None, 10).unwrap();
+        assert!(tasks
+            .iter()
+            .any(|task| { task.summary == "run queued parity check" && task.status == "pending" }));
+    }
+
+    #[test]
+    fn mcp_tools_call_cancels_runtime_task_after_runtime_approval() {
+        let state = mcp_state_with_durable_approvals("mcp-runtime-cancel-task");
+        let thread_id = state.approval_thread_id.clone().unwrap();
+        let task = state
+            .store
+            .create_task(
+                None,
+                Some(&thread_id),
+                None,
+                "agent".to_string(),
+                "pending".to_string(),
+                "queued task".to_string(),
+            )
+            .unwrap();
+        let responder = spawn_mcp_permission_responder(state.store.clone(), thread_id, "approved");
+        let request = format!(
+            r#"{{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{{"name":"runtime_cancel_task","arguments":{{"task_id":"{}","reason":"not needed"}}}}}}"#,
+            task.id
+        );
+        let response = mcp_response_for_message(&request, &state).unwrap();
+        responder.join().unwrap();
+        let rendered = json_value_to_string(&response);
+
+        assert!(rendered.contains("cancel_requested"));
+        assert!(rendered.contains(r#""isError":false"#));
+        let cancelled = state.store.load_task(&task.id).unwrap();
+        assert_eq!(cancelled.status, "cancelled");
     }
 
     #[test]
