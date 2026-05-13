@@ -395,6 +395,10 @@ Landed first slice:
   `tokens` / `cost`, rendering active-thread token totals, last input/output
   telemetry, cache hit/miss rate, context usage, and approximate input/output
   spend in the detail panel without starting a model turn
+- TUI now supports DeepSeek-TUI-style `/cache [count|inspect|warmup]` plus
+  command-palette `cache`, rendering durable active-thread cache hit/miss
+  telemetry as a read-only detail view; `inspect` and `warmup` explicitly
+  surface the current prompt-hash persistence and non-mutating warmup limits
 - TUI now supports DeepSeek-TUI-style `/skills [prefix]` and `/skill <name>`
   plus command-palette `skills` / `skill`, listing and inspecting
   DeepSeekCode's configured repo/user TOML skill registry in the detail panel

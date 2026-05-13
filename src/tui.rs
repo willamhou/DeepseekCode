@@ -466,6 +466,7 @@ pub enum TuiMcpDetailKind {
     Status,
     Tokens,
     Cost,
+    Cache,
     Skills,
     Rollback,
     Reasoning,
@@ -487,6 +488,7 @@ impl TuiMcpDetailKind {
             Self::Status => "status",
             Self::Tokens => "tokens",
             Self::Cost => "cost",
+            Self::Cache => "cache",
             Self::Skills => "skills",
             Self::Rollback => "rollback",
             Self::Reasoning => "reasoning",
@@ -508,6 +510,7 @@ impl TuiMcpDetailKind {
             Self::Status => "Status",
             Self::Tokens => "Tokens",
             Self::Cost => "Cost",
+            Self::Cache => "Cache",
             Self::Skills => "Skills",
             Self::Rollback => "Rollback",
             Self::Reasoning => "Reasoning",
@@ -529,6 +532,7 @@ impl TuiMcpDetailKind {
             Self::Status => Self::Manager,
             Self::Tokens => Self::Manager,
             Self::Cost => Self::Manager,
+            Self::Cache => Self::Manager,
             Self::Skills => Self::Manager,
             Self::Rollback => Self::Manager,
             Self::Reasoning => Self::Manager,
@@ -550,6 +554,7 @@ impl TuiMcpDetailKind {
             Self::Status => Self::Manager,
             Self::Tokens => Self::Manager,
             Self::Cost => Self::Manager,
+            Self::Cache => Self::Manager,
             Self::Skills => Self::Manager,
             Self::Rollback => Self::Manager,
             Self::Reasoning => Self::Manager,
@@ -693,6 +698,13 @@ pub enum TuiSkillsCommand {
     Show { name: String },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TuiCacheCommand {
+    Summary { count: Option<usize> },
+    Inspect,
+    Warmup,
+}
+
 fn parse_tui_stash_command(line: &str) -> Option<Result<TuiComposerStashCommand, String>> {
     let trimmed = line.trim();
     let rest = strip_tui_command_prefix(trimmed, "/stash")
@@ -766,6 +778,27 @@ fn parse_tui_cost_command(line: &str) -> Option<Result<(), String>> {
         Some(Ok(()))
     } else {
         Some(Err("usage: cost or /cost".to_string()))
+    }
+}
+
+fn parse_tui_cache_command(line: &str) -> Option<Result<TuiCacheCommand, String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/cache")
+        .or_else(|| strip_tui_command_prefix(trimmed, "cache"))?;
+    let args = rest.split_whitespace().collect::<Vec<_>>();
+    match args.as_slice() {
+        [] => Some(Ok(TuiCacheCommand::Summary { count: None })),
+        ["inspect"] => Some(Ok(TuiCacheCommand::Inspect)),
+        ["warmup"] => Some(Ok(TuiCacheCommand::Warmup)),
+        [count] => match count.parse::<usize>() {
+            Ok(count) if count > 0 => Some(Ok(TuiCacheCommand::Summary { count: Some(count) })),
+            _ => Some(Err(
+                "usage: cache [count|inspect|warmup] or /cache [count|inspect|warmup]".to_string(),
+            )),
+        },
+        _ => Some(Err(
+            "usage: cache [count|inspect|warmup] or /cache [count|inspect|warmup]".to_string(),
+        )),
     }
 }
 
@@ -1098,6 +1131,9 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "status",
     "tokens",
     "cost",
+    "cache",
+    "cache inspect",
+    "cache warmup",
     "skills",
     "skill ",
     "automations",
@@ -3393,6 +3429,19 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(command) = parse_tui_cache_command(&content) {
+                    match command {
+                        Ok(command) => {
+                            self.show_cache_detail(command);
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some(command) =
                     parse_tui_skills_command(&content).or_else(|| parse_tui_skill_command(&content))
                 {
@@ -3670,6 +3719,17 @@ impl TuiApp {
             match command {
                 Ok(()) => {
                     self.show_cost_detail();
+                }
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_cache_command(command) {
+            match command {
+                Ok(command) => {
+                    self.show_cache_detail(command);
                 }
                 Err(message) => {
                     self.status = message;
@@ -5370,6 +5430,120 @@ impl TuiApp {
                     detail,
                     "Run a model turn in this thread to collect cost telemetry."
                 );
+            }
+        }
+        detail
+    }
+
+    fn show_cache_detail(&mut self, command: TuiCacheCommand) {
+        let detail = self.render_cache_detail(&command);
+        self.set_mcp_detail(TuiMcpDetailKind::Cache, detail);
+        self.status = "cache detail refreshed".to_string();
+    }
+
+    fn render_cache_detail(&self, command: &TuiCacheCommand) -> String {
+        let title = match command {
+            TuiCacheCommand::Summary { .. } => "DeepSeekCode Cache Telemetry",
+            TuiCacheCommand::Inspect => "DeepSeekCode Cache Inspect",
+            TuiCacheCommand::Warmup => "DeepSeekCode Cache Warmup",
+        };
+        let mut detail = String::new();
+        let _ = writeln!(detail, "{title}");
+        let _ = writeln!(detail, "{}", "=".repeat(title.len()));
+        let _ = writeln!(detail);
+
+        match command {
+            TuiCacheCommand::Inspect => {
+                let _ = writeln!(
+                    detail,
+                    "Durable TUI usage records do not persist rendered prompt layer hashes or prompt text."
+                );
+                let _ = writeln!(
+                    detail,
+                    "This read-only view surfaces the cache telemetry available for the active thread."
+                );
+                let _ = writeln!(detail);
+            }
+            TuiCacheCommand::Warmup => {
+                let _ = writeln!(
+                    detail,
+                    "DeepSeekCode TUI does not send a cache warmup request from this read-only command."
+                );
+                let _ = writeln!(
+                    detail,
+                    "Run a normal model turn to collect provider-reported prompt cache usage."
+                );
+                let _ = writeln!(detail);
+            }
+            TuiCacheCommand::Summary { .. } => {}
+        }
+
+        match self.active_usage_summary() {
+            Some(summary) => {
+                push_status_row(
+                    &mut detail,
+                    "Usage records:",
+                    &summary.record_count.to_string(),
+                );
+                if let TuiCacheCommand::Summary { count: Some(count) } = command {
+                    push_status_row(&mut detail, "Requested turns:", &count.to_string());
+                }
+                push_status_row(
+                    &mut detail,
+                    "Prompt tokens:",
+                    &summary.prompt_tokens.to_string(),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Latest prompt:",
+                    &summary.latest_prompt_tokens.to_string(),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Cache hit:",
+                    &summary.prompt_cache_hit_tokens.to_string(),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Cache miss:",
+                    &summary.prompt_cache_miss_tokens.to_string(),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Cache accounted:",
+                    &summary
+                        .prompt_cache_hit_tokens
+                        .saturating_add(summary.prompt_cache_miss_tokens)
+                        .to_string(),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Hit rate:",
+                    &format_cache_hit_rate(
+                        summary.prompt_cache_hit_tokens,
+                        summary.prompt_cache_miss_tokens,
+                    ),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Cache chart:",
+                    &format_ratio_bar(
+                        summary.prompt_cache_hit_tokens,
+                        summary.prompt_cache_miss_tokens,
+                        18,
+                        '#',
+                        '.',
+                    ),
+                );
+                push_status_row(&mut detail, "Context:", &format_context_usage(summary));
+                let cost = summary
+                    .estimated_total_cost_microusd
+                    .map(format_microusd)
+                    .unwrap_or_else(|| "unpriced model".to_string());
+                push_status_row(&mut detail, "Approx cost:", &cost);
+            }
+            None => {
+                push_status_row(&mut detail, "Usage:", "no active-thread usage records");
             }
         }
         detail
@@ -10368,6 +10542,17 @@ mod tests {
             Some(TuiMcpDetailKind::Cost)
         );
 
+        for ch in "/cache 5".chars() {
+            assert!(app.handle_key(KeyCode::Char(ch)));
+        }
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert!(app.drain_actions().is_empty());
+        assert_eq!(
+            app.mcp_detail.as_ref().map(|(kind, _)| *kind),
+            Some(TuiMcpDetailKind::Cache)
+        );
+
         for ch in "/review src/lib.rs".chars() {
             assert!(app.handle_key(KeyCode::Char(ch)));
         }
@@ -10576,6 +10761,72 @@ mod tests {
         assert!(detail.contains("$0.000010"));
         assert!(detail.contains("Output cost:"));
         assert!(detail.contains("$0.000020"));
+    }
+
+    #[test]
+    fn cache_command_renders_usage_details_and_read_only_modes() {
+        let mut app = TuiApp::with_runtime_usage_and_approvals(
+            vec![TuiSession {
+                id: "session-one".to_string(),
+                title: "One".to_string(),
+                workspace: "/workspace/project".to_string(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-one".to_string()),
+                thread_count: 1,
+            }],
+            vec![TuiThread {
+                id: "thread-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                title: "First thread".to_string(),
+                mode: "agent".to_string(),
+                status: "active".to_string(),
+                latest_turn_id: Some("turn-one".to_string()),
+                event_seq: 7,
+            }],
+            Vec::new(),
+            vec![TuiUsageSummary {
+                thread_id: "thread-one".to_string(),
+                record_count: 2,
+                prompt_tokens: 700,
+                completion_tokens: 534,
+                total_tokens: 1234,
+                latest_prompt_tokens: 500,
+                latest_completion_tokens: 300,
+                latest_total_tokens: 800,
+                prompt_cache_hit_tokens: 300,
+                prompt_cache_miss_tokens: 100,
+                estimated_input_cost_microusd: Some(10),
+                estimated_output_cost_microusd: Some(20),
+                estimated_total_cost_microusd: Some(30),
+                context_remaining_tokens: 999_200,
+                context_strategy: "normal".to_string(),
+            }],
+            Vec::new(),
+        );
+
+        app.execute_palette_command("cache 5");
+
+        assert_eq!(app.status, "cache detail refreshed");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("cache detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Cache);
+        assert!(detail.contains("DeepSeekCode Cache Telemetry"));
+        assert!(detail.contains("Requested turns:"));
+        assert!(detail.contains("5"));
+        assert!(detail.contains("Cache hit:"));
+        assert!(detail.contains("300"));
+        assert!(detail.contains("Hit rate:"));
+        assert!(detail.contains("75.00%"));
+        assert!(detail.contains("Cache chart:"));
+
+        app.execute_palette_command("cache inspect");
+        let (_, detail) = app.mcp_detail.as_ref().expect("cache inspect detail");
+        assert!(detail.contains("DeepSeekCode Cache Inspect"));
+        assert!(detail.contains("prompt layer hashes"));
+
+        app.execute_palette_command("cache warmup");
+        let (_, detail) = app.mcp_detail.as_ref().expect("cache warmup detail");
+        assert!(detail.contains("DeepSeekCode Cache Warmup"));
+        assert!(detail.contains("does not send"));
     }
 
     #[test]

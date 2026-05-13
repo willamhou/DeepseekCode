@@ -1162,6 +1162,7 @@ fn mcp_detail_summary(
         TuiMcpDetailKind::Status => Err(app_error("status details are not MCP details")),
         TuiMcpDetailKind::Tokens => Err(app_error("token details are not MCP details")),
         TuiMcpDetailKind::Cost => Err(app_error("cost details are not MCP details")),
+        TuiMcpDetailKind::Cache => Err(app_error("cache details are not MCP details")),
         TuiMcpDetailKind::Skills => Err(app_error("skill details are not MCP details")),
         TuiMcpDetailKind::Rollback => Err(app_error("rollback details are not MCP details")),
         TuiMcpDetailKind::Reasoning => Err(app_error("reasoning details are not MCP details")),

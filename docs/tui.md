@@ -27,6 +27,9 @@ Current surfaces:
   cost in the detail panel
 - token and cost inspection with `tokens` / `/tokens` and `cost` / `/cost`,
   matching DeepSeek-TUI's runtime usage and approximate spend commands
+- cache telemetry inspection with `cache [count]` / `/cache [count]` plus
+  read-only `cache inspect` / `cache warmup` explanations over durable usage
+  records
 - skill registry inspection with `skills [prefix]` / `/skills [prefix]` and
   `skill <name>` / `/skill <name>` over DeepSeekCode's configured TOML skills
 - composer and command-palette editing preserve terminal modifier keys, including
@@ -276,6 +279,8 @@ Command palette commands currently implemented:
 | `status`, `/status` | Show selected session, active thread, task/input, usage, cache, context, and cost status in the right-side detail panel |
 | `tokens`, `/tokens` | Show active-thread context, last input/output tokens, cache hit/miss, cumulative token usage, and approximate cost |
 | `cost`, `/cost` | Show active-thread approximate total, input, and output cost with telemetry caveats |
+| `cache`, `/cache`, `cache <count>` | Show active-thread durable cache hit/miss summary, hit rate, cache chart, context, and approximate cost |
+| `cache inspect`, `cache warmup` | Explain durable read-only cache limits: no persisted prompt layer hashes and no TUI-issued warmup request |
 | `skills`, `/skills`, `skills <prefix>` | List configured TOML skills from repo and user skill directories |
 | `skill <name>`, `/skill <name>` | Show one configured TOML skill's description, triggers, tools, references, policy, and system append |
 | `automations`, `automation` | Show active-thread automation count in the status bar |
