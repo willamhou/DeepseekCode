@@ -38,6 +38,10 @@ use crate::tools::list_files::{ListDirTool, ListFilesTool};
 use crate::tools::project_map::ProjectMapTool;
 use crate::tools::read_file::ReadFileTool;
 use crate::tools::revert_turn::RevertTurnTool;
+use crate::tools::rlm::{
+    RlmChunkPlanTool, RlmMapReducePlanTool, RlmPythonSessionTool, RlmPythonSessionsTool,
+    RlmPythonTool,
+};
 use crate::tools::run_shell::{is_safe_shell_command, RunShellTool};
 use crate::tools::run_tests::{render_run_tests_command, RunTestsTool};
 use crate::tools::search_text::{GrepFilesTool, SearchTextTool};
@@ -91,6 +95,7 @@ fn run_http(args: ServeHttpArgs) -> AppResult<()> {
 struct McpStdioState {
     store: RuntimeStore,
     rollback: RollbackStore,
+    config: AppConfig,
     workspace: PathBuf,
     approval: ApprovalConfig,
     diagnostics: DiagnosticsConfig,
@@ -114,6 +119,7 @@ fn run_mcp_stdio(args: ServeMcpArgs) -> AppResult<()> {
     let state = McpStdioState {
         store,
         rollback,
+        config: config.clone(),
         workspace,
         approval: config.approval.clone(),
         diagnostics: config.diagnostics.clone(),
@@ -742,6 +748,21 @@ fn execute_mcp_tool(
         }
         .execute(input)?,
         "task_shell_wait" => TaskShellWaitTool.execute(input)?,
+        "rlm_chunk_plan" => RlmChunkPlanTool.execute(input)?,
+        "rlm_map_reduce_plan" => RlmMapReducePlanTool.execute(input)?,
+        "rlm_python" => RlmPythonTool.execute(input)?,
+        "rlm_python_sessions" => RlmPythonSessionsTool {
+            config: state.config.clone(),
+        }
+        .execute(input)?,
+        "rlm_python_session" => {
+            if !mcp_side_effect_tools_enabled(state) {
+                return Err(app_error(
+                    "MCP RLM state tool `rlm_python_session` is disabled; set DSCODE_MCP_ENABLE_SIDE_EFFECTS=1 for trusted direct execution or DSCODE_MCP_ENABLE_DURABLE_APPROVALS=1 to route through runtime approvals",
+                ));
+            }
+            return execute_mcp_rlm_python_session(input, state);
+        }
         "github_comment" => {
             if !mcp_write_tools_enabled(state) {
                 return Err(app_error(
@@ -2182,6 +2203,39 @@ fn execute_mcp_shell_tool(
     Ok(output.summary)
 }
 
+fn execute_mcp_rlm_python_session(input: ToolInput, state: &McpStdioState) -> AppResult<String> {
+    if let Some(thread_id) = state.approval_thread_id.as_deref() {
+        if state.approval.require_write_confirmation && !env_flag("DSCODE_AUTO_APPROVE_WRITES") {
+            let approval = state.store.append_permission_request(
+                thread_id,
+                state.approval_turn_id.as_deref(),
+                "rlm_python_session".to_string(),
+                "write".to_string(),
+                mcp_rlm_python_session_target(&input),
+                input.args.clone(),
+            )?;
+            wait_for_mcp_permission_response(state, thread_id, &approval, "rlm_python_session")?;
+        }
+    } else if !state.allow_side_effect_tools {
+        return Err(app_error(
+            "MCP RLM state tool `rlm_python_session` is disabled; set DSCODE_MCP_ENABLE_SIDE_EFFECTS=1 for trusted direct execution or DSCODE_MCP_ENABLE_DURABLE_APPROVALS=1 to route through runtime approvals",
+        ));
+    }
+
+    Ok(RlmPythonSessionTool {
+        config: state.config.clone(),
+    }
+    .execute(input)?
+    .summary)
+}
+
+fn mcp_rlm_python_session_target(input: &ToolInput) -> String {
+    input
+        .get("session_id")
+        .map(|session_id| format!("rlm_python_session: {session_id}"))
+        .unwrap_or_else(|| "rlm_python_session".to_string())
+}
+
 fn mcp_shell_target(name: &str, input: &ToolInput) -> String {
     if matches!(name, "exec_shell" | "task_shell_start") {
         return input
@@ -2776,6 +2830,62 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
             ),
         ),
         mcp_tool_definition(
+            "rlm_chunk_plan",
+            "Plan DeepSeek-TUI-style RLM chunks for a workspace file or inline content without running child agents.",
+            mcp_schema(
+                vec![
+                    ("file_path", string_property("Workspace-relative file to chunk.")),
+                    ("content", string_property("Inline content to chunk.")),
+                    ("max_chars", number_property("Maximum chars per chunk.")),
+                    ("overlap", number_property("Overlapping chars between chunks.")),
+                    ("include_text", string_property("Set false for offset-only chunks.")),
+                ],
+                &[],
+            ),
+        ),
+        mcp_tool_definition(
+            "rlm_map_reduce_plan",
+            "Plan a DeepSeek-TUI-style RLM map-reduce workflow without running child agents.",
+            mcp_schema(
+                vec![
+                    ("task", string_property("Reduce objective.")),
+                    ("question", string_property("Alias for task.")),
+                    ("file_path", string_property("Workspace-relative file to chunk.")),
+                    ("content", string_property("Inline content to chunk.")),
+                    ("max_chars", number_property("Maximum chars per chunk.")),
+                    ("overlap", number_property("Overlapping chars between chunks.")),
+                    ("include_text", string_property("Set false for offset-only chunks.")),
+                    ("map_limit", number_property("Maximum map tasks to render.")),
+                    ("steps", string_property("Suggested child step budget.")),
+                ],
+                &[],
+            ),
+        ),
+        mcp_tool_definition(
+            "rlm_python",
+            "Run a short restricted Python helper for pure RLM computation. Imports, files, network, subprocess, and OS access are blocked.",
+            mcp_schema(
+                vec![
+                    ("code", string_property("Restricted Python code.")),
+                    ("context", string_property("Optional context string.")),
+                    ("question", string_property("Optional question string.")),
+                    ("timeout_ms", number_property("Timeout milliseconds, clamped.")),
+                ],
+                &["code"],
+            ),
+        ),
+        mcp_tool_definition(
+            "rlm_python_sessions",
+            "List or inspect persisted rlm_python_session JSON state without running Python.",
+            mcp_schema(
+                vec![
+                    ("session_id", string_property("Optional session id to inspect.")),
+                    ("limit", number_property("Maximum sessions to list.")),
+                ],
+                &[],
+            ),
+        ),
+        mcp_tool_definition(
             "diagnostics",
             "Run workspace or path-scoped diagnostics.",
             mcp_schema(
@@ -2863,6 +2973,22 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
                     ("all", string_property("Set true to cancel all running jobs.")),
                 ],
                 &[],
+            ),
+        ));
+        tools.push(mcp_tool_definition(
+            "rlm_python_session",
+            "Run restricted Python with persisted JSON state. Requires trusted side effects or durable runtime approvals because it writes .dscode/rlm-python state.",
+            mcp_schema(
+                vec![
+                    ("session_id", string_property("RLM Python session id.")),
+                    ("code", string_property("Restricted Python code.")),
+                    ("context", string_property("Optional context string.")),
+                    ("question", string_property("Optional question string.")),
+                    ("reset", string_property("Set true to clear state before running.")),
+                    ("persistent", string_property("Set true to reuse a process.")),
+                    ("timeout_ms", number_property("Timeout milliseconds, clamped.")),
+                ],
+                &["session_id", "code"],
             ),
         ));
         tools.push(mcp_tool_definition(
@@ -3788,6 +3914,7 @@ fn acp_mcp_state_for_session_turn(
     McpStdioState {
         store: state.store.clone(),
         rollback: state.rollback.clone(),
+        config: state.config.clone(),
         workspace: session.cwd.clone(),
         approval: state.config.approval.clone(),
         diagnostics: state.config.diagnostics.clone(),
@@ -6592,10 +6719,17 @@ mod tests {
         mcp_state_with_side_effects(label, false)
     }
 
+    fn mcp_test_config(label: &str) -> AppConfig {
+        let mut config = AppConfig::default();
+        config.workspace.config_dir = temp_dir(&format!("{label}-config")).display().to_string();
+        config
+    }
+
     fn mcp_state_with_side_effects(label: &str, allow_side_effect_tools: bool) -> McpStdioState {
         McpStdioState {
             store: temp_store(label),
             rollback: RollbackStore::new(temp_dir(&format!("{label}-rollback"))),
+            config: mcp_test_config(label),
             workspace: temp_dir(label),
             approval: ApprovalConfig::default(),
             diagnostics: DiagnosticsConfig::default(),
@@ -6625,6 +6759,7 @@ mod tests {
         McpStdioState {
             store,
             rollback: RollbackStore::new(temp_dir(&format!("{label}-rollback"))),
+            config: mcp_test_config(label),
             workspace,
             approval: ApprovalConfig::default(),
             diagnostics: DiagnosticsConfig::default(),
@@ -6761,6 +6896,10 @@ mod tests {
         assert!(rendered.contains(r#""name":"exec_shell_wait""#));
         assert!(rendered.contains(r#""name":"exec_wait""#));
         assert!(rendered.contains(r#""name":"task_shell_wait""#));
+        assert!(rendered.contains(r#""name":"rlm_chunk_plan""#));
+        assert!(rendered.contains(r#""name":"rlm_map_reduce_plan""#));
+        assert!(rendered.contains(r#""name":"rlm_python""#));
+        assert!(rendered.contains(r#""name":"rlm_python_sessions""#));
         assert!(rendered.contains(r#""name":"diagnostics""#));
         assert!(rendered.contains(r#""name":"runtime_list_sessions""#));
         assert!(rendered.contains(r#""name":"runtime_list_agents""#));
@@ -6770,6 +6909,7 @@ mod tests {
         assert!(!rendered.contains(r#""name":"exec_shell_interact""#));
         assert!(!rendered.contains(r#""name":"exec_interact""#));
         assert!(!rendered.contains(r#""name":"exec_shell_cancel""#));
+        assert!(!rendered.contains(r#""name":"rlm_python_session""#));
         assert!(!rendered.contains(r#""name":"run_shell""#));
         assert!(!rendered.contains(r#""name":"run_tests""#));
     }
@@ -6791,6 +6931,7 @@ mod tests {
         assert!(rendered.contains(r#""name":"exec_shell_interact""#));
         assert!(rendered.contains(r#""name":"exec_interact""#));
         assert!(rendered.contains(r#""name":"exec_shell_cancel""#));
+        assert!(rendered.contains(r#""name":"rlm_python_session""#));
     }
 
     #[test]
@@ -6861,6 +7002,49 @@ mod tests {
         assert!(rendered.contains(r#""isError":false"#));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn mcp_tools_call_executes_rlm_chunk_plan() {
+        let state = mcp_state("mcp-rlm-chunk-plan");
+        let response = mcp_response_for_message(
+            r#"{"jsonrpc":"2.0","id":34,"method":"tools/call","params":{"name":"rlm_chunk_plan","arguments":{"content":"abcdef","max_chars":3,"overlap":0,"include_text":"false"}}}"#,
+            &state,
+        )
+        .unwrap();
+        let text = mcp_response_text(&response);
+
+        assert!(text.contains(r#""chunks""#));
+        assert!(text.contains(r#""coverage":{"chunks":2"#));
+        assert!(text.contains(r#""include_text":false"#));
+    }
+
+    #[test]
+    fn mcp_tools_call_rejects_rlm_python_session_until_side_effects_enabled() {
+        let state = mcp_state("mcp-rlm-python-session-disabled");
+        let response = mcp_response_for_message(
+            r#"{"jsonrpc":"2.0","id":35,"method":"tools/call","params":{"name":"rlm_python_session","arguments":{"session_id":"demo","code":"FINAL(1)"}}}"#,
+            &state,
+        )
+        .unwrap();
+        let rendered = json_value_to_string(&response);
+
+        assert!(rendered.contains("MCP RLM state tool `rlm_python_session` is disabled"));
+        assert!(rendered.contains(r#""isError":true"#));
+    }
+
+    #[test]
+    fn mcp_tools_call_rejects_rlm_python_blocked_tokens() {
+        let state = mcp_state("mcp-rlm-python-blocked");
+        let response = mcp_response_for_message(
+            r#"{"jsonrpc":"2.0","id":36,"method":"tools/call","params":{"name":"rlm_python","arguments":{"code":"import os\nFINAL(os.getcwd())"}}}"#,
+            &state,
+        )
+        .unwrap();
+        let rendered = json_value_to_string(&response);
+
+        assert!(rendered.contains("rlm_python rejects blocked token"));
+        assert!(rendered.contains(r#""isError":true"#));
     }
 
     #[test]
@@ -6959,6 +7143,7 @@ mod tests {
         assert!(!rendered.contains(r#""name":"exec_shell_interact""#));
         assert!(!rendered.contains(r#""name":"exec_interact""#));
         assert!(!rendered.contains(r#""name":"exec_shell_cancel""#));
+        assert!(!rendered.contains(r#""name":"rlm_python_session""#));
 
         let state = mcp_state_with_side_effects("mcp-apply-patch-side-effects", true);
         let response = mcp_response_for_message(
@@ -6973,6 +7158,7 @@ mod tests {
         assert!(rendered.contains(r#""name":"exec_shell_interact""#));
         assert!(rendered.contains(r#""name":"exec_interact""#));
         assert!(rendered.contains(r#""name":"exec_shell_cancel""#));
+        assert!(rendered.contains(r#""name":"rlm_python_session""#));
         assert!(!rendered.contains(r#""name":"apply_patch""#));
         assert!(!rendered.contains(r#""name":"write_file""#));
         assert!(!rendered.contains(r#""name":"edit_file""#));
@@ -7030,6 +7216,7 @@ mod tests {
         assert!(rendered.contains(r#""name":"exec_shell_interact""#));
         assert!(rendered.contains(r#""name":"exec_interact""#));
         assert!(rendered.contains(r#""name":"exec_shell_cancel""#));
+        assert!(rendered.contains(r#""name":"rlm_python_session""#));
         assert!(rendered.contains("durable runtime approvals"));
     }
 
@@ -8197,8 +8384,13 @@ mod tests {
         assert!(rendered.contains(r#""name":"validate_data""#));
         assert!(rendered.contains(r#""name":"github_issue_context""#));
         assert!(rendered.contains(r#""name":"github_pr_context""#));
+        assert!(rendered.contains(r#""name":"rlm_chunk_plan""#));
+        assert!(rendered.contains(r#""name":"rlm_map_reduce_plan""#));
+        assert!(rendered.contains(r#""name":"rlm_python""#));
+        assert!(rendered.contains(r#""name":"rlm_python_sessions""#));
         assert!(!rendered.contains(r#""name":"run_shell""#));
         assert!(!rendered.contains(r#""name":"run_tests""#));
+        assert!(!rendered.contains(r#""name":"rlm_python_session""#));
         assert!(!rendered.contains(r#""name":"apply_patch""#));
         assert!(!rendered.contains(r#""name":"write_file""#));
         assert!(!rendered.contains(r#""name":"edit_file""#));

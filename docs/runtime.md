@@ -327,6 +327,11 @@ Exposed tools:
 | `exec_shell_interact` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and sends stdin to a background shell job |
 | `exec_interact` | Alias for `exec_shell_interact` |
 | `exec_shell_cancel` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and cancels one or all background shell jobs |
+| `rlm_chunk_plan` | Plan DeepSeek-TUI-style RLM chunks for a workspace file or inline content without running child agents |
+| `rlm_map_reduce_plan` | Plan a local RLM map-reduce workflow without running child agents |
+| `rlm_python` | Run restricted pure-compute Python helper code with imports/files/network/subprocess blocked |
+| `rlm_python_sessions` | List or inspect persisted `rlm_python_session` JSON state without running Python |
+| `rlm_python_session` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and writes `.dscode/rlm-python` helper state |
 | `apply_patch` | Hidden by default; exposed only with durable runtime approvals and applies unified diffs through the existing patch validator |
 | `write_file` | Agent-visible write tool; hidden in MCP/ACP by default and exposed there only with durable runtime approvals; writes UTF-8 text to safe relative paths |
 | `edit_file` | Agent-visible write tool for exact search/replace in one UTF-8 file under the workspace |
@@ -385,21 +390,22 @@ Exposed MCP resource templates:
 | `deepseekcode://runtime/tasks/{id}` | Durable runtime task JSON by id |
 
 `run_shell`, `run_tests`, `exec_shell`, `task_shell_start`,
-`exec_shell_interact`, `exec_interact`, `exec_shell_cancel`, `apply_patch`,
-`write_file`, `edit_file`, `delete_file`, `copy_file`, and `move_file` are
-hidden from `tools/list` and rejected by `tools/call` unless the MCP server
-process opts in.
+`exec_shell_interact`, `exec_interact`, `exec_shell_cancel`,
+`rlm_python_session`, `apply_patch`, `write_file`, `edit_file`, `delete_file`,
+`copy_file`, and `move_file` are hidden from `tools/list` and rejected by
+`tools/call` unless the MCP server process opts in.
 `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` keeps the trusted direct execution path for
 allowlisted shell/test/shell-session tools. `DSCODE_MCP_ENABLE_DURABLE_APPROVALS=1`
 creates a runtime approval thread for that server and routes shell-session
 starts/stdin/cancel calls through durable `permission_request kind=shell` /
 `permission_response` events alongside the existing `run_shell`, `run_tests`,
-patch, and file-write approval paths, so the existing TUI approval modal or
-HTTP runtime can approve or deny the call. Operators can also bind an existing
-runtime thread with `DSCODE_MCP_APPROVAL_THREAD_ID=<thread-id>`. All modes reuse
-the existing safe-command allowlist, patch scope validation, and workspace path
-checks; they do not expose arbitrary shell, unrestricted file writes, task
-mutation, or MCP prompt/resource mutation.
+patch, RLM session-state, and file-write approval paths, so the existing TUI
+approval modal or HTTP runtime can approve or deny the call. Operators can also
+bind an existing runtime thread with
+`DSCODE_MCP_APPROVAL_THREAD_ID=<thread-id>`. All modes reuse the existing
+safe-command allowlist, patch scope validation, and workspace path checks; they
+do not expose arbitrary shell, unrestricted file writes, task mutation, or MCP
+prompt/resource mutation.
 
 DeepSeekCode also acts as an MCP client for configured stdio / HTTP / SSE
 servers. In addition to `tools/list`, `tools/call`, `prompts/list`, and
@@ -1246,7 +1252,13 @@ without running Python, returning the JSON object state, file metadata, and
 DeepSeekCode process.
 This gives the model DeepSeek-TUI-style Recursive Language Model entrypoints for
 synthesis/classification tasks with both file-backed and optional process-backed
-Python helper state.
+Python helper state. MCP server mode exposes the local RLM planning helpers
+(`rlm_chunk_plan`, `rlm_map_reduce_plan`), restricted pure-compute
+`rlm_python`, and read-only `rlm_python_sessions` by default. Stateful
+`rlm_python_session` is hidden by default and requires trusted side effects or
+durable runtime approvals because it writes `.dscode/rlm-python` state.
+Model-running child-agent RLM tools remain agent-only until their model/cost
+approval contract is explicit for MCP clients.
 
 Parallel subagent dispatch writes markdown artifacts under
 `.dscode/agent-threads/<thread-id>.md` and stores the active thread marker in

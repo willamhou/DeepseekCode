@@ -464,6 +464,11 @@ Landed first slice:
   `task_shell_start`, `exec_shell_interact`, `exec_interact`, and
   `exec_shell_cancel` are exposed only with trusted side effects or durable
   `permission_request kind=shell` approvals
+- local RLM MCP helpers exposed by default: `rlm_chunk_plan`,
+  `rlm_map_reduce_plan`, restricted pure-compute `rlm_python`, and read-only
+  `rlm_python_sessions`; stateful `rlm_python_session` is hidden by default and
+  exposed only with trusted side effects or durable
+  `permission_request kind=write` approvals
 - read-only runtime tools exposed through MCP: `runtime_health`,
   `runtime_list_sessions`, `runtime_list_threads`, `runtime_read_thread`,
   `runtime_list_tasks`, `runtime_read_task`
@@ -582,8 +587,9 @@ Remaining:
 - broader long-tail side-effect MCP server surface beyond the current
   `run_tests`/`run_shell`, file write/patch/edit/delete/copy/move,
   shell-session, `revert_turn`, GitHub write, runtime task, and runtime
-  automation tools; remaining candidates include RLM tools that still need
-  explicit MCP safety contracts before exposure
+  automation tools; remaining candidates include model-running child-agent RLM
+  tools that still need explicit MCP model/cost/network approval contracts
+  before exposure
 - full ACP standard tool streaming beyond started/result notifications
 
 ### Phase H: Packaging
