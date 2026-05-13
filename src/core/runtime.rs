@@ -135,6 +135,15 @@ pub struct ThreadCompactionRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct ThreadForkRecord {
+    pub source_thread_id: String,
+    pub thread: ThreadRecord,
+    pub copied_turn_count: usize,
+    pub copied_item_count: usize,
+    pub event: RuntimeEvent,
+}
+
+#[derive(Debug, Clone)]
 pub struct RuntimeStore {
     root: PathBuf,
 }
@@ -295,6 +304,144 @@ impl RuntimeStore {
         thread.updated_at = event.created_at;
         self.write_thread(&thread)?;
         Ok(thread)
+    }
+
+    pub fn fork_thread(
+        &self,
+        source_thread_id: &str,
+        title: Option<String>,
+    ) -> AppResult<ThreadForkRecord> {
+        validate_record_id(source_thread_id)?;
+        self.ensure_dirs()?;
+        let source = self.load_thread(source_thread_id)?;
+        let source_turns = self.list_turns(source_thread_id)?;
+        let source_items = self.list_items(source_thread_id, None)?;
+        let now = epoch_label();
+        let title = title
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| format!("Fork: {}", source.title));
+        let mut thread = ThreadRecord {
+            id: new_id("thread"),
+            session_id: source.session_id.clone(),
+            created_at: now.clone(),
+            updated_at: now,
+            title,
+            workspace: source.workspace.clone(),
+            model: source.model.clone(),
+            mode: source.mode.clone(),
+            status: "active".to_string(),
+            latest_turn_id: None,
+            event_seq: 0,
+        };
+        self.write_thread(&thread)?;
+        let created = self.append_event(
+            &thread.id,
+            None,
+            "thread_created",
+            JsonValue::Object(object([
+                ("title", JsonValue::String(thread.title.clone())),
+                ("mode", JsonValue::String(thread.mode.clone())),
+                (
+                    "session_id",
+                    thread
+                        .session_id
+                        .clone()
+                        .map(JsonValue::String)
+                        .unwrap_or(JsonValue::Null),
+                ),
+                (
+                    "source_thread_id",
+                    JsonValue::String(source_thread_id.to_string()),
+                ),
+            ])),
+        )?;
+        thread.event_seq = created.seq;
+        thread.updated_at = created.created_at;
+        self.write_thread(&thread)?;
+
+        let mut turn_id_map = BTreeMap::new();
+        for source_turn in &source_turns {
+            let turn = TurnRecord {
+                id: new_id("turn"),
+                thread_id: thread.id.clone(),
+                index: source_turn.index,
+                role: source_turn.role.clone(),
+                content: source_turn.content.clone(),
+                status: source_turn.status.clone(),
+                created_at: source_turn.created_at.clone(),
+            };
+            turn_id_map.insert(source_turn.id.clone(), turn.id.clone());
+            self.write_turn(&turn)?;
+        }
+
+        for source_item in &source_items {
+            let item = ItemRecord {
+                id: new_id("item"),
+                thread_id: thread.id.clone(),
+                turn_id: source_item
+                    .turn_id
+                    .as_ref()
+                    .and_then(|turn_id| turn_id_map.get(turn_id).cloned()),
+                index: source_item.index,
+                item_type: source_item.item_type.clone(),
+                role: source_item.role.clone(),
+                content: source_item.content.clone(),
+                status: source_item.status.clone(),
+                created_at: source_item.created_at.clone(),
+            };
+            self.write_item(&item)?;
+        }
+
+        thread.latest_turn_id = source
+            .latest_turn_id
+            .as_ref()
+            .and_then(|turn_id| turn_id_map.get(turn_id).cloned());
+        let event = self.append_event(
+            &thread.id,
+            thread.latest_turn_id.as_deref(),
+            "thread_forked",
+            JsonValue::Object(object([
+                (
+                    "source_thread_id",
+                    JsonValue::String(source_thread_id.to_string()),
+                ),
+                (
+                    "source_session_id",
+                    source
+                        .session_id
+                        .clone()
+                        .map(JsonValue::String)
+                        .unwrap_or(JsonValue::Null),
+                ),
+                (
+                    "copied_turn_count",
+                    JsonValue::Number(source_turns.len().to_string()),
+                ),
+                (
+                    "copied_item_count",
+                    JsonValue::Number(source_items.len().to_string()),
+                ),
+            ])),
+        )?;
+        thread.event_seq = event.seq;
+        thread.updated_at = event.created_at.clone();
+        self.write_thread(&thread)?;
+        if let Some(session_id) = thread.session_id.as_deref() {
+            if let Ok(mut session) = self.load_session(session_id) {
+                session.active_thread_id = Some(thread.id.clone());
+                session.thread_count += 1;
+                session.updated_at = thread.updated_at.clone();
+                self.write_session(&session)?;
+            }
+        }
+        Ok(ThreadForkRecord {
+            source_thread_id: source_thread_id.to_string(),
+            thread,
+            copied_turn_count: source_turns.len(),
+            copied_item_count: source_items.len(),
+            event,
+        })
     }
 
     pub fn list_threads(&self, limit: usize) -> AppResult<Vec<ThreadRecord>> {
@@ -2236,6 +2383,25 @@ pub fn thread_compaction_to_json(record: &ThreadCompactionRecord) -> JsonValue {
     ]))
 }
 
+pub fn thread_fork_to_json(record: &ThreadForkRecord) -> JsonValue {
+    JsonValue::Object(object([
+        (
+            "source_thread_id",
+            JsonValue::String(record.source_thread_id.clone()),
+        ),
+        ("thread", thread_to_json(&record.thread)),
+        (
+            "copied_turn_count",
+            JsonValue::Number(record.copied_turn_count.to_string()),
+        ),
+        (
+            "copied_item_count",
+            JsonValue::Number(record.copied_item_count.to_string()),
+        ),
+        ("event", event_to_json(&record.event)),
+    ]))
+}
+
 pub fn usage_to_json(usage: &UsageRecord) -> JsonValue {
     let turn_id = usage
         .turn_id
@@ -2971,6 +3137,106 @@ mod tests {
         let events = store.read_events(&thread.id, 2).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, "item_recorded");
+    }
+
+    #[test]
+    fn fork_thread_copies_turns_and_items_with_new_ids() {
+        let store = RuntimeStore::new(temp_root("fork-thread"));
+        let session = store
+            .create_session("Session".to_string(), ".".to_string())
+            .unwrap();
+        let thread = store
+            .create_thread_for_session(
+                &session.id,
+                "Investigate".to_string(),
+                ".".to_string(),
+                "deepseek-coder".to_string(),
+                "agent".to_string(),
+            )
+            .unwrap();
+        let user_turn = store
+            .append_turn(&thread.id, "user".to_string(), "hello".to_string())
+            .unwrap();
+        let assistant_turn = store
+            .append_turn(&thread.id, "assistant".to_string(), "done".to_string())
+            .unwrap();
+        let message = store
+            .append_item(
+                &thread.id,
+                Some(&assistant_turn.id),
+                "message".to_string(),
+                Some("assistant".to_string()),
+                "done".to_string(),
+                "completed".to_string(),
+            )
+            .unwrap();
+        store
+            .append_item(
+                &thread.id,
+                Some(&assistant_turn.id),
+                "reasoning".to_string(),
+                Some("assistant".to_string()),
+                "reasoning trace".to_string(),
+                "completed".to_string(),
+            )
+            .unwrap();
+
+        let fork = store
+            .fork_thread(&thread.id, Some("Alternative path".to_string()))
+            .unwrap();
+
+        assert_ne!(fork.thread.id, thread.id);
+        assert_eq!(fork.source_thread_id, thread.id);
+        assert_eq!(fork.thread.title, "Alternative path");
+        assert_eq!(fork.thread.session_id.as_deref(), Some(session.id.as_str()));
+        assert_eq!(fork.copied_turn_count, 2);
+        assert_eq!(fork.copied_item_count, 2);
+        assert_eq!(fork.event.kind, "thread_forked");
+
+        let fork_turns = store.list_turns(&fork.thread.id).unwrap();
+        assert_eq!(fork_turns.len(), 2);
+        assert_ne!(fork_turns[0].id, user_turn.id);
+        assert_eq!(fork_turns[0].content, "hello");
+        assert_eq!(fork_turns[1].content, "done");
+        assert_eq!(
+            store
+                .load_thread(&fork.thread.id)
+                .unwrap()
+                .latest_turn_id
+                .as_deref(),
+            Some(fork_turns[1].id.as_str())
+        );
+
+        let fork_items = store.list_items(&fork.thread.id, None).unwrap();
+        assert_eq!(fork_items.len(), 2);
+        assert_ne!(fork_items[0].id, message.id);
+        assert_eq!(fork_items[0].thread_id, fork.thread.id);
+        assert_eq!(
+            fork_items[0].turn_id.as_deref(),
+            Some(fork_turns[1].id.as_str())
+        );
+        assert_eq!(fork_items[0].content, "done");
+
+        let events = store.read_events(&fork.thread.id, 0).unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind, "thread_created");
+        assert_eq!(events[1].kind, "thread_forked");
+        let JsonValue::Object(payload) = &events[1].payload else {
+            panic!("fork payload should be an object");
+        };
+        assert_eq!(
+            payload.get("source_thread_id").and_then(json_as_string),
+            Some(thread.id.as_str())
+        );
+        assert_eq!(
+            store
+                .load_session(&session.id)
+                .unwrap()
+                .active_thread_id
+                .as_deref(),
+            Some(fork.thread.id.as_str())
+        );
+        assert_eq!(store.load_session(&session.id).unwrap().thread_count, 2);
     }
 
     #[test]

@@ -105,6 +105,8 @@ Landed first slice:
 - `POST /v1/threads/{id}/turns`
 - `GET /v1/threads/{id}/items`, `POST /v1/threads/{id}/items`, `GET /v1/threads/{id}/items/{item_id}`
 - `GET /v1/threads/{id}/turns/{turn_id}/items`, `POST /v1/threads/{id}/turns/{turn_id}/items`
+- `POST /v1/threads/{id}/fork` for durable thread context forks with remapped
+  turn/item ids and `thread_forked` audit events
 - `GET /v1/threads/{id}/tasks`, `POST /v1/threads/{id}/tasks`
 - `GET /v1/threads/{id}/events?since_seq=N`
 - `GET /v1/threads/{id}/events/stream?since_seq=N&wait_ms=M` for SSE replay plus bounded live wait frames
@@ -115,7 +117,7 @@ Landed first slice:
 - `GET /v1/threads/{id}/usage`, `GET /v1/usage?thread_id={id}`
 - `GET /v1/threads/{id}/usage/summary`, `GET /v1/usage/summary?thread_id={id}` for aggregate token accounting, cache telemetry, recognized DeepSeek V4 cost estimates, and 1M-context policy
 - Successful `deepseek exec` runs now append durable sessions, linked user/assistant turns, matching message items, completed task records, and token/cache/cost usage records
-- `/runtime` now advertises `sessions`, `threads`, `turns`, `items`, `events`, `events_write`, `events_sse`, `events_sse_wait`, `events_sse_follow`, `events_global_sse`, `events_global_sse_follow`, `tasks`, `automations`, `usage`, and `usage_summary` as available; `deepseek tui --runtime-url http://HOST:PORT` can build snapshots from the HTTP runtime, write foreground actions back over HTTP, and subscribe to the aggregate runtime event stream with `follow=1`
+- `/runtime` now advertises `sessions`, `threads`, `thread_fork`, `turns`, `items`, `events`, `events_write`, `events_sse`, `events_sse_wait`, `events_sse_follow`, `events_global_sse`, `events_global_sse_follow`, `tasks`, `automations`, `usage`, and `usage_summary` as available; `deepseek tui --runtime-url http://HOST:PORT` can build snapshots from the HTTP runtime, write foreground actions back over HTTP, and subscribe to the aggregate runtime event stream with `follow=1`
 
 ### Phase C: Tool Surface
 

@@ -118,6 +118,7 @@ Endpoints:
 | `/v1/threads/{id}` | `GET`, `HEAD` | Thread detail with recorded turns and items |
 | `/v1/threads/{id}/automations` | `GET`, `POST` | Automation records for one thread |
 | `/v1/threads/{id}/compact` | `POST` | Append a durable compaction summary and audit event |
+| `/v1/threads/{id}/fork` | `POST` | Fork one thread's turns/items into a new active thread |
 | `/v1/threads/{id}/items` | `GET`, `POST` | Item timeline records for one thread |
 | `/v1/threads/{id}/items/{item_id}` | `GET`, `HEAD` | Item detail |
 | `/v1/threads/{id}/turns` | `POST` | Append a completed turn record |
@@ -133,9 +134,11 @@ Endpoints:
 The HTTP listener handles accepted connections in worker threads, so bounded
 SSE waits and follow-mode streams do not block concurrent writes such as
 `POST /v1/threads/{id}/turns` or `POST /v1/threads/{id}/events`. External
-approval bridging and engine-driven resume/fork are not implemented yet.
-`/runtime` advertises only the durable capabilities that currently have a
-backing store.
+approval bridging is available through durable `permission_request` /
+`permission_response` events, and thread context forks are available through
+`POST /v1/threads/{id}/fork`; engine-driven resume over forked threads remains
+future work. `/runtime` advertises only the durable capabilities that currently
+have a backing store.
 Tasks can be claimed by an external runner, paused/resumed while still queued,
 cancelled through a first-class task endpoint, and active automations can be
 triggered into pending tasks. Usage records now include cache-hit/cache-miss
@@ -211,6 +214,7 @@ flags:
     "/v1/threads/{id}",
     "/v1/threads/{id}/automations",
     "/v1/threads/{id}/compact",
+    "/v1/threads/{id}/fork",
     "/v1/threads/{id}/items",
     "/v1/threads/{id}/items/{item_id}",
     "/v1/threads/{id}/turns",
@@ -229,6 +233,7 @@ flags:
     "sessions": true,
     "threads": true,
     "thread_compaction": true,
+    "thread_fork": true,
     "turns": true,
     "items": true,
     "events": true,
@@ -579,6 +584,13 @@ It returns schema `deepseek.runtime.thread.v1` with a `thread` object.
 Missing fields default to `Untitled thread`, `.`, `deepseek-coder`, and
 `agent`.
 
+`POST /v1/threads/{id}/fork` copies the source thread's turns and items into a
+new active thread in the same session, remapping turn and item ids while leaving
+usage records and historical events on the source thread. The optional body can
+set a new `title`; otherwise the title defaults to `Fork: <source title>`.
+The response schema is `deepseek.runtime.thread_fork.v1` and includes the new
+thread, copied turn/item counts, and a `thread_forked` audit event.
+
 `GET /v1/threads?limit=50` returns schema `deepseek.runtime.threads.v1`:
 
 ```json
@@ -707,7 +719,7 @@ rejected if it leaves no turns to summarize. The response uses schema
 given sequence number. Current event kinds are `thread_created`,
 `turn_recorded`, `turn_updated`, `item_recorded`, `item_updated`,
 `usage_recorded`, `task_recorded`, `automation_recorded`,
-`thread_compacted`, `permission_request`, `permission_response`,
+`thread_compacted`, `thread_forked`, `permission_request`, `permission_response`,
 `user_input_request`, `user_input_response`, and `cancel_requested`.
 
 `POST /v1/threads/{id}/events` currently accepts `permission_request`,

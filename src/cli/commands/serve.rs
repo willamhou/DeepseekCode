@@ -15,8 +15,8 @@ use crate::core::rollback::{snapshot_to_json, RestorePlan, RollbackStore};
 use crate::core::runtime::{
     automation_to_json, event_to_json, item_to_json, json_array, json_object, json_string_field,
     parse_json_object_body, session_to_json, task_to_json, thread_compaction_to_json,
-    thread_to_json, turn_to_json, usage_to_json, validate_record_id, RuntimeEvent, RuntimeStore,
-    TaskRecord,
+    thread_fork_to_json, thread_to_json, turn_to_json, usage_to_json, validate_record_id,
+    RuntimeEvent, RuntimeStore, TaskRecord,
 };
 use crate::error::{app_error, AppResult};
 use crate::model::client::ModelClient;
@@ -6156,6 +6156,7 @@ fn runtime_response() -> HttpResponse {
                         "/v1/threads/{id}",
                         "/v1/threads/{id}/automations",
                         "/v1/threads/{id}/compact",
+                        "/v1/threads/{id}/fork",
                         "/v1/threads/{id}/items",
                         "/v1/threads/{id}/items/{item_id}",
                         "/v1/threads/{id}/turns",
@@ -6181,6 +6182,7 @@ fn runtime_response() -> HttpResponse {
                     ("sessions", JsonValue::Bool(true)),
                     ("threads", JsonValue::Bool(true)),
                     ("thread_compaction", JsonValue::Bool(true)),
+                    ("thread_fork", JsonValue::Bool(true)),
                     ("turns", JsonValue::Bool(true)),
                     ("items", JsonValue::Bool(true)),
                     ("events", JsonValue::Bool(true)),
@@ -6921,6 +6923,7 @@ fn route_thread_path(
             create_task_response(store, body, None, Some(thread_id))
         }
         ("POST", [thread_id, "compact"]) => compact_thread_response(store, thread_id, body),
+        ("POST", [thread_id, "fork"]) => fork_thread_response(store, thread_id, body),
         ("GET" | "HEAD", [thread_id, "usage", "summary"]) => {
             store.load_thread(thread_id)?;
             usage_summary_response(store, request_target, Some(thread_id))
@@ -7006,6 +7009,28 @@ fn compact_thread_response(
                 JsonValue::String("deepseek.runtime.thread_compaction.v1".to_string()),
             ),
             ("compaction", thread_compaction_to_json(&compaction)),
+        ]),
+    ))
+}
+
+fn fork_thread_response(
+    store: &RuntimeStore,
+    thread_id: &str,
+    body: &str,
+) -> AppResult<HttpResponse> {
+    validate_record_id(thread_id)?;
+    let root = parse_json_object_body(body)?;
+    let title = json_optional_string_field(&root, "title")?;
+    let fork = store.fork_thread(thread_id, title)?;
+    Ok(HttpResponse::json(
+        201,
+        "Created",
+        json_object([
+            (
+                "schema",
+                JsonValue::String("deepseek.runtime.thread_fork.v1".to_string()),
+            ),
+            ("fork", thread_fork_to_json(&fork)),
         ]),
     ))
 }
@@ -10766,6 +10791,10 @@ shell_allowlist = ["cargo test"]
             Some(JsonValue::Bool(true))
         ));
         assert!(matches!(
+            capabilities.get("thread_fork"),
+            Some(JsonValue::Bool(true))
+        ));
+        assert!(matches!(
             capabilities.get("automations"),
             Some(JsonValue::Bool(true))
         ));
@@ -10786,6 +10815,7 @@ shell_allowlist = ["cargo test"]
         assert!(response.body.contains("/v1/diagnostics"));
         assert!(response.body.contains("/v1/threads/{id}/automations"));
         assert!(response.body.contains("/v1/threads/{id}/compact"));
+        assert!(response.body.contains("/v1/threads/{id}/fork"));
         assert!(response.body.contains("/v1/threads/{id}/items"));
         assert!(response
             .body
@@ -11280,6 +11310,75 @@ shell_allowlist = ["cargo test"]
         );
         assert_eq!(events.status, 200);
         assert!(events.body.contains("turn_recorded"));
+    }
+
+    #[test]
+    fn thread_fork_endpoint_copies_runtime_thread_context() {
+        let store = temp_store("thread-fork");
+        let session = store
+            .create_session("Runtime session".to_string(), ".".to_string())
+            .unwrap();
+        let thread = store
+            .create_thread_for_session(
+                &session.id,
+                "Runtime parity".to_string(),
+                ".".to_string(),
+                "deepseek-coder".to_string(),
+                "agent".to_string(),
+            )
+            .unwrap();
+        let turn = store
+            .append_turn(&thread.id, "assistant".to_string(), "done".to_string())
+            .unwrap();
+        store
+            .append_item(
+                &thread.id,
+                Some(&turn.id),
+                "message".to_string(),
+                Some("assistant".to_string()),
+                "done".to_string(),
+                "completed".to_string(),
+            )
+            .unwrap();
+
+        let response = response_for_request(
+            &format!(
+                "POST /v1/threads/{}/fork HTTP/1.1\r\nHost: localhost\r\nContent-Length: 28\r\n\r\n{{\"title\":\"Alternative path\"}}",
+                thread.id
+            ),
+            &store,
+        );
+
+        assert_eq!(response.status, 201);
+        assert!(response.body.contains("deepseek.runtime.thread_fork.v1"));
+        assert!(response.body.contains("\"source_thread_id\":\""));
+        assert!(response.body.contains("\"copied_turn_count\":1"));
+        assert!(response.body.contains("\"copied_item_count\":1"));
+        assert!(response.body.contains("\"kind\":\"thread_forked\""));
+
+        let root = parse_root_object(&response.body).unwrap();
+        let fork_thread_id = root
+            .get("fork")
+            .and_then(json_as_object)
+            .and_then(|fork| fork.get("thread"))
+            .and_then(json_as_object)
+            .and_then(|thread| thread.get("id"))
+            .and_then(json_as_string)
+            .expect("fork thread id")
+            .to_string();
+        assert_ne!(fork_thread_id, thread.id);
+        let fork_items = store.list_items(&fork_thread_id, None).unwrap();
+        assert_eq!(fork_items.len(), 1);
+        assert_eq!(fork_items[0].content, "done");
+        assert_ne!(fork_items[0].turn_id.as_deref(), Some(turn.id.as_str()));
+        assert_eq!(
+            store
+                .load_session(&session.id)
+                .unwrap()
+                .active_thread_id
+                .as_deref(),
+            Some(fork_thread_id.as_str())
+        );
     }
 
     #[test]
