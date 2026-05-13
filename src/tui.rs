@@ -659,6 +659,24 @@ fn strip_tui_command_prefix<'a>(value: &'a str, prefix: &str) -> Option<&'a str>
     }
 }
 
+fn parse_tui_rename_command(line: &str) -> Option<Result<String, String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/rename")
+        .or_else(|| strip_tui_command_prefix(trimmed, "rename"))?;
+    let title = rest.trim();
+    if title.is_empty() {
+        return Some(Err(
+            "usage: rename <new title> or /rename <new title>".to_string()
+        ));
+    }
+    if title.chars().count() > MAX_TUI_RENAME_TITLE_CHARS {
+        return Some(Err(format!(
+            "rename title must be <= {MAX_TUI_RENAME_TITLE_CHARS} characters"
+        )));
+    }
+    Some(Ok(title.to_string()))
+}
+
 fn parse_tui_custom_slash_command(line: &str) -> Option<(String, Vec<String>)> {
     let mut tokens = line.split_whitespace();
     let command = tokens.next()?;
@@ -681,6 +699,10 @@ pub enum TuiAction {
         thread_id: String,
         command: String,
         args: Vec<String>,
+    },
+    RenameSession {
+        session_id: String,
+        title: String,
     },
     RespondApproval {
         thread_id: String,
@@ -830,6 +852,7 @@ const MAX_TUI_REASONING_REPLAY_LIMIT: usize = 20;
 const TUI_REASONING_REPLAY_PREF_KIND: &str = "deepseek.tui.reasoning_replay.v1";
 const MAX_TUI_COMMAND_HISTORY: usize = 100;
 const MAX_TUI_COMPOSER_STASH_ENTRIES: usize = 100;
+const MAX_TUI_RENAME_TITLE_CHARS: usize = 100;
 const TUI_PICKER_PAGE_SIZE: usize = 5;
 const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "mode plan",
@@ -846,6 +869,7 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "thread prev",
     "thread filter ",
     "threads filter ",
+    "rename ",
     "tasks",
     "task create ",
     "task next",
@@ -3122,6 +3146,20 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(title) = parse_tui_rename_command(&content) {
+                    match title {
+                        Ok(title) => {
+                            if self.request_session_rename(title) {
+                                self.composer.clear();
+                                self.composer_cursor = 0;
+                            }
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some((command, args)) = parse_tui_custom_slash_command(&content) {
                     if self.request_custom_slash_command(command, args) {
                         self.composer.clear();
@@ -3314,6 +3352,17 @@ impl TuiApp {
         if let Some(command) = parse_tui_stash_command(command) {
             match command {
                 Ok(command) => self.handle_composer_stash_command(command),
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(title) = parse_tui_rename_command(command) {
+            match title {
+                Ok(title) => {
+                    self.request_session_rename(title);
+                }
                 Err(message) => {
                     self.status = message;
                 }
@@ -4518,6 +4567,33 @@ impl TuiApp {
         });
         self.status = format!("custom slash command queued: {command}");
         true
+    }
+
+    fn request_session_rename(&mut self, title: String) -> bool {
+        let Some(session) = self.selected_session().cloned() else {
+            self.status = "no active durable session to rename".to_string();
+            return false;
+        };
+        if session.status == "empty" && session.id == "local" {
+            self.status = "no active durable session to rename".to_string();
+            return false;
+        }
+        self.pending_actions.push(TuiAction::RenameSession {
+            session_id: session.id.clone(),
+            title: title.clone(),
+        });
+        self.status = format!("session rename queued: {}", clip_line(&title, 60));
+        true
+    }
+
+    pub fn rename_session_title(&mut self, session_id: &str, title: String) {
+        if let Some(session) = self
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.title = title;
+        }
     }
 
     fn handle_composer_stash_command(&mut self, command: TuiComposerStashCommand) {
@@ -8737,6 +8813,41 @@ mod tests {
     }
 
     #[test]
+    fn command_palette_requests_session_rename() {
+        let mut app = TuiApp::with_runtime(
+            vec![TuiSession {
+                id: "session-one".to_string(),
+                title: "One".to_string(),
+                workspace: ".".to_string(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-one".to_string()),
+                thread_count: 1,
+            }],
+            vec![TuiThread {
+                id: "thread-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                title: "First thread".to_string(),
+                mode: "agent".to_string(),
+                status: "active".to_string(),
+                latest_turn_id: None,
+                event_seq: 1,
+            }],
+            Vec::new(),
+        );
+
+        run_palette_command(&mut app, "rename Focused Work");
+
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::RenameSession {
+                session_id: "session-one".to_string(),
+                title: "Focused Work".to_string(),
+            }]
+        );
+        assert_eq!(app.status, "session rename queued: Focused Work");
+    }
+
+    #[test]
     fn command_palette_requests_shell_job_actions() {
         let mut app = TuiApp::new(Vec::new());
 
@@ -9231,6 +9342,19 @@ mod tests {
             app.drain_actions(),
             vec![TuiAction::Memory {
                 command: TuiMemoryCommand::Path,
+            }]
+        );
+
+        for ch in "/rename Focused Session".chars() {
+            assert!(app.handle_key(KeyCode::Char(ch)));
+        }
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::RenameSession {
+                session_id: "session-one".to_string(),
+                title: "Focused Session".to_string(),
             }]
         );
 

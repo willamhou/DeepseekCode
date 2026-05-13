@@ -599,6 +599,9 @@ fn handle_tui_http_action(
         TuiAction::RunCustomSlashCommand { .. } => {
             app.set_status("custom slash commands require local file-backed TUI".to_string());
         }
+        TuiAction::RenameSession { .. } => {
+            app.set_status("session rename requires local file-backed TUI".to_string());
+        }
         TuiAction::RespondApproval {
             thread_id,
             turn_id,
@@ -1242,6 +1245,11 @@ fn handle_tui_action_with_live(
             app.set_status(format!(
                 "started custom slash command {command} for {thread_id}"
             ));
+        }
+        TuiAction::RenameSession { session_id, title } => {
+            let session = store.rename_session(&session_id, title.clone())?;
+            app.rename_session_title(&session_id, session.title.clone());
+            app.set_status(format!("renamed session {session_id}: {}", session.title));
         }
         TuiAction::RespondApproval {
             thread_id,
@@ -3862,6 +3870,26 @@ mod tests {
     }
 
     #[test]
+    fn handle_tui_http_action_rejects_session_rename_as_local_only() {
+        let client = RuntimeHttpClient::from_url("http://127.0.0.1:9").unwrap();
+        let mut app = TuiApp::new(Vec::new());
+
+        handle_tui_http_action(
+            &client,
+            &mut app,
+            TuiAction::RenameSession {
+                session_id: "session-one".to_string(),
+                title: "Focused Work".to_string(),
+            },
+        )
+        .unwrap();
+
+        assert!(render_once(&app, 120, 36)
+            .unwrap()
+            .contains("session rename requires local file-backed TUI"));
+    }
+
+    #[test]
     fn handle_tui_http_action_cancels_remote_task() {
         let store = temp_store("http-task-cancel-action");
         let session = store
@@ -4267,6 +4295,43 @@ mod tests {
             .unwrap()
             .contains("custom slash command not found: /missing"));
         assert!(store.list_turns(&thread.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn handle_tui_action_renames_session_title() {
+        let store = temp_store("rename-session");
+        let session = store
+            .create_session("Daily work".to_string(), ".".to_string())
+            .unwrap();
+        store
+            .create_thread_for_session(
+                &session.id,
+                "Runtime thread".to_string(),
+                ".".to_string(),
+                "deepseek-coder".to_string(),
+                "agent".to_string(),
+            )
+            .unwrap();
+        let mut app = app_from_store(&store).unwrap();
+
+        handle_tui_action(
+            &store,
+            None,
+            &mut app,
+            TuiAction::RenameSession {
+                session_id: session.id.clone(),
+                title: "Focused Work".to_string(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            store.load_session(&session.id).unwrap().title,
+            "Focused Work"
+        );
+        assert!(render_once(&app, 120, 36)
+            .unwrap()
+            .contains("title: Focused Work"));
     }
 
     #[test]

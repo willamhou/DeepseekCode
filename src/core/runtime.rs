@@ -231,6 +231,14 @@ impl RuntimeStore {
         parse_session_record(&parse_root_object(&content)?)
     }
 
+    pub fn rename_session(&self, id: &str, title: String) -> AppResult<SessionRecord> {
+        let mut session = self.load_session(id)?;
+        session.title = title;
+        session.updated_at = epoch_label();
+        self.write_session(&session)?;
+        Ok(session)
+    }
+
     pub fn create_thread(
         &self,
         title: String,
