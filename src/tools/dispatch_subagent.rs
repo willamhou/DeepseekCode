@@ -4,7 +4,9 @@ use std::rc::Rc;
 
 use crate::config::types::AppConfig;
 use crate::core::context::TaskContext;
-use crate::core::loop_runtime::{AgentLoop, AgentLoopOptions, RunResult, ToolEvent};
+use crate::core::loop_runtime::{
+    AgentLoop, AgentLoopOptions, RunResult, SharedAgentCancelCheck, ToolEvent,
+};
 use crate::core::todos::TodoList;
 use crate::error::{tool_failure, AppResult};
 use crate::tools::types::{Tool, ToolInput, ToolOutput};
@@ -25,8 +27,21 @@ impl Tool for DispatchSubagentTool {
 
     fn execute(&self, input: ToolInput) -> AppResult<ToolOutput> {
         let request = subagent_request_from_input(&input, "dispatch_subagent")?;
-        let summary = run_subagent_request(&self.config, self.parent_depth, &request)?;
+        let summary = run_subagent_request(&self.config, self.parent_depth, &request, None)?;
 
+        Ok(ToolOutput { summary })
+    }
+}
+
+impl DispatchSubagentTool {
+    pub fn execute_with_agent_cancel(
+        &self,
+        input: ToolInput,
+        cancel_check: Option<SharedAgentCancelCheck>,
+    ) -> AppResult<ToolOutput> {
+        let request = subagent_request_from_input(&input, "dispatch_subagent")?;
+        let summary =
+            run_subagent_request(&self.config, self.parent_depth, &request, cancel_check)?;
         Ok(ToolOutput { summary })
     }
 }
@@ -49,8 +64,8 @@ impl Tool for DispatchSubagentsTool {
             let parent_depth = self.parent_depth;
             handles.push(std::thread::spawn(move || {
                 let thread_id = new_thread_id(index + 1);
-                let summary =
-                    run_subagent_request(&config, parent_depth, &request).unwrap_or_else(|error| {
+                let summary = run_subagent_request(&config, parent_depth, &request, None)
+                    .unwrap_or_else(|error| {
                         render_blocked_parallel_child(&request, &error.to_string())
                     });
                 let artifact = persist_agent_thread(
@@ -130,6 +145,7 @@ fn run_subagent_request(
     config: &AppConfig,
     parent_depth: usize,
     request: &SubagentRequest,
+    cancel_check: Option<SharedAgentCancelCheck>,
 ) -> AppResult<String> {
     let agent = request
         .agent_name
@@ -171,7 +187,7 @@ fn run_subagent_request(
                 run_events: None,
                 approval_resolver: None,
                 user_input_resolver: None,
-                cancel_check: None,
+                cancel_check,
             },
         )
         .map_err(|error| tool_failure(format!("subagent failed: {error}")))?;

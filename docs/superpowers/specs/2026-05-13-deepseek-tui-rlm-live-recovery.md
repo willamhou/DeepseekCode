@@ -60,6 +60,5 @@ payloads, and live event log.
 
 ## Remaining Gap
 
-DeepSeekCode still needs a resident live RLM daemon loop, streaming delta events,
-active worker cancellation, stale daemon pid ownership checks, and supervisor
-or CLI lifecycle commands.
+DeepSeekCode still needs streaming delta events, forced cross-process worker
+interruption, and supervisor or CLI lifecycle commands.

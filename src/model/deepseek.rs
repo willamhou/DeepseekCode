@@ -3490,8 +3490,8 @@ const TOOL_SPECS: &[StaticToolSpec] = &[
     },
     StaticToolSpec {
         name: "rlm_process_cancel",
-        description: "Cancel queued pending live RLM daemon turns for a session. This only cancels runtime tasks that have not been claimed by a worker yet; active worker cancellation is not implied.",
-        properties_json: r#"{"session_id":{"type":"string","description":"Live RLM session id."},"task_id":{"type":"string","description":"Runtime task id for the queued turn to cancel."},"turn_id":{"type":"string","description":"Alias for task_id."},"id":{"type":"string","description":"Alias for task_id."},"all":{"type":"string","description":"Set true/1/yes/on to cancel all queued pending turns in the live session."},"reason":{"type":"string","description":"Optional cancellation reason stored on the runtime task and live event log."}}"#,
+        description: "Cancel queued pending or active running live RLM daemon turns for a session. Active worker cancellation is cooperative through the runtime task cancel path.",
+        properties_json: r#"{"session_id":{"type":"string","description":"Live RLM session id."},"task_id":{"type":"string","description":"Runtime task id for the queued or active turn to cancel."},"turn_id":{"type":"string","description":"Alias for task_id."},"id":{"type":"string","description":"Alias for task_id."},"all":{"type":"string","description":"Set true/1/yes/on to cancel all queued pending or active running turns in the live session."},"reason":{"type":"string","description":"Optional cancellation reason stored on the runtime task and live event log."}}"#,
         required_json: r#"["session_id"]"#,
     },
     StaticToolSpec {
@@ -5246,7 +5246,7 @@ mod tests {
         assert!(openai.contains("\"mode\""));
         assert!(openai.contains("\"all\""));
         assert!(openai.contains("enqueue a live RLM daemon turn"));
-        assert!(openai.contains("queued pending live RLM daemon turns"));
+        assert!(openai.contains("active running live RLM daemon turns"));
         assert!(openai.contains("interrupted live RLM daemon turns"));
         assert!(openai.contains("session_stopped"));
         assert!(openai.contains("persisted payload"));

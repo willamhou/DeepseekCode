@@ -47,6 +47,5 @@ one tested claiming/completion primitive instead of duplicating behavior.
 
 ## Remaining Gap
 
-DeepSeekCode still needs a resident live RLM daemon loop, streaming delta events,
-active worker cancellation, restart recovery, and supervisor/CLI lifecycle
-commands.
+DeepSeekCode still needs streaming delta events, forced cross-process worker
+interruption, and supervisor/CLI lifecycle commands.

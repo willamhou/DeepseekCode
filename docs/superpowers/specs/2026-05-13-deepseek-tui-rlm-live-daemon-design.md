@@ -165,7 +165,8 @@ resumption.
    - status: partial; `rlm_process live=true` queueing and
      `rlm_process_events` read-only replay plus `rlm_process_wait`
      long-polling are implemented;
-     `rlm_process_cancel` is implemented for queued pending turns only;
+     `rlm_process_cancel` is implemented for queued pending turns and
+     cooperative active running turns;
      `rlm_process_recover` is implemented for interrupted running turns in one
      live session or across all live session manifests with `all=true`;
      `rlm_process_stop` is implemented for idle session shutdown and queued
@@ -175,11 +176,12 @@ resumption.
 4. Streaming and cancellation:
    - `rlm_process_events`
    - active turn cancellation via runtime cancel events
-   - status: partial; event-log replay/wait, queued-turn cancellation, and
-     single-step/batch worker completion are implemented; worker ownership is
-     stamped into live manifests while a turn is running and inventory reports
-     stale owner pids; worker streaming, resident daemon service packaging, and
-     active worker cancellation remain open
+   - status: partial; event-log replay/wait, queued-turn cancellation,
+     cooperative active worker cancellation, and single-step/batch worker
+     completion are implemented; worker ownership is stamped into live
+     manifests while a turn is running and inventory reports stale owner pids;
+     worker streaming, forced cross-process worker interruption, and resident
+     daemon service packaging remain open
 5. Recovery:
    - daemon restart scan
    - stale pid detection
@@ -206,7 +208,7 @@ Future implementation should add these gates:
 - `cargo test rlm_live_session_manifest_inventory --lib`
 - `cargo test rlm_process_live_enqueues_turn_on_runtime_thread --lib`
 - `cargo test rlm_process_live_session_only_continuation --lib`
-- `cargo test rlm_process_live_cancel_marks_active_turn --lib`
+- `cargo test rlm_process_cancel_marks_active_turn_cancel_requested --lib`
 - `cargo test rlm_live_daemon_recovery_marks_interrupted_turn --lib`
 - `cargo test runtime_daemon_tick_routes_live_rlm_turns_through_rlm_worker --lib`
 - `cargo test serve --lib`
@@ -219,5 +221,5 @@ Future implementation should add these gates:
 Do not rename the existing bounded child-agent `rlm_process` implementation as a
 live daemon. It is already useful and should remain the default until a real
 live worker exists. The remaining executable RLM slices should focus on
-streaming model/tool deltas, active worker cancellation, and richer lifecycle
-commands.
+streaming model/tool deltas, forced cross-process worker interruption, and
+richer lifecycle commands.

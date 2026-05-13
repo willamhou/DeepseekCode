@@ -50,6 +50,5 @@ cancelled live RLM turns without reading payload files directly.
 
 ## Remaining Gap
 
-This is read-only inventory. The remaining live RLM gaps are a resident daemon
-loop, streaming deltas, active worker cancellation, restart recovery, and
-operator lifecycle commands.
+This is read-only inventory. The remaining live RLM gaps are streaming deltas,
+forced cross-process worker interruption, and operator lifecycle commands.

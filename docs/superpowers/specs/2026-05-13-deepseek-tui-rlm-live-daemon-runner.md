@@ -43,5 +43,5 @@ RLM manifests, payloads, or event logs.
 
 ## Remaining Gap
 
-DeepSeekCode still needs model/tool delta streaming, active worker cancellation,
-stale daemon pid ownership checks, and explicit RLM daemon lifecycle commands.
+DeepSeekCode still needs model/tool delta streaming, forced cross-process worker
+interruption, and explicit RLM daemon lifecycle commands.

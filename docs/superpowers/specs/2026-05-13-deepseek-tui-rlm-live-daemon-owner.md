@@ -37,5 +37,5 @@ running session, but it could not tell whether that owner still existed.
 
 ## Remaining
 
-RLM delta streaming, active worker cancellation, automatic stale-owner recovery
-orchestration, and broader lifecycle/status commands remain open.
+RLM delta streaming, forced cross-process worker interruption, and broader
+lifecycle/status commands remain open.

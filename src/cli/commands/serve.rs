@@ -843,9 +843,9 @@ fn execute_mcp_tool(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
             {
-                Some(task_id) => format!("cancel queued live RLM turn: {task_id}"),
+                Some(task_id) => format!("cancel queued or active live RLM turn: {task_id}"),
                 None => format!(
-                    "cancel queued live RLM turns for session: {}",
+                    "cancel queued or active live RLM turns for session: {}",
                     input
                         .get("session_id")
                         .map(str::trim)
@@ -4074,14 +4074,20 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
         ));
         tools.push(mcp_tool_definition(
             "rlm_process_cancel",
-            "Cancel queued pending live RLM daemon turns for a session. Requires durable runtime approvals.",
+            "Cancel queued pending or active running live RLM daemon turns for a session. Active worker cancellation is cooperative. Requires durable runtime approvals.",
             mcp_schema(
                 vec![
                     ("session_id", string_property("Live RLM session id.")),
-                    ("task_id", string_property("Runtime task id for the queued turn to cancel.")),
+                    (
+                        "task_id",
+                        string_property("Runtime task id for the queued or active turn to cancel."),
+                    ),
                     ("turn_id", string_property("Alias for task_id.")),
                     ("id", string_property("Alias for task_id.")),
-                    ("all", string_property("Set true to cancel all queued pending turns.")),
+                    (
+                        "all",
+                        string_property("Set true to cancel all queued pending or active running turns."),
+                    ),
                     ("reason", string_property("Optional cancellation reason.")),
                 ],
                 &["session_id"],

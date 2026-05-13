@@ -518,9 +518,11 @@ Remaining:
   model worker yet; `rlm_process_events` replays queued live-session event logs
   by cursor as the read-only polling surface before worker streaming lands;
   `rlm_process_wait` adds cursor-based long-polling for those event logs;
-  `rlm_process_cancel` cancels queued pending live turns, marks payloads
-  cancelled when present, refreshes `queued_turns`, and appends
-  `turn_cancelled` events without claiming active worker cancellation support;
+  `rlm_process_cancel` cancels queued pending or active running live turns,
+  marks payloads cancelled when present, refreshes `queued_turns`, preserves a
+  live owner while cancellation is pending, and appends `turn_cancelled` events;
+  active workers now observe runtime task cancellation through the agent cancel
+  path and clear the live manifest as `status=cancelled`;
   `rlm_process_run_next` now claims one queued payload, records `turn_started`,
   runs the bounded model-backed RLM child flow, and records `turn_completed` /
   `turn_failed`, giving live sessions a single-step worker bridge before a

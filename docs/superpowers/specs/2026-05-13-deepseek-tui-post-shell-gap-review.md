@@ -75,8 +75,8 @@ recovery before claiming queued live RLM turns; `rlm_process_status` now gives
 TUI/MCP/model clients a read-only lifecycle dashboard with owner, queue, stale,
 and recommended-action state.
 Live PTY resize, attachable terminal replay/supervisor takeover, RLM delta
-streaming, active worker cancellation, and richer daemon lifecycle commands
-remain open.
+streaming, forced cross-process worker interruption, and richer daemon
+lifecycle commands remain open.
 
 ## Next Candidate Specs
 
@@ -86,12 +86,12 @@ remain open.
   backend.
 - True live model-backed RLM REPL/daemon implementation now has a design spec:
   `2026-05-13-deepseek-tui-rlm-live-daemon-design.md`. The next executable
-  slice should be streaming deltas, active worker cancellation, or richer RLM
-  lifecycle commands because queueing,
+  slice should be streaming deltas, forced cross-process worker interruption,
+  or richer RLM lifecycle commands because queueing,
   event replay/wait, payload persistence, queued cancellation, single-step
   execution, bounded drain, all-session interrupted-turn recovery, and the
   agents-daemon worker loop plus stop command, owner liveness inventory, and
-  live-owner recovery guard plus daemon-tick stale recovery and status
-  dashboard have landed.
+  live-owner recovery guard plus daemon-tick stale recovery, status dashboard,
+  and cooperative active worker cancellation have landed.
 - Platform restore strategy for device nodes and Windows symlink semantics.
 - Live GitHub write-fixture harness behind an explicit opt-in test repository.

@@ -61,6 +61,5 @@ That remains a separate streaming/worker-runtime slice.
 
 ## Remaining Gap
 
-The live daemon still needs a worker that claims queued turns, streams model
-deltas, records completion, and honors active cancellation requests after a
-turn has already been claimed.
+The live daemon still needs model/tool delta streaming, forced cross-process
+worker interruption, and richer lifecycle commands.

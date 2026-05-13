@@ -347,7 +347,7 @@ Exposed tools:
 | `rlm_process_status` | Summarize live `rlm_process` daemon lifecycle status, queue counts, owner liveness, and recommended next actions without running a child model |
 | `rlm_process_events` | Replay live `rlm_process` daemon event logs by cursor without running a child model |
 | `rlm_process_wait` | Wait for live `rlm_process` daemon event logs after a cursor without running a child model |
-| `rlm_process_cancel` | Hidden by default; exposed with durable runtime approvals, and cancels queued pending live `rlm_process` daemon turns |
+| `rlm_process_cancel` | Hidden by default; exposed with durable runtime approvals, and cancels queued or active running live `rlm_process` daemon turns |
 | `rlm_process_recover` | Hidden by default; exposed with durable runtime approvals, and requeues or fails interrupted live `rlm_process` daemon turns |
 | `rlm_process_stop` | Hidden by default; exposed with durable runtime approvals, and stops an idle live `rlm_process` daemon session |
 | `rlm_process_run_next` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and claims/runs one queued live `rlm_process` daemon turn |
@@ -1424,9 +1424,12 @@ the live manifest, persists the turn payload under
 task, steps, model, workspace, input label, input content, and input size so a
 future worker can recover and execute queued turns after the CLI exits.
 `rlm_process_cancel session_id=<id> turn_id=<task-id>` cancels a queued pending
-live turn, marks the payload cancelled when present, appends `turn_cancelled`,
-and refreshes `queued_turns`; `all=true` cancels every queued pending turn in
-that live session. It does not cancel a turn already claimed by a future worker.
+or active running live turn, marks the payload cancelled when present, appends
+`turn_cancelled`, and refreshes `queued_turns`; `all=true` cancels every queued
+pending or active running turn in that live session. Active worker cancellation
+is cooperative: the running `rlm_process_run_next` worker observes the runtime
+task cancellation through the agent cancel path, then clears the live manifest
+owner and returns `status=cancelled`.
 `rlm_process_recover session_id=<id>` scans the live manifest, active turn,
 runtime tasks, and persisted payloads for interrupted `running` turns. The
 default `mode=requeue` makes recoverable interrupted turns pending/queued again,
@@ -1459,8 +1462,8 @@ non-mutating batch preview. The existing `deepseek agents daemon` service loop
 now first runs safe all-session live RLM recovery, which requeues/fails stale
 running turns while preserving live-owned turns unless forced, then runs one
 queued live RLM turn per tick through the same worker path. Model delta
-streaming, active worker cancellation, and broader RLM daemon lifecycle commands
-remain future work.
+streaming, forced cross-process worker interruption, and broader RLM daemon
+lifecycle commands remain future work.
 `rlm_process_events session_id=<id> cursor=<seq>` replays parsed
 `.dscode/rlm-daemon/<session_id>/events.jsonl` records with `seq` greater than
 the cursor and returns `next_cursor` for clients that want deterministic live

@@ -36,5 +36,5 @@ running turns before claiming more work.
 
 ## Remaining
 
-RLM model/tool delta streaming, cooperative active worker cancellation, and
+RLM model/tool delta streaming, forced cross-process worker interruption, and
 broader explicit lifecycle/status commands remain open.
