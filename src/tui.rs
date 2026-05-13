@@ -686,6 +686,11 @@ pub enum TuiAction {
     ShowShell {
         task_id: String,
     },
+    AttachShell {
+        task_id: String,
+        cursor: Option<usize>,
+        tail: bool,
+    },
     SendShellStdin {
         task_id: String,
         input: String,
@@ -795,6 +800,7 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "shell run ",
     "shell list",
     "shell show ",
+    "shell attach ",
     "shell stdin ",
     "shell close-stdin ",
     "shell wait ",
@@ -803,6 +809,7 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "shell cancel ",
     "jobs list",
     "jobs show ",
+    "jobs attach ",
     "jobs stdin ",
     "jobs close-stdin ",
     "jobs wait ",
@@ -3358,6 +3365,22 @@ impl TuiApp {
             | ["jobs", "inspect", id] => {
                 self.request_shell_show(id);
             }
+            ["shell", "attach"] | ["sh", "attach"] | ["jobs", "attach"] => {
+                self.status = "shell attach requires a task id".to_string();
+            }
+            ["shell", "attach", id] | ["sh", "attach", id] | ["jobs", "attach", id] => {
+                self.request_shell_attach(id, None, false);
+            }
+            ["shell", "attach", id, "tail"]
+            | ["sh", "attach", id, "tail"]
+            | ["jobs", "attach", id, "tail"] => {
+                self.request_shell_attach(id, None, true);
+            }
+            ["shell", "attach", id, cursor]
+            | ["sh", "attach", id, cursor]
+            | ["jobs", "attach", id, cursor] => {
+                self.request_shell_attach_from_cursor(id, cursor);
+            }
             ["shell", "stdin"]
             | ["shell", "send"]
             | ["sh", "stdin"]
@@ -4839,6 +4862,33 @@ impl TuiApp {
             task_id: task_id.to_string(),
         });
         self.status = format!("shell show requested: {task_id}");
+    }
+
+    fn request_shell_attach_from_cursor(&mut self, task_id: &str, cursor: &str) {
+        match cursor.parse::<usize>() {
+            Ok(cursor) => self.request_shell_attach(task_id, Some(cursor), false),
+            Err(_) => self.status = format!("invalid shell attach cursor: {cursor}"),
+        }
+    }
+
+    fn request_shell_attach(&mut self, task_id: &str, cursor: Option<usize>, tail: bool) {
+        let task_id = task_id.trim();
+        if task_id.is_empty() {
+            self.status = "shell attach requires a task id".to_string();
+            return;
+        }
+        self.pending_actions.push(TuiAction::AttachShell {
+            task_id: task_id.to_string(),
+            cursor,
+            tail,
+        });
+        self.status = if tail {
+            format!("shell attach tail requested: {task_id}")
+        } else if let Some(cursor) = cursor {
+            format!("shell attach requested: {task_id} @{cursor}")
+        } else {
+            format!("shell attach requested: {task_id}")
+        };
     }
 
     fn request_shell_stdin(&mut self, task_id: &str, input: String, close: bool) {
@@ -8367,6 +8417,26 @@ mod tests {
             app.drain_actions(),
             vec![TuiAction::ShowShell {
                 task_id: "shell-1".to_string(),
+            }]
+        );
+
+        run_palette_command(&mut app, "jobs attach shell-1 12");
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::AttachShell {
+                task_id: "shell-1".to_string(),
+                cursor: Some(12),
+                tail: false,
+            }]
+        );
+
+        run_palette_command(&mut app, "shell attach shell-1 tail");
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::AttachShell {
+                task_id: "shell-1".to_string(),
+                cursor: None,
+                tail: true,
             }]
         );
 

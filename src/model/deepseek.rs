@@ -3051,6 +3051,12 @@ const TOOL_SPECS: &[StaticToolSpec] = &[
         required_json: r#"["task_id"]"#,
     },
     StaticToolSpec {
+        name: "exec_shell_attach",
+        description: "Return a terminal-oriented attach snapshot for a background exec_shell task using durable stdout PTY/log bytes, cursor offsets, optional tail, and bounded wait.",
+        properties_json: r#"{"task_id":{"type":"string","description":"Task id returned by exec_shell background=true."},"id":{"type":"string","description":"Alias for task_id."},"cwd":{"type":"string","description":"Working directory used to find detached durable shell records."},"cursor":{"type":"string","description":"Byte cursor in the terminal stream. Alias for offset."},"offset":{"type":"string","description":"Byte offset to start from. Defaults to 0."},"limit_bytes":{"type":"string","description":"Maximum bytes to return, default 20000 and capped at 100000."},"tail":{"type":"string","description":"Set true to attach to the last limit_bytes bytes."},"wait_ms":{"type":"string","description":"Wait this many milliseconds for new terminal bytes when cursor is at EOF."}}"#,
+        required_json: r#"["task_id"]"#,
+    },
+    StaticToolSpec {
         name: "exec_shell_resize",
         description: "Resize a TTY-backed background exec_shell task by updating durable PTY geometry and sending a best-effort stty control command.",
         properties_json: r#"{"task_id":{"type":"string","description":"Task id returned by exec_shell background=true."},"id":{"type":"string","description":"Alias for task_id."},"cwd":{"type":"string","description":"Working directory used to find detached durable shell records."},"tty_rows":{"type":"string","description":"New PTY row count."},"tty_cols":{"type":"string","description":"New PTY column count."},"rows":{"type":"string","description":"Alias for tty_rows."},"cols":{"type":"string","description":"Alias for tty_cols."}}"#,
@@ -5159,6 +5165,7 @@ mod tests {
             "task_shell_wait".to_string(),
             "exec_shell_wait".to_string(),
             "exec_shell_replay".to_string(),
+            "exec_shell_attach".to_string(),
             "exec_shell_resize".to_string(),
             "exec_shell_interact".to_string(),
             "exec_shell_cancel".to_string(),
@@ -5178,6 +5185,9 @@ mod tests {
         assert!(openai.contains("\"name\":\"exec_shell_replay\""));
         assert!(openai.contains("\"limit_bytes\""));
         assert!(openai.contains("\"tail\""));
+        assert!(openai.contains("\"name\":\"exec_shell_attach\""));
+        assert!(openai.contains("\"cursor\""));
+        assert!(openai.contains("terminal-oriented attach snapshot"));
         assert!(openai.contains("\"name\":\"exec_shell_resize\""));
         assert!(openai.contains("best-effort stty"));
         assert!(openai.contains("\"name\":\"exec_shell_interact\""));

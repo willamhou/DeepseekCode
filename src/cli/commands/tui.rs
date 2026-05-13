@@ -37,8 +37,8 @@ use crate::core::runtime::{
 };
 use crate::error::{app_error, AppResult};
 use crate::tools::exec_shell::{
-    run_trusted_background_shell, ExecShellCancelTool, ExecShellInteractTool, ExecShellListTool,
-    ExecShellResizeTool, ExecShellShowTool, ExecShellTool, ExecShellWaitTool,
+    run_trusted_background_shell, ExecShellAttachTool, ExecShellCancelTool, ExecShellInteractTool,
+    ExecShellListTool, ExecShellResizeTool, ExecShellShowTool, ExecShellTool, ExecShellWaitTool,
 };
 use crate::tools::types::{Tool, ToolInput};
 use crate::tui::{
@@ -712,6 +712,7 @@ fn handle_tui_http_action(
         | TuiAction::RunApprovedShell { .. }
         | TuiAction::ListShell
         | TuiAction::ShowShell { .. }
+        | TuiAction::AttachShell { .. }
         | TuiAction::SendShellStdin { .. }
         | TuiAction::WaitShell { .. }
         | TuiAction::ResizeShell { .. }
@@ -1284,6 +1285,13 @@ fn handle_tui_action_with_live(
         }
         TuiAction::ShowShell { task_id } => {
             run_tui_shell_show(app, &task_id);
+        }
+        TuiAction::AttachShell {
+            task_id,
+            cursor,
+            tail,
+        } => {
+            run_tui_shell_attach(app, &task_id, cursor, tail);
         }
         TuiAction::SendShellStdin {
             task_id,
@@ -1920,6 +1928,28 @@ fn run_tui_shell_show(app: &mut TuiApp, task_id: &str) {
         }
         Err(error) => {
             app.set_status(format!("shell show failed for {task_id}: {error}"));
+        }
+    }
+}
+
+fn run_tui_shell_attach(app: &mut TuiApp, task_id: &str, cursor: Option<usize>, tail: bool) {
+    let mut input = ToolInput::new().with_arg("task_id", task_id.to_string());
+    if let Some(cursor) = cursor {
+        input = input.with_arg("cursor", cursor.to_string());
+    }
+    if tail {
+        input = input.with_arg("tail", "true");
+    }
+    match ExecShellAttachTool.execute(input) {
+        Ok(output) => {
+            app.set_status(last_nonempty_line(&output.summary, "shell attach replayed"));
+            app.set_mcp_detail(
+                TuiMcpDetailKind::Shell,
+                format_shell_detail(&format!("Shell job {task_id} attach"), &output.summary),
+            );
+        }
+        Err(error) => {
+            app.set_status(format!("shell attach failed for {task_id}: {error}"));
         }
     }
 }

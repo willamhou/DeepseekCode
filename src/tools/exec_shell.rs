@@ -35,6 +35,8 @@ pub struct ExecShellShowTool;
 
 pub struct ExecShellReplayTool;
 
+pub struct ExecShellAttachTool;
+
 pub struct ExecShellResizeTool;
 
 pub struct ExecShellInteractTool {
@@ -268,6 +270,32 @@ impl Tool for ExecShellReplayTool {
         let tail = truthy(input.get("tail"));
         Ok(ToolOutput {
             summary: render_shell_replay(cwd, task_id, stream, offset, limit_bytes, tail)?,
+        })
+    }
+}
+
+impl Tool for ExecShellAttachTool {
+    fn name(&self) -> &str {
+        "exec_shell_attach"
+    }
+
+    fn execute(&self, input: ToolInput) -> AppResult<ToolOutput> {
+        let task_id = required_task_id(&input)?;
+        let cwd = input.get("cwd").unwrap_or(".");
+        let offset = input_u64(&input, "offset", 0) as usize;
+        let cursor = input_u64(&input, "cursor", offset as u64) as usize;
+        let limit_bytes = input_u64(&input, "limit_bytes", DEFAULT_REPLAY_LIMIT_BYTES)
+            .min(MAX_REPLAY_LIMIT_BYTES) as usize;
+        let tail = truthy(input.get("tail"));
+        let wait_ms = input_u64(&input, "wait_ms", 0).min(MAX_TIMEOUT_MS);
+        {
+            let mut manager = shell_manager().lock().unwrap();
+            if manager.contains(task_id) {
+                manager.refresh(task_id)?;
+            }
+        }
+        Ok(ToolOutput {
+            summary: render_shell_attach(cwd, task_id, cursor, limit_bytes, tail, wait_ms)?,
         })
     }
 }
@@ -1636,6 +1664,87 @@ fn render_shell_replay(
     }
 }
 
+fn render_shell_attach(
+    cwd: &str,
+    task_id: &str,
+    offset: usize,
+    limit_bytes: usize,
+    tail: bool,
+    wait_ms: u64,
+) -> AppResult<String> {
+    let deadline = Instant::now() + Duration::from_millis(wait_ms);
+    loop {
+        let manifest = shell_job_manifest_path(cwd, task_id);
+        if !manifest.is_file() {
+            return Err(app_error(format!(
+                "unknown background shell task: {task_id}"
+            )));
+        }
+        let mut record = read_durable_shell_job_manifest(&manifest)?;
+        refresh_durable_running_status(cwd, &mut record)?;
+        let record_dir = shell_job_record_dir(cwd, task_id);
+        let total = durable_log_bytes(&record_dir, "stdout.log", record.stdout_total_bytes);
+        let should_return = tail
+            || wait_ms == 0
+            || total > offset
+            || record.status != "running"
+            || Instant::now() >= deadline;
+        if should_return {
+            let timed_out = wait_ms > 0 && !tail && total <= offset && record.status == "running";
+            return Ok(render_shell_attach_snapshot(
+                &record,
+                &record_dir,
+                offset,
+                limit_bytes,
+                tail,
+                wait_ms,
+                timed_out,
+            ));
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn render_shell_attach_snapshot(
+    record: &DurableShellJobRecord,
+    record_dir: &Path,
+    offset: usize,
+    limit_bytes: usize,
+    tail: bool,
+    wait_ms: u64,
+    timed_out: bool,
+) -> String {
+    let bytes = fs::read(record_dir.join("stdout.log")).unwrap_or_default();
+    let total = bytes.len();
+    let start = if tail {
+        total.saturating_sub(limit_bytes)
+    } else {
+        offset.min(total)
+    };
+    let end = start.saturating_add(limit_bytes).min(total);
+    let data = String::from_utf8_lossy(&bytes[start..end]);
+    let mut out = format!(
+        "task_id: {}\nstatus: {}\nmode: terminal_attach_replay\ncommand: {}\ncwd: {}\ntty: {}\npty_backend: {}\ntty_rows: {}\ntty_cols: {}\nterminal_stream: stdout\noffset: {start}\nnext_offset: {end}\ntotal_bytes: {total}\ntail: {tail}\nwait_ms: {wait_ms}\ntimed_out: {timed_out}\nnote: attach replay is backed by durable stdout PTY/log bytes, not a resident PTY takeover; use exec_shell_replay stream=stderr for stderr-only logs.\n",
+        record.id,
+        record.status,
+        record.command,
+        record.cwd,
+        record.tty,
+        pty_backend_label(ShellTtyOptions {
+            enabled: record.tty,
+            size: record.tty_size,
+        }),
+        tty_rows_label(record.tty_size),
+        tty_cols_label(record.tty_size)
+    );
+    if !data.is_empty() {
+        out.push_str("terminal:\n");
+        out.push_str(data.trim_end_matches('\n'));
+        out.push('\n');
+    }
+    out.trim_end().to_string()
+}
+
 fn render_shell_replay_stream(
     record: &DurableShellJobRecord,
     record_dir: &Path,
@@ -2325,6 +2434,90 @@ mod tests {
             "{}",
             stderr_tail.summary
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn exec_shell_attach_reads_terminal_replay_by_cursor() {
+        let root = temp_root("attach");
+        fs::create_dir_all(&root).unwrap();
+        let cwd = root.display().to_string();
+        let task_id = shell_manager()
+            .lock()
+            .unwrap()
+            .spawn(
+                "printf 'alpha\\nbeta\\n'; printf 'warn\\n' >&2",
+                &cwd,
+                None,
+                ShellTtyOptions::default(),
+            )
+            .unwrap();
+        let _ = ExecShellWaitTool {
+            tool_name: "exec_shell_wait",
+        }
+        .execute(
+            ToolInput::new()
+                .with_arg("task_id", task_id.clone())
+                .with_arg("cwd", cwd.clone())
+                .with_arg("timeout_ms", "1000"),
+        )
+        .unwrap();
+        shell_manager().lock().unwrap().jobs.remove(&task_id);
+
+        let first = ExecShellAttachTool
+            .execute(
+                ToolInput::new()
+                    .with_arg("task_id", task_id.clone())
+                    .with_arg("cwd", cwd.clone())
+                    .with_arg("cursor", "0")
+                    .with_arg("limit_bytes", "6"),
+            )
+            .unwrap();
+        assert!(
+            first.summary.contains("mode: terminal_attach_replay"),
+            "{}",
+            first.summary
+        );
+        assert!(first.summary.contains("offset: 0"), "{}", first.summary);
+        assert!(
+            first.summary.contains("next_offset: 6"),
+            "{}",
+            first.summary
+        );
+        assert!(first.summary.contains("terminal:"), "{}", first.summary);
+        let first_terminal = first
+            .summary
+            .split("terminal:\n")
+            .nth(1)
+            .unwrap_or_default();
+        assert!(first_terminal.contains("alpha"), "{}", first.summary);
+        assert!(!first_terminal.contains("beta"), "{}", first.summary);
+        assert!(
+            first
+                .summary
+                .contains("use exec_shell_replay stream=stderr"),
+            "{}",
+            first.summary
+        );
+
+        let second = ExecShellAttachTool
+            .execute(
+                ToolInput::new()
+                    .with_arg("task_id", task_id)
+                    .with_arg("cwd", cwd.clone())
+                    .with_arg("cursor", "6")
+                    .with_arg("limit_bytes", "20"),
+            )
+            .unwrap();
+        assert!(second.summary.contains("offset: 6"), "{}", second.summary);
+        let second_terminal = second
+            .summary
+            .split("terminal:\n")
+            .nth(1)
+            .unwrap_or_default();
+        assert!(second_terminal.contains("beta"), "{}", second.summary);
+        assert!(!second_terminal.contains("warn"), "{}", second.summary);
+
         let _ = fs::remove_dir_all(root);
     }
 

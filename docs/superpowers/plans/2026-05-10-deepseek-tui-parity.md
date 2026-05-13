@@ -229,9 +229,11 @@ Landed first slice:
   PTY geometry; `exec_shell_resize` updates durable PTY geometry and sends a
   best-effort `stty rows/cols` command through attached stdin or detached FIFO
   for running TTY jobs; `exec_shell_replay` now replays durable stdout/stderr
-  log slices by byte offset for restart-safe shell-log replay; manifests now
-  keep stable child pid, process-group, and owner-pid metadata so detached
-  snapshots can report owner liveness separately from child status
+  log slices by byte offset for restart-safe shell-log replay; `exec_shell_attach`
+  now provides terminal-oriented attach snapshots over durable stdout PTY/log
+  bytes with cursor, tail, wait, and TTY geometry metadata; manifests now keep
+  stable child pid, process-group, and owner-pid metadata so detached snapshots
+  can report owner liveness separately from child status
 - richer structured data validation
 
 ### Phase D: TUI
@@ -326,11 +328,11 @@ Landed first slice:
 - local file-backed TUI command palette can start allowlisted background shell
   jobs through `shell <command>` / `shell run <command>` / `! <command>`, then
   list, inspect, feed, close stdin for, or stop them with
-  `shell list|show|poll|wait|stdin|close-stdin|resize|cancel` and
-  DeepSeek-TUI-style `jobs list|show|poll|wait|stdin|close-stdin|resize|cancel`
-  aliases over the existing `exec_shell` job manager; shell metadata and
-  stdout/stderr logs are persisted for detached later inspection through the same
-  job id and cwd
+  `shell list|show|attach|poll|wait|stdin|close-stdin|resize|cancel` and
+  DeepSeek-TUI-style
+  `jobs list|show|attach|poll|wait|stdin|close-stdin|resize|cancel` aliases over
+  the existing `exec_shell` job manager; shell metadata and stdout/stderr logs
+  are persisted for detached later inspection through the same job id and cwd
 - local file-backed TUI command palette now routes unallowlisted foreground
   shell commands through an explicit modal approval; approved commands run once
   through a trusted TUI-only background shell path without adding an allowlist
@@ -347,9 +349,10 @@ Remaining:
 - post-shell review found no open first-order TUI interaction gaps; remaining
   work is now in harder cross-process/platform/external buckets: dedicated
   shell supervisor ownership after owner-process exit and attachable terminal
-  replay beyond durable log slices now have an explicit shell-supervisor/PTY
-  design spec; side-git/platform restore fidelity beyond the Unix special files
-  already captured and external live PR/release fixtures remain open
+  replay beyond durable terminal attach snapshots now have an explicit
+  shell-supervisor/PTY design spec; side-git/platform restore fidelity beyond
+  the Unix special files already captured and external live PR/release fixtures
+  remain open
 
 ### Phase E: DeepSeek-Native Product UX
 
