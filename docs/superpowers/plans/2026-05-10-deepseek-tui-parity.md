@@ -215,7 +215,10 @@ Landed first slice:
 - DeepSeek-TUI-compatible shell names (`exec_shell`, `exec_shell_wait`,
   `exec_wait`, `exec_shell_interact`, `exec_interact`, `exec_shell_cancel`,
   `task_shell_start`, `task_shell_wait`) landed with in-process background job
-  polling, stdin, and cancellation
+  polling, stdin, and cancellation; shell jobs now also persist metadata plus
+  stdout/stderr logs under `<cwd>/.dscode/shell-jobs/<task_id>/`, so detached
+  `exec_shell_list` / `exec_shell_show` / `exec_shell_wait` calls can inspect
+  prior records while stdin/cancel control remains attached-process scoped
 - richer structured data validation
 
 ### Phase D: TUI
@@ -312,7 +315,8 @@ Landed first slice:
   list, inspect, feed, close stdin for, or stop them with
   `shell list|show|poll|wait|stdin|close-stdin|cancel` and DeepSeek-TUI-style
   `jobs list|show|poll|wait|stdin|close-stdin|cancel` aliases over the existing
-  `exec_shell` job manager
+  `exec_shell` job manager; shell metadata and stdout/stderr logs are persisted
+  for detached later inspection through the same job id and cwd
 - local file-backed TUI command palette now routes unallowlisted foreground
   shell commands through an explicit modal approval; approved commands run once
   through a trusted TUI-only background shell path without adding an allowlist
@@ -550,7 +554,8 @@ Landed first slice:
   `task_shell_wait` are available by default; mutating `exec_shell`,
   `task_shell_start`, `exec_shell_interact`, `exec_interact`, and
   `exec_shell_cancel` are exposed only with trusted side effects or durable
-  `permission_request kind=shell` approvals
+  `permission_request kind=shell` approvals; list/show/wait can also inspect
+  detached durable shell manifests/logs from the requested `cwd`
 - local RLM MCP helpers exposed by default: `rlm_chunk_plan`,
   `rlm_map_reduce_plan`, restricted pure-compute `rlm_python`, and read-only
   `rlm_python_sessions`; stateful `rlm_python_session` is hidden by default and

@@ -328,9 +328,9 @@ Exposed tools:
 | `diagnostics` | Run workspace or path-scoped diagnostics |
 | `run_tests` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and runs supported test commands through the existing shell approval path |
 | `run_shell` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and still limited by the existing safe-command allowlist |
-| `exec_shell_list` | List in-process background shell jobs |
-| `exec_shell_show` | Show one in-process background shell job snapshot |
-| `exec_shell_wait` | Wait for or poll one background shell job and return incremental output |
+| `exec_shell_list` | List in-process and durable background shell job records |
+| `exec_shell_show` | Show one in-process or detached durable background shell job snapshot |
+| `exec_shell_wait` | Wait for or poll one background shell job and return incremental output, or show a detached durable snapshot |
 | `exec_wait` | Alias for `exec_shell_wait` |
 | `task_shell_wait` | DeepSeek-TUI-compatible wait/poll helper for `task_shell_start` jobs |
 | `exec_shell` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and starts foreground/background safe shell commands |
@@ -1286,8 +1286,14 @@ Agent runs also expose DeepSeek-TUI-compatible shell tool names:
 Foreground `exec_shell` reuses the existing safe `run_shell` execution path.
 `exec_shell background=true` and `task_shell_start` create in-process background
 jobs, return a `task_id`, and can be polled by `task_shell_wait` or
-`exec_shell_wait`, sent stdin, or cancelled by the companion tools. These
-background jobs are not yet durable across process exits. MCP server mode
+`exec_shell_wait`, sent stdin, or cancelled by the companion tools. Each
+background job also writes durable metadata and stdout/stderr logs under
+`<cwd>/.dscode/shell-jobs/<task_id>/`. `exec_shell_list`, `exec_shell_show`,
+and `exec_shell_wait` can read those detached records when the caller supplies
+the same `cwd`, even after the original process exits. Detached records expose
+their last known status and captured logs with `managed: false`; stdin and
+cancel control still require the original DeepSeekCode process to remain
+attached to the job. MCP server mode
 exposes `exec_shell_list`, `exec_shell_show`, `exec_shell_wait`, `exec_wait`,
 and `task_shell_wait` as read-only tools by default, while `exec_shell`,
 `task_shell_start`, `exec_shell_interact`, `exec_interact`, and

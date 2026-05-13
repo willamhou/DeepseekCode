@@ -32,6 +32,8 @@ background task id still miss the registry/schema surface.
 
 - This slice does not add PTY mode.
 - This slice does not make background shell jobs durable across process exits.
+  A later shell-job durable metadata slice adds detached manifest/log
+  inspection; cross-process stdin/cancel takeover remains out of scope.
 - This slice does not add full TUI task-panel rendering for shell jobs.
 
 ## 验收标准

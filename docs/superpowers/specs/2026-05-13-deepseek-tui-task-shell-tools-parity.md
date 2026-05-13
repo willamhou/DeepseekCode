@@ -24,7 +24,9 @@ background shell work through `exec_shell background=true` plus
 
 ## 非目标
 
-- This slice does not persist background shell jobs across process exits.
+- This slice does not persist background shell jobs across process exits. A
+  later shell-job durable metadata slice adds detached manifest/log inspection;
+  cross-process stdin/cancel takeover remains out of scope.
 - This slice does not attach gate artifacts to runtime tasks.
 - This slice does not implement PTY/TTY behavior beyond accepting the
   compatibility field.
