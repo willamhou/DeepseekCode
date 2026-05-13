@@ -1329,9 +1329,12 @@ record and `close_stdin=true` closes that FIFO by killing the keeper.
 Unix `script` PTY backend for new background jobs; manifests record `tty` and
 `pty_backend`, and wait/show snapshots surface the same fields. Optional
 `tty_rows` plus `tty_cols` set the initial PTY geometry and are persisted in
-the same manifest. This is PTY-backed command execution with initial geometry,
-detached logs, and FIFO stdin, not a full shell supervisor with live
-resize/replay or owner-process-independent terminal takeover.
+the same manifest. `exec_shell_resize cwd=<path> task_id=<id> tty_rows=<n>
+tty_cols=<n>` updates the durable PTY geometry and, for running TTY jobs with
+stdin control, sends a best-effort `stty rows <n> cols <n>` control command
+through the attached pipe or detached FIFO. This is PTY-backed command execution
+with initial geometry, best-effort resize, detached logs, and FIFO stdin, not a
+full shell supervisor with owner-process-independent terminal takeover.
 `exec_shell_cancel cwd=<path> task_id=<id>` can best-effort cancel a detached
 `running` record by its persisted pid/process group and then update the durable
 manifest to `killed`.
@@ -1345,8 +1348,8 @@ generic missing-task error. MCP server mode
 exposes `exec_shell_list`, `exec_shell_show`, `exec_shell_replay`,
 `exec_shell_wait`, `exec_wait`, and `task_shell_wait` as read-only tools by
 default, while `exec_shell`, `task_shell_start`, `exec_shell_interact`,
-`exec_interact`, and `exec_shell_cancel` require trusted side effects or
-durable runtime approvals.
+`exec_interact`, `exec_shell_resize`, and `exec_shell_cancel` require trusted
+side effects or durable runtime approvals.
 
 ### Exec Snapshot TOML
 

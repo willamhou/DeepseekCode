@@ -696,6 +696,11 @@ pub enum TuiAction {
         wait: bool,
         timeout_ms: u64,
     },
+    ResizeShell {
+        task_id: String,
+        rows: u16,
+        cols: u16,
+    },
     CancelShell {
         task_id: Option<String>,
         all: bool,
@@ -794,6 +799,7 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "shell close-stdin ",
     "shell wait ",
     "shell poll ",
+    "shell resize ",
     "shell cancel ",
     "jobs list",
     "jobs show ",
@@ -801,6 +807,7 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "jobs close-stdin ",
     "jobs wait ",
     "jobs poll ",
+    "jobs resize ",
     "jobs cancel ",
     "! ",
     "memory",
@@ -3323,7 +3330,8 @@ impl TuiApp {
             }
             ["shell"] | ["sh"] => {
                 self.status =
-                    "shell commands: run|list|show|wait|poll|stdin|close-stdin|cancel".to_string();
+                    "shell commands: run|list|show|wait|poll|stdin|close-stdin|resize|cancel"
+                        .to_string();
             }
             ["shell", "run"] | ["sh", "run"] => {
                 self.status = "shell run requires a command".to_string();
@@ -3399,6 +3407,12 @@ impl TuiApp {
             ["shell", "poll", id] | ["sh", "poll", id] => {
                 self.request_shell_wait(id, false, 0);
             }
+            ["shell", "resize"] | ["sh", "resize"] => {
+                self.status = "shell resize requires a task id, rows, and cols".to_string();
+            }
+            ["shell", "resize", id, rows, cols] | ["sh", "resize", id, rows, cols] => {
+                self.request_shell_resize(id, rows, cols);
+            }
             ["shell", "cancel", "all"] | ["sh", "cancel", "all"] => {
                 self.request_shell_cancel(None, true);
             }
@@ -3413,6 +3427,12 @@ impl TuiApp {
             }
             ["jobs", "poll", id] => {
                 self.request_shell_wait(id, false, 0);
+            }
+            ["jobs", "resize"] => {
+                self.status = "shell resize requires a task id, rows, and cols".to_string();
+            }
+            ["jobs", "resize", id, rows, cols] => {
+                self.request_shell_resize(id, rows, cols);
             }
             ["jobs", "cancel", "all"] => {
                 self.request_shell_cancel(None, true);
@@ -4867,6 +4887,32 @@ impl TuiApp {
         } else {
             format!("shell poll requested: {task_id}")
         };
+    }
+
+    fn request_shell_resize(&mut self, task_id: &str, rows: &str, cols: &str) {
+        let task_id = task_id.trim();
+        if task_id.is_empty() {
+            self.status = "shell resize requires a task id".to_string();
+            return;
+        }
+        let Ok(rows) = rows.parse::<u16>() else {
+            self.status = format!("invalid shell resize rows: {rows}");
+            return;
+        };
+        let Ok(cols) = cols.parse::<u16>() else {
+            self.status = format!("invalid shell resize cols: {cols}");
+            return;
+        };
+        if rows == 0 || cols == 0 || rows > 2000 || cols > 2000 {
+            self.status = "shell resize rows/cols must be between 1 and 2000".to_string();
+            return;
+        }
+        self.pending_actions.push(TuiAction::ResizeShell {
+            task_id: task_id.to_string(),
+            rows,
+            cols,
+        });
+        self.status = format!("shell resize requested: {task_id} {rows}x{cols}");
     }
 
     fn request_shell_cancel(&mut self, task_id: Option<String>, all: bool) {
@@ -8341,6 +8387,16 @@ mod tests {
                 task_id: "shell-1".to_string(),
                 input: String::new(),
                 close: true,
+            }]
+        );
+
+        run_palette_command(&mut app, "jobs resize shell-1 40 120");
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::ResizeShell {
+                task_id: "shell-1".to_string(),
+                rows: 40,
+                cols: 120,
             }]
         );
 

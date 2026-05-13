@@ -38,7 +38,7 @@ use crate::core::runtime::{
 use crate::error::{app_error, AppResult};
 use crate::tools::exec_shell::{
     run_trusted_background_shell, ExecShellCancelTool, ExecShellInteractTool, ExecShellListTool,
-    ExecShellShowTool, ExecShellTool, ExecShellWaitTool,
+    ExecShellResizeTool, ExecShellShowTool, ExecShellTool, ExecShellWaitTool,
 };
 use crate::tools::types::{Tool, ToolInput};
 use crate::tui::{
@@ -714,6 +714,7 @@ fn handle_tui_http_action(
         | TuiAction::ShowShell { .. }
         | TuiAction::SendShellStdin { .. }
         | TuiAction::WaitShell { .. }
+        | TuiAction::ResizeShell { .. }
         | TuiAction::CancelShell { .. } => {
             app.set_status("shell commands require local file-backed TUI".to_string());
         }
@@ -1297,6 +1298,13 @@ fn handle_tui_action_with_live(
             timeout_ms,
         } => {
             run_tui_shell_wait(app, &task_id, wait, timeout_ms);
+        }
+        TuiAction::ResizeShell {
+            task_id,
+            rows,
+            cols,
+        } => {
+            run_tui_shell_resize(app, &task_id, rows, cols);
         }
         TuiAction::CancelShell { task_id, all } => {
             run_tui_shell_cancel(app, task_id.as_deref(), all);
@@ -1963,6 +1971,28 @@ fn run_tui_shell_wait(app: &mut TuiApp, task_id: &str, wait: bool, timeout_ms: u
         }
         Err(error) => {
             app.set_status(format!("shell wait failed for {task_id}: {error}"));
+        }
+    }
+}
+
+fn run_tui_shell_resize(app: &mut TuiApp, task_id: &str, rows: u16, cols: u16) {
+    let input = ToolInput::new()
+        .with_arg("task_id", task_id.to_string())
+        .with_arg("tty_rows", rows.to_string())
+        .with_arg("tty_cols", cols.to_string());
+    match ExecShellResizeTool.execute(input) {
+        Ok(output) => {
+            app.set_status(last_nonempty_line(
+                &output.summary,
+                "shell resize completed",
+            ));
+            app.set_mcp_detail(
+                TuiMcpDetailKind::Shell,
+                format_shell_detail(&format!("Shell job {task_id} resize"), &output.summary),
+            );
+        }
+        Err(error) => {
+            app.set_status(format!("shell resize failed for {task_id}: {error}"));
         }
     }
 }

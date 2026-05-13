@@ -35,6 +35,8 @@ pub struct ExecShellShowTool;
 
 pub struct ExecShellReplayTool;
 
+pub struct ExecShellResizeTool;
+
 pub struct ExecShellInteractTool {
     pub tool_name: &'static str,
 }
@@ -266,6 +268,28 @@ impl Tool for ExecShellReplayTool {
         let tail = truthy(input.get("tail"));
         Ok(ToolOutput {
             summary: render_shell_replay(cwd, task_id, stream, offset, limit_bytes, tail)?,
+        })
+    }
+}
+
+impl Tool for ExecShellResizeTool {
+    fn name(&self) -> &str {
+        "exec_shell_resize"
+    }
+
+    fn execute(&self, input: ToolInput) -> AppResult<ToolOutput> {
+        let task_id = required_task_id(&input)?;
+        let cwd = input.get("cwd").unwrap_or(".");
+        let size = required_resize_tty_size(&input)?;
+        let mut manager = shell_manager().lock().unwrap();
+        if !manager.contains(task_id) {
+            drop(manager);
+            return Ok(ToolOutput {
+                summary: resize_detached_shell_job(cwd, task_id, size)?,
+            });
+        }
+        Ok(ToolOutput {
+            summary: manager.resize(task_id, size)?,
         })
     }
 }
@@ -698,6 +722,39 @@ impl BackgroundShellManager {
         Ok(())
     }
 
+    fn resize(&mut self, task_id: &str, size: ShellTtySize) -> AppResult<String> {
+        self.refresh(task_id)?;
+        let live_control = {
+            let job = self
+                .jobs
+                .get_mut(task_id)
+                .ok_or_else(|| app_error(format!("unknown background shell task: {task_id}")))?;
+            if !job.tty_options.enabled {
+                return Err(app_error(format!(
+                    "background shell task {task_id} was not started with tty=true"
+                )));
+            }
+            let mut live_control = "metadata_only";
+            if job.status == ShellJobStatus::Running {
+                live_control = if let Some(control) = job.stdin.as_mut() {
+                    write_background_stdin_control(control, &resize_stty_command(size))?;
+                    "stdin_stty"
+                } else {
+                    "metadata_only_no_stdin"
+                };
+            }
+            job.tty_options.size = Some(size);
+            job.updated_at = epoch_label();
+            persist_job_snapshot(job)?;
+            live_control
+        };
+        let snapshot = self.render_snapshot(task_id)?;
+        Ok(format!(
+            "meta.live_resize={live_control}\nmeta.tty_size={}x{}\n{}",
+            size.rows, size.cols, snapshot
+        ))
+    }
+
     fn cancel(&mut self, task_id: &str) -> AppResult<()> {
         let job = self
             .jobs
@@ -782,6 +839,36 @@ fn parse_tty_options(input: &ToolInput) -> AppResult<ShellTtyOptions> {
     Ok(ShellTtyOptions { enabled, size })
 }
 
+fn required_resize_tty_size(input: &ToolInput) -> AppResult<ShellTtySize> {
+    let rows = required_input_u16(input, "tty_rows", "rows", 1, 2000)?;
+    let cols = required_input_u16(input, "tty_cols", "cols", 1, 2000)?;
+    Ok(ShellTtySize { rows, cols })
+}
+
+fn required_input_u16(
+    input: &ToolInput,
+    key: &str,
+    alias: &str,
+    min: u16,
+    max: u16,
+) -> AppResult<u16> {
+    let raw = input
+        .get(key)
+        .or_else(|| input.get(alias))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| app_error(format!("exec_shell_resize requires {key}")))?;
+    let value = raw
+        .parse::<u16>()
+        .map_err(|_| app_error(format!("exec_shell_resize {key} must be an integer")))?;
+    if value < min || value > max {
+        return Err(app_error(format!(
+            "exec_shell_resize {key} must be between {min} and {max}"
+        )));
+    }
+    Ok(value)
+}
+
 fn optional_input_u16(input: &ToolInput, key: &str, min: u16, max: u16) -> AppResult<Option<u16>> {
     let Some(raw) = input
         .get(key)
@@ -832,6 +919,10 @@ fn script_pty_command(command: &str, size: Option<ShellTtySize>) -> String {
         Some(size) => format!("stty rows {} cols {}; {command}", size.rows, size.cols),
         None => command.to_string(),
     }
+}
+
+fn resize_stty_command(size: ShellTtySize) -> String {
+    format!("stty rows {} cols {}\n", size.rows, size.cols)
 }
 
 fn pty_backend_label(tty_options: ShellTtyOptions) -> &'static str {
@@ -1131,6 +1222,43 @@ fn interact_detached_shell_job(
         }
         thread::sleep(Duration::from_millis(25));
     }
+}
+
+fn resize_detached_shell_job(cwd: &str, task_id: &str, size: ShellTtySize) -> AppResult<String> {
+    let manifest = shell_job_manifest_path(cwd, task_id);
+    if !manifest.is_file() {
+        return Err(app_error(format!(
+            "unknown background shell task: {task_id}"
+        )));
+    }
+    let mut record = read_durable_shell_job_manifest(&manifest)?;
+    refresh_durable_running_status(cwd, &mut record)?;
+    if !record.tty {
+        return Err(app_error(format!(
+            "detached background shell task {task_id} was not started with tty=true"
+        )));
+    }
+    let mut live_control = "metadata_only";
+    if record.status == "running" {
+        live_control = if let Some(stdin_path) = record.stdin_path.as_deref() {
+            if record.stdin_closed {
+                "metadata_only_stdin_closed"
+            } else {
+                write_fifo_stdin(Path::new(stdin_path), &resize_stty_command(size))?;
+                "detached_fifo_stty"
+            }
+        } else {
+            "metadata_only_no_stdin"
+        };
+    }
+    record.tty_size = Some(size);
+    record.updated_at = epoch_label();
+    write_durable_shell_job_manifest(cwd, &record)?;
+    let snapshot = render_durable_snapshot(cwd, task_id)?;
+    Ok(format!(
+        "meta.detached_resize=true\nmeta.live_resize={live_control}\nmeta.tty_size={}x{}\n{}",
+        size.rows, size.cols, snapshot
+    ))
 }
 
 fn cancel_detached_shell_job(cwd: &str, task_id: &str) -> AppResult<String> {
@@ -2621,6 +2749,140 @@ mod tests {
                 .with_arg("task_id", started_id)
                 .with_arg("cwd", cwd.clone())
                 .with_arg("timeout_ms", "1000"),
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exec_shell_resize_updates_running_tty_geometry() {
+        if !script_pty_backend_available() {
+            return;
+        }
+        let root = temp_root("resize-tty");
+        fs::create_dir_all(&root).unwrap();
+        let cwd = root.display().to_string();
+
+        let started = ExecShellTool
+            .execute(
+                ToolInput::new()
+                    .with_arg("command", "tail -f /dev/null")
+                    .with_arg("background", "true")
+                    .with_arg("cwd", cwd.clone())
+                    .with_arg("tty", "true")
+                    .with_arg("tty_rows", "24")
+                    .with_arg("tty_cols", "80"),
+            )
+            .unwrap();
+        let task_id = task_id_from(&started.summary);
+
+        let resized = ExecShellResizeTool
+            .execute(
+                ToolInput::new()
+                    .with_arg("task_id", task_id.clone())
+                    .with_arg("cwd", cwd.clone())
+                    .with_arg("tty_rows", "40")
+                    .with_arg("tty_cols", "120"),
+            )
+            .unwrap();
+        assert!(
+            resized.summary.contains("meta.live_resize=stdin_stty"),
+            "{}",
+            resized.summary
+        );
+        assert!(
+            resized.summary.contains("tty_rows: 40"),
+            "{}",
+            resized.summary
+        );
+        assert!(
+            resized.summary.contains("tty_cols: 120"),
+            "{}",
+            resized.summary
+        );
+
+        let manifest = fs::read_to_string(
+            root.join(".dscode/shell-jobs")
+                .join(&task_id)
+                .join("manifest.json"),
+        )
+        .unwrap();
+        assert!(manifest.contains(r#""tty_rows":40"#), "{manifest}");
+        assert!(manifest.contains(r#""tty_cols":120"#), "{manifest}");
+
+        let _ = ExecShellCancelTool.execute(ToolInput::new().with_arg("task_id", task_id));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exec_shell_resize_updates_detached_tty_geometry() {
+        if !script_pty_backend_available() {
+            return;
+        }
+        let root = temp_root("resize-detached-tty");
+        fs::create_dir_all(&root).unwrap();
+        let cwd = root.display().to_string();
+
+        let started = ExecShellTool
+            .execute(
+                ToolInput::new()
+                    .with_arg("command", "tail -f /dev/null")
+                    .with_arg("background", "true")
+                    .with_arg("cwd", cwd.clone())
+                    .with_arg("tty", "true")
+                    .with_arg("tty_rows", "24")
+                    .with_arg("tty_cols", "80"),
+            )
+            .unwrap();
+        let task_id = task_id_from(&started.summary);
+        shell_manager().lock().unwrap().jobs.remove(&task_id);
+
+        let resized = ExecShellResizeTool
+            .execute(
+                ToolInput::new()
+                    .with_arg("task_id", task_id.clone())
+                    .with_arg("cwd", cwd.clone())
+                    .with_arg("rows", "41")
+                    .with_arg("cols", "121"),
+            )
+            .unwrap();
+        assert!(
+            resized.summary.contains("meta.detached_resize=true"),
+            "{}",
+            resized.summary
+        );
+        assert!(
+            resized
+                .summary
+                .contains("meta.live_resize=detached_fifo_stty"),
+            "{}",
+            resized.summary
+        );
+        assert!(
+            resized.summary.contains("tty_rows: 41"),
+            "{}",
+            resized.summary
+        );
+        assert!(
+            resized.summary.contains("tty_cols: 121"),
+            "{}",
+            resized.summary
+        );
+
+        let manifest = fs::read_to_string(
+            root.join(".dscode/shell-jobs")
+                .join(&task_id)
+                .join("manifest.json"),
+        )
+        .unwrap();
+        assert!(manifest.contains(r#""tty_rows":41"#), "{manifest}");
+        assert!(manifest.contains(r#""tty_cols":121"#), "{manifest}");
+
+        let _ = ExecShellCancelTool.execute(
+            ToolInput::new()
+                .with_arg("task_id", task_id)
+                .with_arg("cwd", cwd.clone()),
         );
         let _ = fs::remove_dir_all(root);
     }

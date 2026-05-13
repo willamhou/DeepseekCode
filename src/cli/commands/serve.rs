@@ -27,7 +27,8 @@ use crate::tools::diagnostics::DiagnosticsTool;
 use crate::tools::document::{ImageOcrTool, PandocConvertTool};
 use crate::tools::exec_shell::{
     ExecShellCancelTool, ExecShellInteractTool, ExecShellListTool, ExecShellReplayTool,
-    ExecShellShowTool, ExecShellTool, ExecShellWaitTool, TaskShellStartTool, TaskShellWaitTool,
+    ExecShellResizeTool, ExecShellShowTool, ExecShellTool, ExecShellWaitTool, TaskShellStartTool,
+    TaskShellWaitTool,
 };
 use crate::tools::file_search::FileSearchTool;
 use crate::tools::file_write::EditFileTool;
@@ -995,6 +996,14 @@ fn execute_mcp_tool(
                 ));
             }
             return execute_mcp_shell_tool(name, input, state);
+        }
+        "exec_shell_resize" => {
+            if !mcp_side_effect_tools_enabled(state) {
+                return Err(app_error(
+                    "MCP shell-session resize tool `exec_shell_resize` is disabled; set DSCODE_MCP_ENABLE_SIDE_EFFECTS=1 for trusted direct execution or DSCODE_MCP_ENABLE_DURABLE_APPROVALS=1 to route through runtime approvals",
+                ));
+            }
+            return execute_mcp_shell_tool("exec_shell_resize", input, state);
         }
         "exec_shell_cancel" => {
             if !mcp_side_effect_tools_enabled(state) {
@@ -2448,6 +2457,7 @@ fn execute_mcp_shell_tool(
             tool_name: "exec_interact",
         }
         .execute(input)?,
+        "exec_shell_resize" => ExecShellResizeTool.execute(input)?,
         "exec_shell_cancel" => ExecShellCancelTool.execute(input)?,
         _ => return Err(app_error(format!("unknown MCP shell-session tool: {name}"))),
     };
@@ -3655,6 +3665,25 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
                     ("data", string_property("Alias for input.")),
                     ("close_stdin", string_property("Set true to close stdin.")),
                     ("timeout_ms", number_property("Wait milliseconds after input.")),
+                ],
+                &["task_id"],
+            ),
+        ));
+        tools.push(mcp_tool_definition(
+            "exec_shell_resize",
+            "Resize a TTY-backed background shell job by updating durable PTY geometry and sending a best-effort stty control command. Requires trusted side effects or durable runtime approvals.",
+            mcp_schema(
+                vec![
+                    ("task_id", string_property("Background shell task id.")),
+                    ("id", string_property("Alias for task_id.")),
+                    (
+                        "cwd",
+                        string_property("Working directory used to find detached durable records."),
+                    ),
+                    ("tty_rows", number_property("New PTY row count.")),
+                    ("tty_cols", number_property("New PTY column count.")),
+                    ("rows", number_property("Alias for tty_rows.")),
+                    ("cols", number_property("Alias for tty_cols.")),
                 ],
                 &["task_id"],
             ),
@@ -6057,6 +6086,7 @@ fn acp_tool_kind(name: &str) -> &'static str {
         | "task_shell_start"
         | "exec_shell_interact"
         | "exec_interact"
+        | "exec_shell_resize"
         | "exec_shell_cancel"
         | "task_shell_wait"
         | "exec_shell_wait"
@@ -8886,6 +8916,7 @@ mod tests {
         assert!(!rendered.contains(r#""name":"task_shell_start""#));
         assert!(!rendered.contains(r#""name":"exec_shell_interact""#));
         assert!(!rendered.contains(r#""name":"exec_interact""#));
+        assert!(!rendered.contains(r#""name":"exec_shell_resize""#));
         assert!(!rendered.contains(r#""name":"exec_shell_cancel""#));
         assert!(!rendered.contains(r#""name":"rlm_python_session""#));
         assert!(!rendered.contains(r#""name":"rlm_process_cancel""#));
@@ -8923,6 +8954,7 @@ mod tests {
         assert!(rendered.contains(r#""name":"task_shell_start""#));
         assert!(rendered.contains(r#""name":"exec_shell_interact""#));
         assert!(rendered.contains(r#""name":"exec_interact""#));
+        assert!(rendered.contains(r#""name":"exec_shell_resize""#));
         assert!(rendered.contains(r#""name":"exec_shell_cancel""#));
         assert!(rendered.contains(r#""name":"rlm_python_session""#));
         assert!(!rendered.contains(r#""name":"rlm_process_cancel""#));
@@ -9516,6 +9548,7 @@ shell_allowlist = ["cargo test"]
         assert!(!rendered.contains(r#""name":"task_shell_start""#));
         assert!(!rendered.contains(r#""name":"exec_shell_interact""#));
         assert!(!rendered.contains(r#""name":"exec_interact""#));
+        assert!(!rendered.contains(r#""name":"exec_shell_resize""#));
         assert!(!rendered.contains(r#""name":"exec_shell_cancel""#));
         assert!(!rendered.contains(r#""name":"rlm_python_session""#));
         assert!(!rendered.contains(r#""name":"rlm""#));
@@ -9540,6 +9573,7 @@ shell_allowlist = ["cargo test"]
         assert!(rendered.contains(r#""name":"task_shell_start""#));
         assert!(rendered.contains(r#""name":"exec_shell_interact""#));
         assert!(rendered.contains(r#""name":"exec_interact""#));
+        assert!(rendered.contains(r#""name":"exec_shell_resize""#));
         assert!(rendered.contains(r#""name":"exec_shell_cancel""#));
         assert!(rendered.contains(r#""name":"rlm_python_session""#));
         assert!(rendered.contains(r#""name":"rlm""#));
@@ -9617,6 +9651,7 @@ shell_allowlist = ["cargo test"]
         assert!(rendered.contains(r#""name":"task_shell_start""#));
         assert!(rendered.contains(r#""name":"exec_shell_interact""#));
         assert!(rendered.contains(r#""name":"exec_interact""#));
+        assert!(rendered.contains(r#""name":"exec_shell_resize""#));
         assert!(rendered.contains(r#""name":"exec_shell_cancel""#));
         assert!(rendered.contains(r#""name":"rlm_python_session""#));
         assert!(rendered.contains(r#""name":"rlm""#));

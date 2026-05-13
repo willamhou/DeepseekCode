@@ -3051,6 +3051,12 @@ const TOOL_SPECS: &[StaticToolSpec] = &[
         required_json: r#"["task_id"]"#,
     },
     StaticToolSpec {
+        name: "exec_shell_resize",
+        description: "Resize a TTY-backed background exec_shell task by updating durable PTY geometry and sending a best-effort stty control command.",
+        properties_json: r#"{"task_id":{"type":"string","description":"Task id returned by exec_shell background=true."},"id":{"type":"string","description":"Alias for task_id."},"cwd":{"type":"string","description":"Working directory used to find detached durable shell records."},"tty_rows":{"type":"string","description":"New PTY row count."},"tty_cols":{"type":"string","description":"New PTY column count."},"rows":{"type":"string","description":"Alias for tty_rows."},"cols":{"type":"string","description":"Alias for tty_cols."}}"#,
+        required_json: r#"["task_id"]"#,
+    },
+    StaticToolSpec {
         name: "exec_wait",
         description: "Alias for exec_shell_wait.",
         properties_json: r#"{"task_id":{"type":"string","description":"Task id returned by exec_shell background=true."},"id":{"type":"string","description":"Alias for task_id."},"cwd":{"type":"string","description":"Working directory used to find detached durable shell records."},"timeout_ms":{"type":"string","description":"Maximum wait milliseconds, default 5000."},"wait":{"type":"string","description":"Set false to poll once without waiting."}}"#,
@@ -5153,6 +5159,7 @@ mod tests {
             "task_shell_wait".to_string(),
             "exec_shell_wait".to_string(),
             "exec_shell_replay".to_string(),
+            "exec_shell_resize".to_string(),
             "exec_shell_interact".to_string(),
             "exec_shell_cancel".to_string(),
             "exec_wait".to_string(),
@@ -5171,6 +5178,8 @@ mod tests {
         assert!(openai.contains("\"name\":\"exec_shell_replay\""));
         assert!(openai.contains("\"limit_bytes\""));
         assert!(openai.contains("\"tail\""));
+        assert!(openai.contains("\"name\":\"exec_shell_resize\""));
+        assert!(openai.contains("best-effort stty"));
         assert!(openai.contains("\"name\":\"exec_shell_interact\""));
         assert!(openai.contains("\"name\":\"exec_shell_cancel\""));
         assert!(openai.contains("detached durable shell records"));
