@@ -176,12 +176,13 @@ resumption.
 4. Streaming and cancellation:
    - `rlm_process_events`
    - active turn cancellation via runtime cancel events
-   - status: partial; event-log replay/wait, queued-turn cancellation,
-     cooperative active worker cancellation, and single-step/batch worker
-     completion are implemented; worker ownership is stamped into live
-     manifests while a turn is running and inventory reports stale owner pids;
-     worker streaming, forced cross-process worker interruption, and resident
-     daemon service packaging remain open
+   - status: partial; event-log replay/wait, worker reasoning/text delta and
+     tool event logging, queued-turn cancellation, cooperative active worker
+     cancellation, and single-step/batch worker completion are implemented;
+     worker ownership is stamped into live manifests while a turn is running and
+     inventory reports stale owner pids; native push/SSE streaming, forced
+     cross-process worker interruption, and resident daemon service packaging
+     remain open
 5. Recovery:
    - daemon restart scan
    - stale pid detection
@@ -220,6 +221,6 @@ Future implementation should add these gates:
 
 Do not rename the existing bounded child-agent `rlm_process` implementation as a
 live daemon. It is already useful and should remain the default until a real
-live worker exists. The remaining executable RLM slices should focus on
-streaming model/tool deltas, forced cross-process worker interruption, and
-richer lifecycle commands.
+live worker exists. The remaining executable RLM slices should focus on native
+push/SSE streaming polish, forced cross-process worker interruption, and richer
+lifecycle commands.

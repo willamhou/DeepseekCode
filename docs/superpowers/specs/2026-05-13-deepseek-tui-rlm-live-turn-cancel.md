@@ -61,5 +61,5 @@ That remains a separate streaming/worker-runtime slice.
 
 ## Remaining Gap
 
-The live daemon still needs model/tool delta streaming, forced cross-process
-worker interruption, and richer lifecycle commands.
+The live daemon still needs native push/SSE streaming polish, forced
+cross-process worker interruption, and richer lifecycle commands.

@@ -3527,7 +3527,7 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
         ),
         mcp_tool_definition(
             "rlm_process_events",
-            "Replay live RLM daemon event-log records from .dscode/rlm-daemon without running a model.",
+            "Replay live RLM daemon event-log records from .dscode/rlm-daemon without running a model, including worker progress/tool events.",
             mcp_schema(
                 vec![
                     ("session_id", string_property("Live RLM session id.")),
@@ -3539,7 +3539,7 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
         ),
         mcp_tool_definition(
             "rlm_process_wait",
-            "Wait for live RLM daemon event-log records after a cursor without running a model.",
+            "Wait for live RLM daemon event-log records after a cursor without running a model, including worker progress/tool events.",
             mcp_schema(
                 vec![
                     ("session_id", string_property("Live RLM session id.")),

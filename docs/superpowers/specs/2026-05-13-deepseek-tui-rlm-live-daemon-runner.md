@@ -43,5 +43,5 @@ RLM manifests, payloads, or event logs.
 
 ## Remaining Gap
 
-DeepSeekCode still needs model/tool delta streaming, forced cross-process worker
-interruption, and explicit RLM daemon lifecycle commands.
+DeepSeekCode still needs native push/SSE streaming polish, forced cross-process
+worker interruption, and explicit RLM daemon lifecycle commands.

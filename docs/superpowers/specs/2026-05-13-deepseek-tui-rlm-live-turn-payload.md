@@ -45,5 +45,5 @@ depending on the original CLI process.
 ## Remaining Gap
 
 `rlm_process_run_next` now consumes this payload for a single queued turn. The
-remaining gap is a resident daemon loop with streaming deltas, active
-cancellation, restart recovery, and lifecycle commands.
+remaining gap is native push/SSE streaming polish, forced cross-process worker
+interruption, and lifecycle commands.

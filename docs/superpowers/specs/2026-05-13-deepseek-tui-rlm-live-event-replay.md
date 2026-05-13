@@ -9,7 +9,7 @@ Status: implemented
 `rlm_process live=true` can enqueue turns and append `turn_queued` records to
 `.dscode/rlm-daemon/<session_id>/events.jsonl`, but there was no model-visible
 read-only event replay tool. TUI/MCP/ACP clients needed a cursor-based surface
-before live worker streaming can be implemented honestly.
+before live worker progress events could be implemented honestly.
 
 ## Spec
 

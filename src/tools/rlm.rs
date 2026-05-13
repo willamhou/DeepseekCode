@@ -10,11 +10,15 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::config::types::AppConfig;
-use crate::core::loop_runtime::{AgentCancelCheck, SharedAgentCancelCheck};
+use crate::core::loop_runtime::{
+    AgentCancelCheck, AgentRunEvents, SharedAgentCancelCheck, SharedAgentRunEvents, ToolEvent,
+};
 use crate::core::runtime::{RuntimeStore, TaskRecord};
 use crate::error::{tool_failure, AppResult};
+use crate::model::protocol::ObservationStatus;
 use crate::tools::dispatch_subagent::{DispatchSubagentTool, DispatchSubagentsTool};
 use crate::tools::types::{Tool, ToolInput, ToolOutput};
+use crate::ui::stream::StreamEvents;
 use crate::util::json::{
     json_as_string, json_as_u64, json_escape, json_value_to_string, parse_json_value, JsonValue,
 };
@@ -908,6 +912,169 @@ impl AgentCancelCheck for RlmLiveTaskCancelCheck {
             .load_task(&self.task_id)
             .map(|task| task.status == "cancelled")
             .unwrap_or(false))
+    }
+}
+
+#[derive(Clone)]
+struct RlmLiveWorkerEventTarget {
+    config: AppConfig,
+    session_id: String,
+    runtime_thread_id: String,
+    task_id: String,
+}
+
+struct RlmLiveWorkerStreamEvents {
+    target: RlmLiveWorkerEventTarget,
+}
+
+impl StreamEvents for RlmLiveWorkerStreamEvents {
+    fn on_reasoning_delta(&mut self, chunk: &str) {
+        if chunk.is_empty() {
+            return;
+        }
+        let _ = append_rlm_live_session_json_event(
+            &self.target.config,
+            &self.target.session_id,
+            "worker_reasoning_delta",
+            &self.target.runtime_thread_id,
+            &self.target.task_id,
+            vec![
+                ("delta".to_string(), JsonValue::String(chunk.to_string())),
+                (
+                    "delta_chars".to_string(),
+                    JsonValue::Number(chunk.chars().count().to_string()),
+                ),
+            ],
+        );
+    }
+
+    fn on_text_delta(&mut self, chunk: &str) {
+        if chunk.is_empty() {
+            return;
+        }
+        let _ = append_rlm_live_session_json_event(
+            &self.target.config,
+            &self.target.session_id,
+            "worker_text_delta",
+            &self.target.runtime_thread_id,
+            &self.target.task_id,
+            vec![
+                ("delta".to_string(), JsonValue::String(chunk.to_string())),
+                (
+                    "delta_chars".to_string(),
+                    JsonValue::Number(chunk.chars().count().to_string()),
+                ),
+            ],
+        );
+    }
+
+    fn on_assistant_done(&mut self, full_text: &str) {
+        let (preview, chars, truncated) = rlm_preview_json(Some(full_text));
+        let _ = append_rlm_live_session_json_event(
+            &self.target.config,
+            &self.target.session_id,
+            "worker_assistant_done",
+            &self.target.runtime_thread_id,
+            &self.target.task_id,
+            vec![
+                ("text_preview".to_string(), preview),
+                ("text_chars".to_string(), chars),
+                ("text_truncated".to_string(), truncated),
+            ],
+        );
+    }
+
+    fn on_tool_call(&mut self, name: &str, input: &BTreeMap<String, String>) {
+        let _ = append_rlm_live_session_json_event(
+            &self.target.config,
+            &self.target.session_id,
+            "worker_model_tool_call",
+            &self.target.runtime_thread_id,
+            &self.target.task_id,
+            vec![
+                ("tool_name".to_string(), JsonValue::String(name.to_string())),
+                ("input".to_string(), rlm_string_map_json(input)),
+            ],
+        );
+    }
+}
+
+struct RlmLiveWorkerRunEvents {
+    target: RlmLiveWorkerEventTarget,
+}
+
+impl AgentRunEvents for RlmLiveWorkerRunEvents {
+    fn on_tool_call(&mut self, tool_name: &str, input: &BTreeMap<String, String>) {
+        let _ = append_rlm_live_session_json_event(
+            &self.target.config,
+            &self.target.session_id,
+            "worker_tool_call",
+            &self.target.runtime_thread_id,
+            &self.target.task_id,
+            vec![
+                (
+                    "tool_name".to_string(),
+                    JsonValue::String(tool_name.to_string()),
+                ),
+                ("input".to_string(), rlm_string_map_json(input)),
+            ],
+        );
+    }
+
+    fn on_permission_request(
+        &mut self,
+        tool_name: &str,
+        input: &BTreeMap<String, String>,
+        kind: &str,
+        target: &str,
+    ) {
+        let _ = append_rlm_live_session_json_event(
+            &self.target.config,
+            &self.target.session_id,
+            "worker_permission_request",
+            &self.target.runtime_thread_id,
+            &self.target.task_id,
+            vec![
+                (
+                    "tool_name".to_string(),
+                    JsonValue::String(tool_name.to_string()),
+                ),
+                ("input".to_string(), rlm_string_map_json(input)),
+                (
+                    "permission_kind".to_string(),
+                    JsonValue::String(kind.to_string()),
+                ),
+                (
+                    "permission_target".to_string(),
+                    JsonValue::String(target.to_string()),
+                ),
+            ],
+        );
+    }
+
+    fn on_tool_result(&mut self, event: &ToolEvent) {
+        let (preview, chars, truncated) = rlm_preview_json(Some(&event.output));
+        let _ = append_rlm_live_session_json_event(
+            &self.target.config,
+            &self.target.session_id,
+            "worker_tool_result",
+            &self.target.runtime_thread_id,
+            &self.target.task_id,
+            vec![
+                (
+                    "tool_name".to_string(),
+                    JsonValue::String(event.tool_name.clone()),
+                ),
+                (
+                    "status".to_string(),
+                    JsonValue::String(rlm_observation_status_label(event.status).to_string()),
+                ),
+                ("input".to_string(), rlm_string_map_json(&event.input)),
+                ("output_preview".to_string(), preview),
+                ("output_chars".to_string(), chars),
+                ("output_truncated".to_string(), truncated),
+            ],
+        );
     }
 }
 
@@ -1910,11 +2077,28 @@ impl Tool for RlmLiveRunNextTool {
             store: store.clone(),
             task_id: claimed.id.clone(),
         }));
+        let event_target = RlmLiveWorkerEventTarget {
+            config: self.config.clone(),
+            session_id: session_id.to_string(),
+            runtime_thread_id: runtime_thread_id.clone(),
+            task_id: claimed.id.clone(),
+        };
+        let stream_events: Box<dyn StreamEvents> = Box::new(RlmLiveWorkerStreamEvents {
+            target: event_target.clone(),
+        });
+        let run_events: SharedAgentRunEvents = Rc::new(RefCell::new(RlmLiveWorkerRunEvents {
+            target: event_target,
+        }));
         let output = DispatchSubagentTool {
             config: self.config.clone(),
             parent_depth: self.parent_depth,
         }
-        .execute_with_agent_cancel(child_input, Some(cancel_check));
+        .execute_with_agent_events(
+            child_input,
+            Some(cancel_check),
+            Some(stream_events),
+            Some(run_events),
+        );
         match output {
             Ok(output) => {
                 store.update_task(&claimed.id, "completed".to_string(), output.summary.clone())?;
@@ -3503,6 +3687,68 @@ fn update_rlm_live_session_turn_payload_status(
     fs::write(path, json_value_to_string(&JsonValue::Object(root)))
         .map_err(|error| tool_failure(format!("rlm live turn payload write failed: {error}")))?;
     Ok(())
+}
+
+fn append_rlm_live_session_json_event(
+    config: &AppConfig,
+    session_id: &str,
+    kind: &str,
+    runtime_thread_id: &str,
+    task_id: &str,
+    fields: Vec<(String, JsonValue)>,
+) -> AppResult<()> {
+    let path = rlm_live_session_event_log_path(config, session_id);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            tool_failure(format!("rlm live session event mkdir failed: {error}"))
+        })?;
+    }
+    let seq = fs::read_to_string(&path)
+        .map(|content| content.lines().count() as u64 + 1)
+        .unwrap_or(1);
+    let mut root = BTreeMap::from([
+        ("seq".to_string(), JsonValue::Number(seq.to_string())),
+        (
+            "created_at".to_string(),
+            JsonValue::String(rlm_epoch_label()),
+        ),
+        ("kind".to_string(), JsonValue::String(kind.to_string())),
+        (
+            "runtime_thread_id".to_string(),
+            JsonValue::String(runtime_thread_id.to_string()),
+        ),
+        (
+            "task_id".to_string(),
+            JsonValue::String(task_id.to_string()),
+        ),
+    ]);
+    for (key, value) in fields {
+        root.insert(key, value);
+    }
+    let mut event = json_value_to_string(&JsonValue::Object(root));
+    event.push('\n');
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .and_then(|mut file| file.write_all(event.as_bytes()))
+        .map_err(|error| tool_failure(format!("rlm live session event write failed: {error}")))?;
+    Ok(())
+}
+
+fn rlm_string_map_json(map: &BTreeMap<String, String>) -> JsonValue {
+    JsonValue::Object(
+        map.iter()
+            .map(|(key, value)| (key.clone(), JsonValue::String(value.clone())))
+            .collect(),
+    )
+}
+
+fn rlm_observation_status_label(status: ObservationStatus) -> &'static str {
+    match status {
+        ObservationStatus::Ok => "ok",
+        ObservationStatus::Failed => "failed",
+    }
 }
 
 fn append_rlm_live_session_event(
@@ -6339,6 +6585,65 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("cursor"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rlm_live_worker_events_append_stream_and_tool_events() {
+        let cwd = std::env::current_dir().unwrap();
+        let root = cwd.join("target").join(format!(
+            "dscode-rlm-live-worker-events-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let mut config = AppConfig::default();
+        config.workspace.config_dir = root.join(".dscode").display().to_string();
+        let target = RlmLiveWorkerEventTarget {
+            config: config.clone(),
+            session_id: "worker.events".to_string(),
+            runtime_thread_id: "thread-worker-events".to_string(),
+            task_id: "task-worker-events".to_string(),
+        };
+        let mut stream = RlmLiveWorkerStreamEvents {
+            target: target.clone(),
+        };
+        stream.on_reasoning_delta("thinking");
+        stream.on_text_delta("hello");
+        stream.on_assistant_done("hello world");
+        let input = BTreeMap::from([("path".to_string(), "src/main.rs".to_string())]);
+        stream.on_tool_call("read_file", &input);
+
+        let mut run = RlmLiveWorkerRunEvents { target };
+        run.on_tool_call("read_file", &input);
+        run.on_permission_request("write_file", &input, "write", "src/main.rs");
+        run.on_tool_result(&ToolEvent {
+            tool_name: "read_file".to_string(),
+            input,
+            output: "file excerpt".to_string(),
+            status: ObservationStatus::Ok,
+        });
+
+        let events = RlmLiveEventsTool { config }
+            .execute(ToolInput::new().with_arg("session_id", "worker.events"))
+            .unwrap();
+        assert!(events
+            .summary
+            .contains(r#""kind":"worker_reasoning_delta""#));
+        assert!(events.summary.contains(r#""kind":"worker_text_delta""#));
+        assert!(events.summary.contains(r#""kind":"worker_assistant_done""#));
+        assert!(events
+            .summary
+            .contains(r#""kind":"worker_model_tool_call""#));
+        assert!(events.summary.contains(r#""kind":"worker_tool_call""#));
+        assert!(events
+            .summary
+            .contains(r#""kind":"worker_permission_request""#));
+        assert!(events.summary.contains(r#""kind":"worker_tool_result""#));
+        assert!(events.summary.contains(r#""status":"ok""#));
+        assert!(events.summary.contains(r#""next_cursor":7"#));
         let _ = fs::remove_dir_all(root);
     }
 

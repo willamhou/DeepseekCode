@@ -5,11 +5,12 @@ use std::rc::Rc;
 use crate::config::types::AppConfig;
 use crate::core::context::TaskContext;
 use crate::core::loop_runtime::{
-    AgentLoop, AgentLoopOptions, RunResult, SharedAgentCancelCheck, ToolEvent,
+    AgentLoop, AgentLoopOptions, RunResult, SharedAgentCancelCheck, SharedAgentRunEvents, ToolEvent,
 };
 use crate::core::todos::TodoList;
 use crate::error::{tool_failure, AppResult};
 use crate::tools::types::{Tool, ToolInput, ToolOutput};
+use crate::ui::stream::StreamEvents;
 
 const DEFAULT_SUBAGENT_STEPS: usize = 4;
 const MAX_SUBAGENT_STEPS: usize = 12;
@@ -27,7 +28,8 @@ impl Tool for DispatchSubagentTool {
 
     fn execute(&self, input: ToolInput) -> AppResult<ToolOutput> {
         let request = subagent_request_from_input(&input, "dispatch_subagent")?;
-        let summary = run_subagent_request(&self.config, self.parent_depth, &request, None)?;
+        let summary =
+            run_subagent_request(&self.config, self.parent_depth, &request, None, None, None)?;
 
         Ok(ToolOutput { summary })
     }
@@ -39,9 +41,25 @@ impl DispatchSubagentTool {
         input: ToolInput,
         cancel_check: Option<SharedAgentCancelCheck>,
     ) -> AppResult<ToolOutput> {
+        self.execute_with_agent_events(input, cancel_check, None, None)
+    }
+
+    pub fn execute_with_agent_events(
+        &self,
+        input: ToolInput,
+        cancel_check: Option<SharedAgentCancelCheck>,
+        stream_events: Option<Box<dyn StreamEvents>>,
+        run_events: Option<SharedAgentRunEvents>,
+    ) -> AppResult<ToolOutput> {
         let request = subagent_request_from_input(&input, "dispatch_subagent")?;
-        let summary =
-            run_subagent_request(&self.config, self.parent_depth, &request, cancel_check)?;
+        let summary = run_subagent_request(
+            &self.config,
+            self.parent_depth,
+            &request,
+            cancel_check,
+            stream_events,
+            run_events,
+        )?;
         Ok(ToolOutput { summary })
     }
 }
@@ -64,10 +82,11 @@ impl Tool for DispatchSubagentsTool {
             let parent_depth = self.parent_depth;
             handles.push(std::thread::spawn(move || {
                 let thread_id = new_thread_id(index + 1);
-                let summary = run_subagent_request(&config, parent_depth, &request, None)
-                    .unwrap_or_else(|error| {
-                        render_blocked_parallel_child(&request, &error.to_string())
-                    });
+                let summary =
+                    run_subagent_request(&config, parent_depth, &request, None, None, None)
+                        .unwrap_or_else(|error| {
+                            render_blocked_parallel_child(&request, &error.to_string())
+                        });
                 let artifact = persist_agent_thread(
                     &config.workspace.config_dir,
                     &thread_id,
@@ -146,6 +165,8 @@ fn run_subagent_request(
     parent_depth: usize,
     request: &SubagentRequest,
     cancel_check: Option<SharedAgentCancelCheck>,
+    stream_events: Option<Box<dyn StreamEvents>>,
+    run_events: Option<SharedAgentRunEvents>,
 ) -> AppResult<String> {
     let agent = request
         .agent_name
@@ -183,8 +204,8 @@ fn run_subagent_request(
                 subagent_depth: parent_depth + 1,
                 emit_progress: false,
                 persist_session: false,
-                stream_events: None,
-                run_events: None,
+                stream_events,
+                run_events,
                 approval_resolver: None,
                 user_input_resolver: None,
                 cancel_check,

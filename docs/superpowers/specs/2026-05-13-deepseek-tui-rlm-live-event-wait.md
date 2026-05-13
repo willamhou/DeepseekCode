@@ -47,5 +47,5 @@ start, completion, or failure events.
 
 ## Remaining Gap
 
-This is long-polling over JSONL, not streaming. Resident daemon service
-packaging and delta streaming remain open.
+This is long-polling over JSONL, not a native push/SSE bridge. Service
+packaging and streaming polish remain open.

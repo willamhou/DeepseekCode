@@ -47,5 +47,5 @@ one tested claiming/completion primitive instead of duplicating behavior.
 
 ## Remaining Gap
 
-DeepSeekCode still needs streaming delta events, forced cross-process worker
-interruption, and supervisor/CLI lifecycle commands.
+DeepSeekCode still needs native push/SSE streaming polish, forced cross-process
+worker interruption, and supervisor/CLI lifecycle commands.

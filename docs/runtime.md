@@ -1461,16 +1461,20 @@ up to `max_turns` queued payloads in FIFO order, with `dry_run=true` for a
 non-mutating batch preview. The existing `deepseek agents daemon` service loop
 now first runs safe all-session live RLM recovery, which requeues/fails stale
 running turns while preserving live-owned turns unless forced, then runs one
-queued live RLM turn per tick through the same worker path. Model delta
+queued live RLM turn per tick through the same worker path. Native push/SSE
 streaming, forced cross-process worker interruption, and broader RLM daemon
 lifecycle commands remain future work.
 `rlm_process_events session_id=<id> cursor=<seq>` replays parsed
 `.dscode/rlm-daemon/<session_id>/events.jsonl` records with `seq` greater than
 the cursor and returns `next_cursor` for clients that want deterministic live
-RLM event polling before full streaming worker support lands.
+RLM event polling. The log includes queue/worker lifecycle events plus live
+worker progress events (`worker_reasoning_delta`, `worker_text_delta`,
+`worker_assistant_done`, `worker_model_tool_call`, `worker_tool_call`,
+`worker_permission_request`, and `worker_tool_result`) emitted by
+`rlm_process_run_next`.
 `rlm_process_wait` uses the same cursor contract but waits up to `timeout_ms`
 for new events before returning, giving clients a simple long-poll bridge while
-streaming deltas remain future work.
+native push/SSE streaming remains future work.
 This gives the model DeepSeek-TUI-style Recursive Language Model entrypoints for
 synthesis/classification tasks with both file-backed and optional process-backed
 Python helper state. MCP server mode exposes the local RLM planning helpers

@@ -40,5 +40,5 @@ whether to wait, recover, run-next, drain, or restart a session.
 
 ## Remaining
 
-RLM model/tool delta streaming, forced cross-process worker interruption, and
+Native push/SSE streaming polish, forced cross-process worker interruption, and
 richer lifecycle commands remain open.

@@ -21,8 +21,8 @@ This repository is an active workbench, not a polished hosted product.
   supervisors and TUI clients.
 - Compared with `DeepSeek-TUI`, the common terminal/runtime workflow is now
   substantially closer. The remaining gap is concentrated in hard
-  infrastructure edges: cross-process shell takeover, RLM streaming and daemon
-  lifecycle polish, platform-specific rollback fidelity, and external
+  infrastructure edges: cross-process shell takeover, RLM native streaming and
+  daemon lifecycle polish, platform-specific rollback fidelity, and external
   publishing or write-fixture validation.
 
 ## Feature Surface

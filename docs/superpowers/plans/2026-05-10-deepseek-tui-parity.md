@@ -516,7 +516,9 @@ Remaining:
   now creates or reuses a live-session runtime thread, persists per-turn
   payloads, and enqueues pending `rlm_process` runtime tasks without running a
   model worker yet; `rlm_process_events` replays queued live-session event logs
-  by cursor as the read-only polling surface before worker streaming lands;
+  by cursor as the read-only polling surface and now includes worker
+  reasoning/text deltas plus model/tool call/result events emitted during
+  `rlm_process_run_next`;
   `rlm_process_wait` adds cursor-based long-polling for those event logs;
   `rlm_process_cancel` cancels queued pending or active running live turns,
   marks payloads cancelled when present, refreshes `queued_turns`, preserves a

@@ -3478,13 +3478,13 @@ const TOOL_SPECS: &[StaticToolSpec] = &[
     },
     StaticToolSpec {
         name: "rlm_process_events",
-        description: "Replay live RLM daemon event-log records from .dscode/rlm-daemon without running a model. Use cursor to continue from the last seen event seq.",
+        description: "Replay live RLM daemon event-log records from .dscode/rlm-daemon without running a model, including queued-turn lifecycle records and worker progress/tool events. Use cursor to continue from the last seen event seq.",
         properties_json: r#"{"session_id":{"type":"string","description":"Live RLM session id."},"cursor":{"type":"string","description":"Return events with seq greater than this cursor. Defaults to 0."},"after_seq":{"type":"string","description":"Alias for cursor."},"limit":{"type":"string","description":"Optional event limit, clamped to 1-500 and defaulting to 50."}}"#,
         required_json: r#"["session_id"]"#,
     },
     StaticToolSpec {
         name: "rlm_process_wait",
-        description: "Wait for live RLM daemon event-log records after a cursor without running a model. Returns immediately when events are available or when timeout_ms elapses.",
+        description: "Wait for live RLM daemon event-log records after a cursor without running a model. Returns lifecycle and worker progress/tool events immediately when available or when timeout_ms elapses.",
         properties_json: r#"{"session_id":{"type":"string","description":"Live RLM session id."},"cursor":{"type":"string","description":"Return events with seq greater than this cursor. Defaults to 0."},"after_seq":{"type":"string","description":"Alias for cursor."},"limit":{"type":"string","description":"Optional event limit, clamped to 1-500 and defaulting to 50."},"timeout_ms":{"type":"string","description":"Maximum wait in milliseconds, clamped to 30000 and defaulting to 1000."},"poll_interval_ms":{"type":"string","description":"Polling interval in milliseconds, clamped to 25-1000 and defaulting to 100."}}"#,
         required_json: r#"["session_id"]"#,
     },

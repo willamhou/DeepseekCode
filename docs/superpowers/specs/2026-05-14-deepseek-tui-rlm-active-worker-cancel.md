@@ -44,5 +44,5 @@ active live RLM worker.
 
 ## Remaining
 
-RLM model/tool delta streaming, forced cross-process worker interruption, and
+Native push/SSE streaming polish, forced cross-process worker interruption, and
 richer lifecycle commands remain open.

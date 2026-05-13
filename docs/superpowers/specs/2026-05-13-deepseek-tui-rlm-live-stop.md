@@ -46,5 +46,5 @@ session.
 
 ## Remaining Gap
 
-DeepSeekCode still needs model/tool delta streaming, forced cross-process worker
-interruption, and broader daemon lifecycle status commands.
+DeepSeekCode still needs native push/SSE streaming polish, forced cross-process
+worker interruption, and broader daemon lifecycle status commands.
