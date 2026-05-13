@@ -573,6 +573,7 @@ pub enum TuiMcpDetailKind {
     Theme,
     StatusLine,
     Verbose,
+    Context,
     Rollback,
     Reasoning,
     ComposerStash,
@@ -606,6 +607,7 @@ impl TuiMcpDetailKind {
             Self::Theme => "theme",
             Self::StatusLine => "statusline",
             Self::Verbose => "verbose",
+            Self::Context => "context",
             Self::Rollback => "rollback",
             Self::Reasoning => "reasoning",
             Self::ComposerStash => "stash",
@@ -639,6 +641,7 @@ impl TuiMcpDetailKind {
             Self::Theme => "Theme",
             Self::StatusLine => "Statusline",
             Self::Verbose => "Verbose Transcript",
+            Self::Context => "Context",
             Self::Rollback => "Rollback",
             Self::Reasoning => "Reasoning",
             Self::ComposerStash => "Composer Stash",
@@ -672,6 +675,7 @@ impl TuiMcpDetailKind {
             Self::Theme => Self::Manager,
             Self::StatusLine => Self::Manager,
             Self::Verbose => Self::Manager,
+            Self::Context => Self::Manager,
             Self::Rollback => Self::Manager,
             Self::Reasoning => Self::Manager,
             Self::ComposerStash => Self::Manager,
@@ -705,6 +709,7 @@ impl TuiMcpDetailKind {
             Self::Theme => Self::Manager,
             Self::StatusLine => Self::Manager,
             Self::Verbose => Self::Manager,
+            Self::Context => Self::Manager,
             Self::Rollback => Self::Manager,
             Self::Reasoning => Self::Manager,
             Self::ComposerStash => Self::Manager,
@@ -1005,6 +1010,19 @@ fn parse_tui_verbose_command(line: &str) -> Option<Result<TuiVerboseCommand, Str
         _ => Some(Err(
             "usage: verbose [on|off|toggle|show] or /verbose [on|off|toggle|show]".to_string(),
         )),
+    }
+}
+
+fn parse_tui_context_command(line: &str) -> Option<Result<(), String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/context")
+        .or_else(|| strip_tui_command_prefix(trimmed, "context"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "/ctx"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "ctx"))?;
+    let args = rest.split_whitespace().collect::<Vec<_>>();
+    match args.as_slice() {
+        [] | ["show" | "inspect" | "help" | "--help" | "-h"] => Some(Ok(())),
+        _ => Some(Err("usage: context, ctx, /context, or /ctx".to_string())),
     }
 }
 
@@ -1564,6 +1582,13 @@ const TUI_HELP_COMMANDS: &[TuiHelpCommandInfo] = &[
     },
     TuiHelpCommandInfo {
         category: "Runtime",
+        name: "context",
+        aliases: &["ctx"],
+        usage: "/context",
+        description: "Inspect active-thread context window and compaction state.",
+    },
+    TuiHelpCommandInfo {
+        category: "Runtime",
         name: "cost",
         aliases: &[],
         usage: "/cost",
@@ -1778,6 +1803,8 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "verbose off",
     "verbose show",
     "tokens",
+    "context",
+    "ctx",
     "cost",
     "cache",
     "cache inspect",
@@ -1913,6 +1940,8 @@ const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
     "/verbose off",
     "/verbose show",
     "/tokens",
+    "/context",
+    "/ctx",
     "/cost",
     "/cache",
     "/cache inspect",
@@ -4213,6 +4242,19 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(command) = parse_tui_context_command(&content) {
+                    match command {
+                        Ok(()) => {
+                            self.show_context_detail();
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some(command) = parse_tui_tokens_command(&content) {
                     match command {
                         Ok(()) => {
@@ -4684,6 +4726,17 @@ impl TuiApp {
             match command {
                 Ok(command) => {
                     self.handle_verbose_command(command);
+                }
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_context_command(command) {
+            match command {
+                Ok(()) => {
+                    self.show_context_detail();
                 }
                 Err(message) => {
                     self.status = message;
@@ -6350,6 +6403,151 @@ impl TuiApp {
         let detail = self.render_statusline_detail();
         self.set_mcp_detail(TuiMcpDetailKind::StatusLine, detail);
         self.status = "statusline shown".to_string();
+    }
+
+    fn show_context_detail(&mut self) {
+        let detail = self.render_context_detail();
+        self.set_mcp_detail(TuiMcpDetailKind::Context, detail);
+        self.status = "context inspector shown".to_string();
+    }
+
+    fn render_context_detail(&self) -> String {
+        let mut detail = String::new();
+        let _ = writeln!(detail, "DeepSeekCode Context");
+        let _ = writeln!(detail, "====================");
+        let _ = writeln!(detail);
+        push_status_row(&mut detail, "Mode:", self.mode.title());
+        push_status_row(
+            &mut detail,
+            "Verbose transcript:",
+            if self.verbose_transcript { "on" } else { "off" },
+        );
+        match self.active_thread() {
+            Some(thread) => {
+                push_status_row(
+                    &mut detail,
+                    "Thread:",
+                    &format!("{} [{}]", thread.title, thread.status),
+                );
+                push_status_row(&mut detail, "Thread id:", &thread.id);
+                push_status_row(
+                    &mut detail,
+                    "Latest turn:",
+                    thread.latest_turn_id.as_deref().unwrap_or("none"),
+                );
+                push_status_row(&mut detail, "Event seq:", &thread.event_seq.to_string());
+            }
+            None => {
+                push_status_row(&mut detail, "Thread:", "none selected");
+            }
+        }
+
+        let items = self.active_thread_items();
+        push_status_row(
+            &mut detail,
+            "Transcript:",
+            &format!(
+                "{} item(s), {} display line(s)",
+                items.len(),
+                self.transcript.len()
+            ),
+        );
+        if !items.is_empty() {
+            push_status_row(
+                &mut detail,
+                "Item states:",
+                &summarize_status_counts(items.iter().map(|item| item.status.as_str())),
+            );
+            push_status_row(
+                &mut detail,
+                "Item types:",
+                &summarize_status_counts(items.iter().map(|item| item.item_type.as_str())),
+            );
+        }
+        push_status_row(
+            &mut detail,
+            "Reasoning replay:",
+            &format!(
+                "latest {} item(s), {} pinned turn(s)",
+                self.reasoning_replay_limit,
+                self.reasoning_replay_pinned_turn_ids.len()
+            ),
+        );
+        let _ = writeln!(detail);
+
+        match self.active_usage_summary() {
+            Some(summary) => {
+                push_status_row(
+                    &mut detail,
+                    "Usage records:",
+                    &summary.record_count.to_string(),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Context window:",
+                    &format_context_usage(summary),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Remaining:",
+                    &summary.context_remaining_tokens.to_string(),
+                );
+                push_status_row(&mut detail, "Strategy:", &summary.context_strategy);
+                push_status_row(
+                    &mut detail,
+                    "Latest tokens:",
+                    &format!(
+                        "{} prompt / {} output / {} total",
+                        summary.latest_prompt_tokens,
+                        summary.latest_completion_tokens,
+                        summary.latest_total_tokens
+                    ),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Total tokens:",
+                    &format!(
+                        "{} prompt / {} output / {} total",
+                        summary.prompt_tokens, summary.completion_tokens, summary.total_tokens
+                    ),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Cache hit/miss:",
+                    &format!(
+                        "{} / {} ({})",
+                        summary.prompt_cache_hit_tokens,
+                        summary.prompt_cache_miss_tokens,
+                        format_cache_hit_rate(
+                            summary.prompt_cache_hit_tokens,
+                            summary.prompt_cache_miss_tokens
+                        )
+                    ),
+                );
+            }
+            None => {
+                push_status_row(&mut detail, "Usage:", "no active-thread usage records");
+                push_status_row(
+                    &mut detail,
+                    "Context window:",
+                    &format!(
+                        "{} token nominal DeepSeek context",
+                        TUI_CONTEXT_WINDOW_TOKENS
+                    ),
+                );
+            }
+        }
+
+        let _ = writeln!(detail);
+        let _ = writeln!(detail, "Related Commands");
+        let _ = writeln!(detail, "----------------");
+        let _ = writeln!(detail, "- /tokens      Token and cache telemetry");
+        let _ = writeln!(detail, "- /cache       Prompt-cache history and inspection");
+        let _ = writeln!(detail, "- /compact     Compact active thread context");
+        let _ = writeln!(detail, "- /reasoning   Inspect persisted reasoning items");
+        let _ = writeln!(detail);
+        let _ = writeln!(detail, "Aliases: context, ctx");
+        detail
     }
 
     fn handle_verbose_command(&mut self, command: TuiVerboseCommand) {
@@ -10496,6 +10694,91 @@ mod tests {
             .transcript
             .iter()
             .any(|line| line.contains("UNIQUE_VERBOSE_SUFFIX")));
+    }
+
+    #[test]
+    fn context_command_renders_active_context_inspector() {
+        let mut app = TuiApp::with_runtime_usage_and_approvals(
+            vec![TuiSession {
+                id: "session-one".to_string(),
+                title: "One".to_string(),
+                workspace: ".".to_string(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-one".to_string()),
+                thread_count: 1,
+            }],
+            vec![TuiThread {
+                id: "thread-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                title: "First thread".to_string(),
+                mode: "agent".to_string(),
+                status: "active".to_string(),
+                latest_turn_id: Some("turn-one".to_string()),
+                event_seq: 7,
+            }],
+            vec![
+                TuiItem {
+                    id: "item-one".to_string(),
+                    thread_id: "thread-one".to_string(),
+                    turn_id: Some("turn-one".to_string()),
+                    index: 1,
+                    item_type: "message".to_string(),
+                    role: Some("assistant".to_string()),
+                    content: "answer".to_string(),
+                    status: "completed".to_string(),
+                },
+                TuiItem {
+                    id: "reasoning-one".to_string(),
+                    thread_id: "thread-one".to_string(),
+                    turn_id: Some("turn-one".to_string()),
+                    index: 2,
+                    item_type: "reasoning".to_string(),
+                    role: Some("assistant".to_string()),
+                    content: "hidden planning".to_string(),
+                    status: "completed".to_string(),
+                },
+            ],
+            vec![TuiUsageSummary {
+                thread_id: "thread-one".to_string(),
+                record_count: 2,
+                prompt_tokens: 800,
+                completion_tokens: 200,
+                total_tokens: 1000,
+                latest_prompt_tokens: 500,
+                latest_completion_tokens: 125,
+                latest_total_tokens: 625,
+                prompt_cache_hit_tokens: 300,
+                prompt_cache_miss_tokens: 200,
+                estimated_input_cost_microusd: Some(100),
+                estimated_output_cost_microusd: Some(200),
+                estimated_total_cost_microusd: Some(300),
+                context_remaining_tokens: TUI_CONTEXT_WINDOW_TOKENS - 625,
+                context_strategy: "normal".to_string(),
+            }],
+            Vec::new(),
+        );
+
+        run_palette_command(&mut app, "context");
+
+        assert_eq!(app.status, "context inspector shown");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("context detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Context);
+        assert!(detail.contains("DeepSeekCode Context"));
+        assert!(detail.contains("Context window:"));
+        assert!(detail.contains("Latest tokens:"));
+        assert!(detail.contains("Cache hit/miss:"));
+        assert!(detail.contains("Reasoning replay:"));
+
+        app.composer_focused = true;
+        app.composer = "/ctx".to_string();
+        app.composer_cursor = app.composer.len();
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert_eq!(app.status, "context inspector shown");
+        assert_eq!(app.composer, "");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("ctx detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Context);
+        assert!(detail.contains("Aliases: context, ctx"));
     }
 
     #[test]
