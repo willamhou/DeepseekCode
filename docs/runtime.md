@@ -894,9 +894,13 @@ the agent loop in the thread workspace, appends user/assistant turns, tool
 result items, usage, and final task status to the same durable thread, and
 creates a pre-run rollback snapshot when possible. For background execution,
 `deepseek agents daemon [--interval-ms 1000] [--budget N]` polls the same
-runtime store, triggers due active automations, executes one thread-linked
-pending task per tick, and performs non-destructive compaction for threads whose
-latest usage record crosses the 800k-token warning threshold. When the
+runtime store, triggers due active automations, executes one queued live
+`rlm_process` turn through the live RLM worker path, executes one non-RLM
+thread-linked pending task per tick, and performs non-destructive compaction for
+threads whose latest usage record crosses the 800k-token warning threshold.
+Daemon JSON ticks include `executed_rlm_turns` and `failed_rlm_turns`; generic
+task execution intentionally skips `kind=rlm_process` so live RLM turns cannot
+bypass their payload, manifest, and event-log state machine. When the
 configured model API key environment variable is present, daemon compaction asks
 the model for a concise older-context summary and records
 `summary_source = "model"`; if the key is absent or summary generation fails, it
@@ -1433,9 +1437,11 @@ claims the oldest queued payload, writes `turn_started`, runs the bounded child
 model flow, then records `turn_completed` or `turn_failed`; `dry_run=true`
 renders the selected payload without claiming it. `rlm_process_drain` repeats
 that single-step worker path for up to `max_turns` queued payloads in FIFO
-order, with `dry_run=true` for a non-mutating batch preview. Constant background
-service packaging, model delta streaming, active worker cancellation, and stale
-daemon pid ownership checks remain future work.
+order, with `dry_run=true` for a non-mutating batch preview. The existing
+`deepseek agents daemon` service loop now runs one queued live RLM turn per tick
+through the same worker path. Model delta streaming, active worker cancellation,
+stale daemon pid ownership checks, and explicit RLM daemon lifecycle commands
+remain future work.
 `rlm_process_events session_id=<id> cursor=<seq>` replays parsed
 `.dscode/rlm-daemon/<session_id>/events.jsonl` records with `seq` greater than
 the cursor and returns `next_cursor` for clients that want deterministic live

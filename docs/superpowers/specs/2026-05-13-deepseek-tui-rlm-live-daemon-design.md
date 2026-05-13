@@ -185,6 +185,10 @@ resumption.
      `turn_recovered`; stale pid ownership checks remain open
 6. Service packaging:
    - systemd/launchd templates for RLM daemon alongside runtime and diagnostics
+   - status: partial; `deepseek agents daemon` now runs one queued live RLM
+     turn per tick through `rlm_process_run_next`, and the existing
+     systemd/launchd templates already run that daemon; explicit RLM daemon
+     lifecycle commands remain open
 
 ## Verification Plan
 
@@ -195,6 +199,7 @@ Future implementation should add these gates:
 - `cargo test rlm_process_live_session_only_continuation --lib`
 - `cargo test rlm_process_live_cancel_marks_active_turn --lib`
 - `cargo test rlm_live_daemon_recovery_marks_interrupted_turn --lib`
+- `cargo test runtime_daemon_tick_routes_live_rlm_turns_through_rlm_worker --lib`
 - `cargo test serve --lib`
 - `cargo fmt --check`
 - `cargo check`
@@ -205,5 +210,5 @@ Future implementation should add these gates:
 Do not rename the existing bounded child-agent `rlm_process` implementation as a
 live daemon. It is already useful and should remain the default until a real
 live worker exists. The remaining executable RLM slices should focus on
-resident service-loop packaging, streaming model/tool deltas, active worker
-cancellation, and stale daemon pid detection.
+streaming model/tool deltas, active worker cancellation, stale daemon pid
+detection, and explicit lifecycle commands.

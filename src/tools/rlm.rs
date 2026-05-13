@@ -3522,6 +3522,24 @@ fn list_rlm_live_session_manifest_entries(config: &AppConfig) -> AppResult<Vec<(
     Ok(entries)
 }
 
+pub(crate) fn rlm_live_session_ids_by_runtime_thread(
+    config: &AppConfig,
+) -> AppResult<BTreeMap<String, String>> {
+    let mut sessions = BTreeMap::new();
+    for (session_id, path) in list_rlm_live_session_manifest_entries(config)? {
+        let Ok(manifest) = read_rlm_live_session_manifest(&path, &session_id) else {
+            continue;
+        };
+        let Some(runtime_thread_id) =
+            rlm_live_manifest_string_field(&manifest, "runtime_thread_id")
+        else {
+            continue;
+        };
+        sessions.insert(runtime_thread_id, session_id);
+    }
+    Ok(sessions)
+}
+
 fn rlm_live_session_event_log_path(config: &AppConfig, session_id: &str) -> PathBuf {
     rlm_live_sessions_dir(config)
         .join(session_id)
