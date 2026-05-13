@@ -1363,7 +1363,9 @@ with initial geometry, best-effort resize, detached logs, and FIFO stdin, not a
 full shell supervisor with owner-process-independent terminal takeover.
 `exec_shell_cancel cwd=<path> task_id=<id>` can best-effort cancel a detached
 `running` record by its persisted pid/process group and then update the durable
-manifest to `killed`.
+manifest to `killed`. `exec_shell_cancel cwd=<path> all=true` cancels both
+current-process managed jobs and detached durable `running` records in the same
+workspace.
 `exec_shell_replay cwd=<path> task_id=<id>` replays durable stdout/stderr log
 slices by byte `offset`, `limit_bytes`, and `tail=true`, returning
 `next_offset` for clients that want deterministic shell-log replay without

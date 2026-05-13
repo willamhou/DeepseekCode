@@ -251,6 +251,8 @@ Landed first slice:
   background job table and returns `meta.backgrounded=true` plus a `task_id`
   when the command is still running, approximating DeepSeek-TUI's
   foreground-to-background shell control for non-interactive API/model calls;
+  `exec_shell_cancel all=true` now cancels current-process shell jobs and
+  detached durable `running` records in the same workspace;
   manifests now keep stable child pid, process-group, and owner-pid metadata so
   detached snapshots can report owner liveness separately from child status
 - richer structured data validation

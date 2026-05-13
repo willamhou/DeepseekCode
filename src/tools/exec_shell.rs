@@ -437,17 +437,13 @@ impl Tool for ExecShellCancelTool {
 
     fn execute(&self, input: ToolInput) -> AppResult<ToolOutput> {
         if truthy(input.get("all")) {
-            let cancelled = shell_manager().lock().unwrap().cancel_all()?;
+            let cwd = input.get("cwd").unwrap_or(".");
+            let report = cancel_all_shell_jobs(cwd)?;
             return Ok(ToolOutput {
-                summary: if cancelled.is_empty() {
+                summary: if report.is_empty() {
                     "No running background shell jobs.".to_string()
                 } else {
-                    format!(
-                        "Canceled {} background shell job{}: {}",
-                        cancelled.len(),
-                        if cancelled.len() == 1 { "" } else { "s" },
-                        cancelled.join(", ")
-                    )
+                    report.render_summary()
                 },
             });
         }
@@ -465,6 +461,56 @@ impl Tool for ExecShellCancelTool {
             summary: format!("Canceled background shell job: {task_id}"),
         })
     }
+}
+
+#[derive(Default)]
+struct ShellCancelAllReport {
+    managed: Vec<String>,
+    detached: Vec<String>,
+    failures: Vec<String>,
+}
+
+impl ShellCancelAllReport {
+    fn is_empty(&self) -> bool {
+        self.managed.is_empty() && self.detached.is_empty() && self.failures.is_empty()
+    }
+
+    fn render_summary(&self) -> String {
+        let total = self.managed.len() + self.detached.len();
+        let mut lines = vec![format!(
+            "Canceled {total} background shell job{}.",
+            if total == 1 { "" } else { "s" }
+        )];
+        if !self.managed.is_empty() {
+            lines.push(format!("managed: {}", self.managed.join(", ")));
+        }
+        if !self.detached.is_empty() {
+            lines.push(format!("detached: {}", self.detached.join(", ")));
+        }
+        if !self.failures.is_empty() {
+            lines.push(format!("failures: {}", self.failures.join("; ")));
+        }
+        lines.join("\n")
+    }
+}
+
+fn cancel_all_shell_jobs(cwd: &str) -> AppResult<ShellCancelAllReport> {
+    let managed = shell_manager().lock().unwrap().cancel_all_in_cwd(cwd)?;
+    let mut report = ShellCancelAllReport {
+        managed,
+        ..ShellCancelAllReport::default()
+    };
+    let durable = list_durable_shell_jobs(cwd)?;
+    for record in durable {
+        if record.status != "running" || report.managed.iter().any(|id| id == &record.id) {
+            continue;
+        }
+        match cancel_detached_shell_job(cwd, &record.id) {
+            Ok(_) => report.detached.push(record.id),
+            Err(error) => report.failures.push(format!("{}: {error}", record.id)),
+        }
+    }
+    Ok(report)
 }
 
 struct BackgroundShellManager {
@@ -869,12 +915,12 @@ impl BackgroundShellManager {
         Ok(())
     }
 
-    fn cancel_all(&mut self) -> AppResult<Vec<String>> {
+    fn cancel_all_in_cwd(&mut self, cwd: &str) -> AppResult<Vec<String>> {
         let ids = self
             .jobs
             .iter()
             .filter_map(|(id, job)| {
-                if job.status == ShellJobStatus::Running {
+                if job.status == ShellJobStatus::Running && job.cwd == cwd {
                     Some(id.clone())
                 } else {
                     None
@@ -3494,6 +3540,105 @@ mod tests {
             "{}",
             shown.summary
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exec_shell_cancel_all_kills_running_detached_durable_jobs() {
+        let root = temp_root("detached-cancel-all");
+        fs::create_dir_all(&root).unwrap();
+        let cwd = root.display().to_string();
+
+        let mut children = Vec::new();
+        let mut task_ids = Vec::new();
+        for index in 0..2 {
+            let mut process = Command::new("sh");
+            process
+                .args(["-lc", "sleep 30"])
+                .current_dir(&root)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            configure_process_group(&mut process);
+            let child = process.spawn().unwrap();
+            let task_id = generated_job_id();
+            let record_dir = shell_job_record_dir(&cwd, &task_id);
+            fs::create_dir_all(&record_dir).unwrap();
+            fs::write(record_dir.join("stdout.log"), []).unwrap();
+            fs::write(record_dir.join("stderr.log"), []).unwrap();
+            let record = DurableShellJobRecord {
+                id: task_id.clone(),
+                command: format!("sleep 30 #{index}"),
+                cwd: cwd.clone(),
+                tty: false,
+                pty_backend: None,
+                tty_size: None,
+                status: "running".to_string(),
+                exit_code: None,
+                pid: child.id(),
+                owner_pid: Some(999_998),
+                process_group: Some(child.id()),
+                supervisor_pid: None,
+                supervisor_socket: None,
+                supervisor_epoch: None,
+                terminal_event_log: None,
+                terminal_event_seq: None,
+                control_token_hash: None,
+                attachable: false,
+                resizable: false,
+                stdin_path: None,
+                stdin_keeper_pid: None,
+                stdin_closed: true,
+                started_at: epoch_label(),
+                updated_at: epoch_label(),
+                stdout_total_bytes: 0,
+                stderr_total_bytes: 0,
+            };
+            write_durable_shell_job_manifest(&cwd, &record).unwrap();
+            task_ids.push(task_id);
+            children.push(child);
+        }
+
+        let cancelled = ExecShellCancelTool
+            .execute(
+                ToolInput::new()
+                    .with_arg("all", "true")
+                    .with_arg("cwd", cwd.clone()),
+            )
+            .unwrap();
+        assert!(
+            cancelled
+                .summary
+                .contains("Canceled 2 background shell jobs."),
+            "{}",
+            cancelled.summary
+        );
+        assert!(
+            cancelled.summary.contains("detached:"),
+            "{}",
+            cancelled.summary
+        );
+
+        for mut child in children {
+            let status = child.wait().unwrap();
+            assert!(!status.success());
+        }
+        for task_id in task_ids {
+            let shown = ExecShellShowTool
+                .execute(
+                    ToolInput::new()
+                        .with_arg("task_id", task_id)
+                        .with_arg("cwd", cwd.clone()),
+                )
+                .unwrap();
+            assert!(
+                shown.summary.contains("status: killed"),
+                "{}",
+                shown.summary
+            );
+        }
+
         let _ = fs::remove_dir_all(root);
     }
 
