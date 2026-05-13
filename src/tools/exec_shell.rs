@@ -6,12 +6,12 @@ use crate::util::json::{
 };
 use std::collections::BTreeMap;
 use std::error::Error;
-use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -235,7 +235,15 @@ impl Tool for ExecShellInteractTool {
             let mut manager = shell_manager().lock().unwrap();
             if !manager.contains(task_id) {
                 drop(manager);
-                return Err(detached_or_unknown_shell_task_error(cwd, task_id, "stdin"));
+                return Ok(ToolOutput {
+                    summary: interact_detached_shell_job(
+                        cwd,
+                        task_id,
+                        data,
+                        close_stdin,
+                        timeout_ms,
+                    )?,
+                });
             }
             manager.write_stdin(task_id, data, close_stdin)?;
         }
@@ -297,18 +305,38 @@ struct BackgroundShellJob {
     command: String,
     cwd: String,
     child: Option<Child>,
-    stdin: Option<ChildStdin>,
-    stdout: Arc<Mutex<Vec<u8>>>,
-    stderr: Arc<Mutex<Vec<u8>>>,
+    stdin: Option<ShellStdinControl>,
     stdout_cursor: usize,
     stderr_cursor: usize,
-    stdout_reader: Option<thread::JoinHandle<std::io::Result<()>>>,
-    stderr_reader: Option<thread::JoinHandle<std::io::Result<()>>>,
     status: ShellJobStatus,
     exit_code: Option<i32>,
     started_at: String,
     updated_at: String,
     record_dir: PathBuf,
+}
+
+enum ShellStdinControl {
+    Pipe(ChildStdin),
+    Fifo {
+        path: PathBuf,
+        keeper: Option<Child>,
+        closed: bool,
+    },
+}
+
+struct PreparedBackgroundStdin {
+    stdio: Stdio,
+    mode: PreparedBackgroundStdinMode,
+}
+
+#[allow(dead_code)]
+enum PreparedBackgroundStdinMode {
+    Pipe,
+    #[cfg(unix)]
+    Fifo {
+        path: PathBuf,
+        hold: File,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -324,40 +352,31 @@ impl BackgroundShellManager {
         let id = generated_job_id();
         let record_dir = shell_job_record_dir(cwd, &id);
         fs::create_dir_all(&record_dir)?;
+        let stdout_file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(record_dir.join("stdout.log"))?;
+        let stderr_file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(record_dir.join("stderr.log"))?;
+        let PreparedBackgroundStdin {
+            stdio: stdin_stdio,
+            mode: stdin_mode,
+        } = prepare_background_stdin(&record_dir)?;
         let mut process = Command::new("sh");
         process
             .args(["-lc", command])
             .current_dir(cwd)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stdin(stdin_stdio)
+            .stdout(Stdio::from(stdout_file))
+            .stderr(Stdio::from(stderr_file));
         configure_process_group(&mut process);
         let mut child = process.spawn()?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| app_error("exec_shell child produced no stdout pipe"))?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| app_error("exec_shell child produced no stderr pipe"))?;
-        let stdout_buffer = Arc::new(Mutex::new(Vec::new()));
-        let stderr_buffer = Arc::new(Mutex::new(Vec::new()));
-        let stdout_reader = spawn_reader(
-            stdout,
-            stdout_buffer.clone(),
-            Some(record_dir.join("stdout.log")),
-        );
-        let stderr_reader = spawn_reader(
-            stderr,
-            stderr_buffer.clone(),
-            Some(record_dir.join("stderr.log")),
-        );
-        let mut stdin = child.stdin.take();
+        let mut stdin = stdin_mode.into_control(&mut child)?;
         if let Some(data) = stdin_data {
-            if let Some(handle) = stdin.as_mut() {
-                handle.write_all(data.as_bytes())?;
-                handle.flush()?;
+            if let Some(control) = stdin.as_mut() {
+                write_background_stdin_control(control, data)?;
             }
         }
 
@@ -370,12 +389,8 @@ impl BackgroundShellManager {
                 cwd: cwd.to_string(),
                 child: Some(child),
                 stdin,
-                stdout: stdout_buffer,
-                stderr: stderr_buffer,
                 stdout_cursor: 0,
                 stderr_cursor: 0,
-                stdout_reader: Some(stdout_reader),
-                stderr_reader: Some(stderr_reader),
                 status: ShellJobStatus::Running,
                 exit_code: None,
                 started_at: now.clone(),
@@ -408,9 +423,7 @@ impl BackgroundShellManager {
                 ShellJobStatus::Failed
             };
             job.child = None;
-            job.stdin = None;
-            join_reader(job.stdout_reader.take(), "stdout")?;
-            join_reader(job.stderr_reader.take(), "stderr")?;
+            close_background_stdin_control(job.stdin.take());
             job.updated_at = epoch_label();
             persist_job_snapshot(job)?;
         }
@@ -449,8 +462,8 @@ impl BackgroundShellManager {
             durable.len()
         )];
         for job in self.jobs.values() {
-            let stdout_total = job.stdout.lock().unwrap().len();
-            let stderr_total = job.stderr.lock().unwrap().len();
+            let stdout_total = durable_log_bytes(&job.record_dir, "stdout.log", 0);
+            let stderr_total = durable_log_bytes(&job.record_dir, "stderr.log", 0);
             lines.push(format!(
                 "- {} [{}] exit={} stdout={} stderr={} cwd={}",
                 job.id,
@@ -494,10 +507,10 @@ impl BackgroundShellManager {
             .jobs
             .get_mut(task_id)
             .ok_or_else(|| app_error(format!("unknown background shell task: {task_id}")))?;
-        let stdout_delta = read_delta(&job.stdout, &mut job.stdout_cursor)?;
-        let stderr_delta = read_delta(&job.stderr, &mut job.stderr_cursor)?;
-        let stdout_total = job.stdout.lock().unwrap().len();
-        let stderr_total = job.stderr.lock().unwrap().len();
+        let stdout_delta = read_log_delta(&job.record_dir, "stdout.log", &mut job.stdout_cursor);
+        let stderr_delta = read_log_delta(&job.record_dir, "stderr.log", &mut job.stderr_cursor);
+        let stdout_total = durable_log_bytes(&job.record_dir, "stdout.log", 0);
+        let stderr_total = durable_log_bytes(&job.record_dir, "stderr.log", 0);
         let mut out = format!(
             "task_id: {}\nstatus: {}\nexit_code: {}\ncommand: {}\ncwd: {}\nstdout_total_bytes: {stdout_total}\nstderr_total_bytes: {stderr_total}\n",
             job.id,
@@ -528,8 +541,8 @@ impl BackgroundShellManager {
             .jobs
             .get(task_id)
             .ok_or_else(|| app_error(format!("unknown background shell task: {task_id}")))?;
-        let stdout = String::from_utf8_lossy(&job.stdout.lock().unwrap()).to_string();
-        let stderr = String::from_utf8_lossy(&job.stderr.lock().unwrap()).to_string();
+        let stdout = read_durable_log(&job.record_dir, "stdout.log");
+        let stderr = read_durable_log(&job.record_dir, "stderr.log");
         let stdout_total = stdout.len();
         let stderr_total = stderr.len();
         let mut out = format!(
@@ -567,17 +580,16 @@ impl BackgroundShellManager {
                 job.status.as_str()
             )));
         }
-        let Some(stdin) = job.stdin.as_mut() else {
+        let Some(control) = job.stdin.as_mut() else {
             return Err(app_error(format!(
                 "stdin is not available for background shell task {task_id}"
             )));
         };
         if !data.is_empty() {
-            stdin.write_all(data.as_bytes())?;
-            stdin.flush()?;
+            write_background_stdin_control(control, data)?;
         }
         if close_stdin {
-            job.stdin = None;
+            close_background_stdin_control(job.stdin.take());
         }
         job.updated_at = epoch_label();
         persist_job_snapshot(job)?;
@@ -594,10 +606,8 @@ impl BackgroundShellManager {
             let _ = child.wait();
         }
         job.child = None;
-        job.stdin = None;
+        close_background_stdin_control(job.stdin.take());
         job.status = ShellJobStatus::Killed;
-        join_reader(job.stdout_reader.take(), "stdout")?;
-        join_reader(job.stderr_reader.take(), "stderr")?;
         job.updated_at = epoch_label();
         persist_job_snapshot(job)?;
         Ok(())
@@ -643,6 +653,107 @@ impl ShellJobStatus {
 
 fn shell_manager() -> &'static Mutex<BackgroundShellManager> {
     SHELL_JOBS.get_or_init(|| Mutex::new(BackgroundShellManager::default()))
+}
+
+fn prepare_background_stdin(record_dir: &Path) -> AppResult<PreparedBackgroundStdin> {
+    #[cfg(unix)]
+    {
+        let path = record_dir.join("stdin.fifo");
+        create_fifo(&path)?;
+        let hold = OpenOptions::new().read(true).write(true).open(&path)?;
+        let child_read = OpenOptions::new().read(true).open(&path)?;
+        Ok(PreparedBackgroundStdin {
+            stdio: Stdio::from(child_read),
+            mode: PreparedBackgroundStdinMode::Fifo { path, hold },
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = record_dir;
+        Ok(PreparedBackgroundStdin {
+            stdio: Stdio::piped(),
+            mode: PreparedBackgroundStdinMode::Pipe,
+        })
+    }
+}
+
+impl PreparedBackgroundStdinMode {
+    fn into_control(self, child: &mut Child) -> AppResult<Option<ShellStdinControl>> {
+        match self {
+            PreparedBackgroundStdinMode::Pipe => {
+                Ok(child.stdin.take().map(ShellStdinControl::Pipe))
+            }
+            #[cfg(unix)]
+            PreparedBackgroundStdinMode::Fifo { path, hold } => {
+                let writer = OpenOptions::new().write(true).open(&path)?;
+                let mut keeper = Command::new("sleep");
+                keeper
+                    .arg("2147483647")
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::from(writer))
+                    .stderr(Stdio::null());
+                configure_process_group_id(&mut keeper, child.id());
+                let keeper = keeper.spawn()?;
+                drop(hold);
+                Ok(Some(ShellStdinControl::Fifo {
+                    path,
+                    keeper: Some(keeper),
+                    closed: false,
+                }))
+            }
+        }
+    }
+}
+
+fn write_background_stdin_control(control: &mut ShellStdinControl, data: &str) -> AppResult<()> {
+    match control {
+        ShellStdinControl::Pipe(stdin) => {
+            stdin.write_all(data.as_bytes())?;
+            stdin.flush()?;
+        }
+        ShellStdinControl::Fifo { path, closed, .. } => {
+            if *closed {
+                return Err(app_error("stdin is closed for background shell task"));
+            }
+            write_fifo_stdin(path, data)?;
+        }
+    }
+    Ok(())
+}
+
+fn close_background_stdin_control(control: Option<ShellStdinControl>) {
+    let Some(control) = control else {
+        return;
+    };
+    match control {
+        ShellStdinControl::Pipe(_) => {}
+        ShellStdinControl::Fifo {
+            keeper: Some(mut keeper),
+            ..
+        } => {
+            let _ = keeper.kill();
+            let _ = keeper.wait();
+        }
+        ShellStdinControl::Fifo { keeper: None, .. } => {}
+    }
+}
+
+fn shell_stdin_manifest_fields(control: &ShellStdinControl) -> (JsonValue, JsonValue, JsonValue) {
+    match control {
+        ShellStdinControl::Pipe(_) => (JsonValue::Null, JsonValue::Null, JsonValue::Bool(false)),
+        ShellStdinControl::Fifo {
+            path,
+            keeper,
+            closed,
+        } => (
+            JsonValue::String(path.display().to_string()),
+            keeper
+                .as_ref()
+                .map(|keeper| JsonValue::Number(keeper.id().to_string()))
+                .unwrap_or(JsonValue::Null),
+            JsonValue::Bool(*closed),
+        ),
+    }
 }
 
 fn required_task_id(input: &ToolInput) -> AppResult<&str> {
@@ -707,6 +818,9 @@ struct DurableShellJobRecord {
     status: String,
     exit_code: Option<i32>,
     pid: u32,
+    stdin_path: Option<String>,
+    stdin_keeper_pid: Option<u32>,
+    stdin_closed: bool,
     started_at: String,
     updated_at: String,
     stdout_total_bytes: usize,
@@ -735,6 +849,63 @@ fn detached_or_unknown_shell_task_error(cwd: &str, task_id: &str, action: &str) 
     }
 }
 
+fn interact_detached_shell_job(
+    cwd: &str,
+    task_id: &str,
+    data: &str,
+    close_stdin: bool,
+    timeout_ms: u64,
+) -> AppResult<String> {
+    let manifest = shell_job_manifest_path(cwd, task_id);
+    if !manifest.is_file() {
+        return Err(app_error(format!(
+            "unknown background shell task: {task_id}"
+        )));
+    }
+    let mut record = read_durable_shell_job_manifest(&manifest)?;
+    refresh_durable_running_status(cwd, &mut record)?;
+    if record.status != "running" {
+        return Err(app_error(format!(
+            "background shell task {task_id} is detached but is {}",
+            record.status
+        )));
+    }
+    let Some(stdin_path) = record.stdin_path.clone() else {
+        return Err(detached_or_unknown_shell_task_error(cwd, task_id, "stdin"));
+    };
+    if record.stdin_closed {
+        return Err(app_error(format!(
+            "stdin is closed for detached background shell task {task_id}"
+        )));
+    }
+    if !data.is_empty() {
+        write_fifo_stdin(Path::new(&stdin_path), data)?;
+    }
+    if close_stdin {
+        if let Some(keeper_pid) = record.stdin_keeper_pid {
+            kill_process(keeper_pid)?;
+        }
+        record.stdin_keeper_pid = None;
+        record.stdin_closed = true;
+        record.updated_at = epoch_label();
+        write_durable_shell_job_manifest(cwd, &record)?;
+    }
+
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    loop {
+        let mut current = read_durable_shell_job_manifest(&manifest)?;
+        refresh_durable_running_status(cwd, &mut current)?;
+        if current.status != "running" || Instant::now() >= deadline {
+            let snapshot = render_durable_snapshot(cwd, task_id)?;
+            return Ok(format!(
+                "meta.detached_stdin=true\nmeta.stdin_closed={}\n{}",
+                close_stdin, snapshot
+            ));
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
 fn cancel_detached_shell_job(cwd: &str, task_id: &str) -> AppResult<String> {
     let manifest = shell_job_manifest_path(cwd, task_id);
     if !manifest.is_file() {
@@ -756,20 +927,25 @@ fn cancel_detached_shell_job(cwd: &str, task_id: &str) -> AppResult<String> {
         )));
     }
     kill_detached_process_group(record.pid)?;
+    if let Some(keeper_pid) = record.stdin_keeper_pid {
+        let _ = kill_process(keeper_pid);
+    }
     record.status = "killed".to_string();
     record.exit_code = None;
+    record.stdin_closed = true;
+    record.stdin_keeper_pid = None;
     record.updated_at = epoch_label();
     write_durable_shell_job_manifest(cwd, &record)?;
     Ok(format!(
-        "Canceled detached background shell job: {task_id}\nmanaged: false\npid: {}\nstatus: killed\nnote: stdin remains unavailable for detached shell jobs.",
+        "Canceled detached background shell job: {task_id}\nmanaged: false\npid: {}\nstatus: killed",
         record.pid
     ))
 }
 
 fn persist_job_snapshot(job: &BackgroundShellJob) -> AppResult<()> {
     fs::create_dir_all(&job.record_dir)?;
-    let stdout_total = job.stdout.lock().unwrap().len();
-    let stderr_total = job.stderr.lock().unwrap().len();
+    let stdout_total = durable_log_bytes(&job.record_dir, "stdout.log", 0);
+    let stderr_total = durable_log_bytes(&job.record_dir, "stderr.log", 0);
     let exit_code = job
         .exit_code
         .map(|code| JsonValue::Number(code.to_string()))
@@ -779,6 +955,11 @@ fn persist_job_snapshot(job: &BackgroundShellJob) -> AppResult<()> {
         .as_ref()
         .map(Child::id)
         .unwrap_or_else(|| parse_pid_from_task_id(&job.id).unwrap_or(0));
+    let (stdin_path, stdin_keeper_pid, stdin_closed) = job
+        .stdin
+        .as_ref()
+        .map(shell_stdin_manifest_fields)
+        .unwrap_or((JsonValue::Null, JsonValue::Null, JsonValue::Bool(true)));
     let manifest = JsonValue::Object(BTreeMap::from([
         (
             "kind".to_string(),
@@ -796,6 +977,9 @@ fn persist_job_snapshot(job: &BackgroundShellJob) -> AppResult<()> {
         ),
         ("exit_code".to_string(), exit_code),
         ("pid".to_string(), JsonValue::Number(pid.to_string())),
+        ("stdin_path".to_string(), stdin_path),
+        ("stdin_keeper_pid".to_string(), stdin_keeper_pid),
+        ("stdin_closed".to_string(), stdin_closed),
         (
             "started_at".to_string(),
             JsonValue::String(job.started_at.clone()),
@@ -827,6 +1011,15 @@ fn write_durable_shell_job_manifest(cwd: &str, record: &DurableShellJobRecord) -
         .exit_code
         .map(|code| JsonValue::Number(code.to_string()))
         .unwrap_or(JsonValue::Null);
+    let stdin_path = record
+        .stdin_path
+        .as_ref()
+        .map(|value| JsonValue::String(value.clone()))
+        .unwrap_or(JsonValue::Null);
+    let stdin_keeper_pid = record
+        .stdin_keeper_pid
+        .map(|pid| JsonValue::Number(pid.to_string()))
+        .unwrap_or(JsonValue::Null);
     let stdout_total = durable_log_bytes(&record_dir, "stdout.log", record.stdout_total_bytes);
     let stderr_total = durable_log_bytes(&record_dir, "stderr.log", record.stderr_total_bytes);
     let manifest = JsonValue::Object(BTreeMap::from([
@@ -846,6 +1039,12 @@ fn write_durable_shell_job_manifest(cwd: &str, record: &DurableShellJobRecord) -
         ),
         ("exit_code".to_string(), exit_code),
         ("pid".to_string(), JsonValue::Number(record.pid.to_string())),
+        ("stdin_path".to_string(), stdin_path),
+        ("stdin_keeper_pid".to_string(), stdin_keeper_pid),
+        (
+            "stdin_closed".to_string(),
+            JsonValue::Bool(record.stdin_closed),
+        ),
         (
             "started_at".to_string(),
             JsonValue::String(record.started_at.clone()),
@@ -907,8 +1106,13 @@ fn render_durable_snapshot(cwd: &str, task_id: &str) -> AppResult<String> {
     let record_dir = shell_job_record_dir(cwd, task_id);
     let stdout = read_durable_log(&record_dir, "stdout.log");
     let stderr = read_durable_log(&record_dir, "stderr.log");
+    let stdin_control = if record.stdin_path.is_some() && !record.stdin_closed {
+        "detached_fifo"
+    } else {
+        "unavailable"
+    };
     let mut out = format!(
-        "task_id: {}\nstatus: {}\nmanaged: false\nexit_code: {}\npid: {}\ncommand: {}\ncwd: {}\nstarted_at: {}\nupdated_at: {}\nstdout_total_bytes: {}\nstderr_total_bytes: {}\nnote: durable metadata is available, but this process is not attached to the shell job for stdin/cancel control.\n",
+        "task_id: {}\nstatus: {}\nmanaged: false\nexit_code: {}\npid: {}\ncommand: {}\ncwd: {}\nstarted_at: {}\nupdated_at: {}\nstdout_total_bytes: {}\nstderr_total_bytes: {}\nstdin_control: {}\nnote: durable metadata and logs are available; detached cancel is best-effort and detached stdin is available only when stdin_control=detached_fifo.\n",
         record.id,
         record.status,
         record
@@ -921,7 +1125,8 @@ fn render_durable_snapshot(cwd: &str, task_id: &str) -> AppResult<String> {
         record.started_at,
         record.updated_at,
         record.stdout_total_bytes,
-        record.stderr_total_bytes
+        record.stderr_total_bytes,
+        stdin_control
     );
     if !stdout.trim().is_empty() {
         out.push_str("stdout:\n");
@@ -958,6 +1163,15 @@ fn read_durable_shell_job_manifest(path: &Path) -> AppResult<DurableShellJobReco
             Some(value) => json_as_u64(value).map(|value| value as i32),
         },
         pid: root.get("pid").and_then(json_as_u64).unwrap_or(0) as u32,
+        stdin_path: root
+            .get("stdin_path")
+            .and_then(json_as_string)
+            .map(str::to_string),
+        stdin_keeper_pid: root
+            .get("stdin_keeper_pid")
+            .and_then(json_as_u64)
+            .map(|pid| pid as u32),
+        stdin_closed: matches!(root.get("stdin_closed"), Some(JsonValue::Bool(true))),
         started_at: required_manifest_string(&root, "started_at")?,
         updated_at: required_manifest_string(&root, "updated_at")?,
         stdout_total_bytes: durable_log_bytes(record_dir, "stdout.log", manifest_stdout_total),
@@ -967,7 +1181,12 @@ fn read_durable_shell_job_manifest(path: &Path) -> AppResult<DurableShellJobReco
 
 fn refresh_durable_running_status(cwd: &str, record: &mut DurableShellJobRecord) -> AppResult<()> {
     if record.status == "running" && record.pid > 0 && !detached_process_is_alive(record.pid) {
+        if let Some(keeper_pid) = record.stdin_keeper_pid {
+            let _ = kill_process(keeper_pid);
+        }
         record.status = "exited".to_string();
+        record.stdin_closed = true;
+        record.stdin_keeper_pid = None;
         record.updated_at = epoch_label();
         write_durable_shell_job_manifest(cwd, record)?;
     }
@@ -987,10 +1206,49 @@ fn durable_log_bytes(record_dir: &Path, name: &str, fallback: usize) -> usize {
         .unwrap_or(fallback)
 }
 
+fn read_log_delta(record_dir: &Path, name: &str, cursor: &mut usize) -> String {
+    let bytes = fs::read(record_dir.join(name)).unwrap_or_default();
+    let start = (*cursor).min(bytes.len());
+    let delta = String::from_utf8_lossy(&bytes[start..]).to_string();
+    *cursor = bytes.len();
+    delta
+}
+
 fn read_durable_log(record_dir: &Path, name: &str) -> String {
     fs::read(record_dir.join(name))
         .map(|bytes| String::from_utf8_lossy(&bytes).to_string())
         .unwrap_or_default()
+}
+
+fn write_fifo_stdin(path: &Path, data: &str) -> AppResult<()> {
+    let mut writer = OpenOptions::new().write(true).open(path)?;
+    writer.write_all(data.as_bytes())?;
+    writer.flush()?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn create_fifo(path: &Path) -> AppResult<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    if path.exists() {
+        let _ = fs::remove_file(path);
+    }
+    let c_path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| app_error("exec_shell fifo path contains nul byte"))?;
+    unsafe extern "C" {
+        fn mkfifo(path: *const std::os::raw::c_char, mode: u32) -> i32;
+    }
+    let result = unsafe { mkfifo(c_path.as_ptr(), 0o600) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(app_error(format!(
+            "failed to create exec_shell stdin fifo: {}",
+            std::io::Error::last_os_error()
+        )))
+    }
 }
 
 fn parse_pid_from_task_id(task_id: &str) -> Option<u32> {
@@ -1002,57 +1260,6 @@ fn parse_pid_from_task_id(task_id: &str) -> Option<u32> {
         .ok()
 }
 
-fn spawn_reader<R: Read + Send + 'static>(
-    mut reader: R,
-    buffer: Arc<Mutex<Vec<u8>>>,
-    log_path: Option<PathBuf>,
-) -> thread::JoinHandle<std::io::Result<()>> {
-    thread::spawn(move || {
-        let mut log_file = match log_path {
-            Some(path) => Some(OpenOptions::new().create(true).append(true).open(path)?),
-            None => None,
-        };
-        let mut chunk = [0u8; 4096];
-        loop {
-            let read = reader.read(&mut chunk)?;
-            if read == 0 {
-                return Ok(());
-            }
-            buffer.lock().unwrap().extend_from_slice(&chunk[..read]);
-            if let Some(file) = log_file.as_mut() {
-                file.write_all(&chunk[..read])?;
-                file.flush()?;
-            }
-        }
-    })
-}
-
-fn join_reader(
-    handle: Option<thread::JoinHandle<std::io::Result<()>>>,
-    stream_name: &str,
-) -> AppResult<()> {
-    let Some(handle) = handle else {
-        return Ok(());
-    };
-    match handle.join() {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(error)) => Err(app_error(format!(
-            "failed to read exec_shell {stream_name}: {error}"
-        ))),
-        Err(_) => Err(app_error(format!(
-            "exec_shell {stream_name} reader panicked"
-        ))),
-    }
-}
-
-fn read_delta(buffer: &Arc<Mutex<Vec<u8>>>, cursor: &mut usize) -> AppResult<String> {
-    let guard = buffer.lock().unwrap();
-    let start = (*cursor).min(guard.len());
-    let delta = String::from_utf8_lossy(&guard[start..]).to_string();
-    *cursor = guard.len();
-    Ok(delta)
-}
-
 #[cfg(unix)]
 fn configure_process_group(process: &mut Command) {
     use std::os::unix::process::CommandExt;
@@ -1061,6 +1268,12 @@ fn configure_process_group(process: &mut Command) {
 
 #[cfg(not(unix))]
 fn configure_process_group(_process: &mut Command) {}
+
+#[cfg(unix)]
+fn configure_process_group_id(process: &mut Command, process_group: u32) {
+    use std::os::unix::process::CommandExt;
+    process.process_group(process_group as i32);
+}
 
 fn kill_child_process_group(child: &mut Child) {
     #[cfg(unix)]
@@ -1075,6 +1288,35 @@ fn kill_child_process_group(child: &mut Child) {
         }
     }
     let _ = child.kill();
+}
+
+fn kill_process(pid: u32) -> AppResult<()> {
+    if pid <= 1 || pid == std::process::id() {
+        return Err(app_error(format!(
+            "refusing to kill unsafe shell helper pid {pid}"
+        )));
+    }
+    #[cfg(unix)]
+    {
+        const SIGKILL: i32 = 9;
+        unsafe extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        let result = unsafe { kill(pid as i32, SIGKILL) };
+        if result == 0 {
+            return Ok(());
+        }
+        return Err(app_error(format!(
+            "failed to kill shell helper process {pid}: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    #[cfg(not(unix))]
+    {
+        Err(app_error(
+            "shell helper process control is not supported on this platform",
+        ))
+    }
 }
 
 fn kill_detached_process_group(pid: u32) -> AppResult<()> {
@@ -1117,6 +1359,10 @@ fn detached_process_is_alive(pid: u32) -> bool {
     }
     #[cfg(unix)]
     {
+        if detached_process_is_zombie(pid) {
+            reap_process_if_child(pid);
+            return false;
+        }
         unsafe extern "C" {
             fn kill(pid: i32, sig: i32) -> i32;
         }
@@ -1129,6 +1375,27 @@ fn detached_process_is_alive(pid: u32) -> bool {
     #[cfg(not(unix))]
     {
         true
+    }
+}
+
+#[cfg(unix)]
+fn detached_process_is_zombie(pid: u32) -> bool {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+    let Some(after_name) = stat.rsplit_once(") ") else {
+        return false;
+    };
+    after_name.1.starts_with("Z ")
+}
+
+#[cfg(unix)]
+fn reap_process_if_child(pid: u32) {
+    const WNOHANG: i32 = 1;
+    unsafe extern "C" {
+        fn waitpid(pid: i32, status: *mut i32, options: i32) -> i32;
+    }
+    let mut status = 0;
+    unsafe {
+        let _ = waitpid(pid as i32, &mut status, WNOHANG);
     }
 }
 
@@ -1318,10 +1585,7 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(stdin_error.contains("detached"), "{stdin_error}");
-        assert!(
-            stdin_error.contains("stdin control requires"),
-            "{stdin_error}"
-        );
+        assert!(stdin_error.contains("completed"), "{stdin_error}");
 
         let cancel_output = ExecShellCancelTool
             .execute(
@@ -1338,6 +1602,66 @@ mod tests {
             cancel_output.summary
         );
         assert!(cancel_output.summary.contains("status: completed"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exec_shell_interact_writes_detached_fifo_stdin() {
+        let root = temp_root("detached-stdin");
+        fs::create_dir_all(&root).unwrap();
+        let cwd = root.display().to_string();
+        let started = ExecShellTool
+            .execute(
+                ToolInput::new()
+                    .with_arg("command", "cat -")
+                    .with_arg("background", "true")
+                    .with_arg("cwd", cwd.clone()),
+            )
+            .unwrap();
+        let task_id = task_id_from(&started.summary);
+        shell_manager().lock().unwrap().jobs.remove(&task_id);
+
+        let interacted = ExecShellInteractTool {
+            tool_name: "exec_shell_interact",
+        }
+        .execute(
+            ToolInput::new()
+                .with_arg("task_id", task_id.clone())
+                .with_arg("cwd", cwd.clone())
+                .with_arg("input", "detached stdin\n")
+                .with_arg("close_stdin", "true")
+                .with_arg("timeout_ms", "1000"),
+        )
+        .unwrap();
+        assert!(
+            interacted.summary.contains("meta.detached_stdin=true"),
+            "{}",
+            interacted.summary
+        );
+        assert!(
+            interacted.summary.contains("detached stdin"),
+            "{}",
+            interacted.summary
+        );
+        assert!(
+            interacted.summary.contains("stdin_control: unavailable"),
+            "{}",
+            interacted.summary
+        );
+
+        let shown = ExecShellShowTool
+            .execute(
+                ToolInput::new()
+                    .with_arg("task_id", task_id)
+                    .with_arg("cwd", cwd.clone()),
+            )
+            .unwrap();
+        assert!(
+            shown.summary.contains("detached stdin"),
+            "{}",
+            shown.summary
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1369,6 +1693,9 @@ mod tests {
             status: "running".to_string(),
             exit_code: None,
             pid: child.id(),
+            stdin_path: None,
+            stdin_keeper_pid: None,
+            stdin_closed: true,
             started_at: epoch_label(),
             updated_at: epoch_label(),
             stdout_total_bytes: 0,
@@ -1428,6 +1755,9 @@ mod tests {
             status: "running".to_string(),
             exit_code: None,
             pid: 9_999_999,
+            stdin_path: None,
+            stdin_keeper_pid: None,
+            stdin_closed: true,
             started_at: epoch_label(),
             updated_at: epoch_label(),
             stdout_total_bytes: 0,

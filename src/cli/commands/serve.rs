@@ -3225,8 +3225,14 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
         ),
         mcp_tool_definition(
             "exec_shell_list",
-            "List in-process background shell jobs.",
-            mcp_schema(Vec::new(), &[]),
+            "List in-process and durable background shell jobs.",
+            mcp_schema(
+                vec![(
+                    "cwd",
+                    string_property("Working directory used to find detached durable records."),
+                )],
+                &[],
+            ),
         ),
         mcp_tool_definition(
             "exec_shell_show",
@@ -3235,6 +3241,10 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
                 vec![
                     ("task_id", string_property("Background shell task id.")),
                     ("id", string_property("Alias for task_id.")),
+                    (
+                        "cwd",
+                        string_property("Working directory used to find detached durable records."),
+                    ),
                 ],
                 &["task_id"],
             ),
@@ -3246,6 +3256,10 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
                 vec![
                     ("task_id", string_property("Background shell task id.")),
                     ("id", string_property("Alias for task_id.")),
+                    (
+                        "cwd",
+                        string_property("Working directory used to find detached durable records."),
+                    ),
                     ("wait", string_property("Set false to poll once.")),
                     ("timeout_ms", number_property("Maximum wait milliseconds.")),
                 ],
@@ -3259,6 +3273,10 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
                 vec![
                     ("task_id", string_property("Background shell task id.")),
                     ("id", string_property("Alias for task_id.")),
+                    (
+                        "cwd",
+                        string_property("Working directory used to find detached durable records."),
+                    ),
                     ("wait", string_property("Set false to poll once.")),
                     ("timeout_ms", number_property("Maximum wait milliseconds.")),
                 ],
@@ -3272,6 +3290,10 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
                 vec![
                     ("task_id", string_property("Background shell task id.")),
                     ("id", string_property("Alias for task_id.")),
+                    (
+                        "cwd",
+                        string_property("Working directory used to find detached durable records."),
+                    ),
                     ("wait", string_property("Set false to poll once.")),
                     ("timeout_ms", number_property("Maximum wait milliseconds.")),
                     ("gate", string_property("Optional gate label.")),
@@ -3403,11 +3425,15 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
         ));
         tools.push(mcp_tool_definition(
             "exec_shell_interact",
-            "Send stdin to a running background shell job. Requires trusted side effects or durable runtime approvals.",
+            "Send stdin to a running background shell job, including detached Unix FIFO-backed jobs when cwd is supplied. Requires trusted side effects or durable runtime approvals.",
             mcp_schema(
                 vec![
                     ("task_id", string_property("Background shell task id.")),
                     ("id", string_property("Alias for task_id.")),
+                    (
+                        "cwd",
+                        string_property("Working directory used to find detached durable records."),
+                    ),
                     ("input", string_property("Input to send.")),
                     ("stdin", string_property("Alias for input.")),
                     ("data", string_property("Alias for input.")),
@@ -3424,6 +3450,10 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
                 vec![
                     ("task_id", string_property("Background shell task id.")),
                     ("id", string_property("Alias for task_id.")),
+                    (
+                        "cwd",
+                        string_property("Working directory used to find detached durable records."),
+                    ),
                     ("input", string_property("Input to send.")),
                     ("stdin", string_property("Alias for input.")),
                     ("data", string_property("Alias for input.")),
@@ -3440,6 +3470,10 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
                 vec![
                     ("task_id", string_property("Background shell task id.")),
                     ("id", string_property("Alias for task_id.")),
+                    (
+                        "cwd",
+                        string_property("Working directory used to find detached durable records."),
+                    ),
                     ("all", string_property("Set true to cancel all running jobs.")),
                 ],
                 &[],

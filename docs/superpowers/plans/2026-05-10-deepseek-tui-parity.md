@@ -220,9 +220,10 @@ Landed first slice:
   `exec_shell_list` / `exec_shell_show` / `exec_shell_wait` calls can inspect
   prior records; detached running jobs can also be best-effort cancelled by
   persisted pid/process group, stale detached `running` manifests are refreshed
-  to `exited` when the pid is gone, while detached stdin remains
-  attached-process scoped and reports that explicit boundary instead of looking
-  like an unknown task id
+  to `exited` when the pid is gone, and new Unix background jobs use durable
+  FIFO stdin plus direct stdout/stderr log files so detached
+  `exec_shell_interact cwd=<path> task_id=<id>` can write stdin or close it
+  without the original in-memory manager
 - richer structured data validation
 
 ### Phase D: TUI
@@ -335,10 +336,10 @@ Landed first slice:
 Remaining:
 
 - post-shell review found no open first-order TUI interaction gaps; remaining
-  work is now in harder cross-process/platform/external buckets: full shell
-  stdin/cancel takeover after owner-process exit, side-git/platform restore
-  fidelity beyond the Unix special files already captured, model-backed
-  long-lived RLM process semantics, and external live PR/release fixtures
+  work is now in harder cross-process/platform/external buckets: true shell
+  PTY/supervisor ownership after owner-process exit, side-git/platform restore
+  fidelity beyond the Unix special files already captured, true live
+  model-backed RLM daemon semantics, and external live PR/release fixtures
 
 ### Phase E: DeepSeek-Native Product UX
 

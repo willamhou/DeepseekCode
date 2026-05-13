@@ -3035,37 +3035,37 @@ const TOOL_SPECS: &[StaticToolSpec] = &[
     StaticToolSpec {
         name: "task_shell_wait",
         description: "DeepSeek-TUI-compatible poll/wait helper for background shell tasks started by task_shell_start or exec_shell background=true.",
-        properties_json: r#"{"task_id":{"type":"string","description":"Background shell task id returned by task_shell_start or exec_shell."},"id":{"type":"string","description":"Alias for task_id."},"wait":{"type":"string","description":"Set false to poll once without waiting."},"timeout_ms":{"type":"string","description":"Maximum wait milliseconds, default 5000."},"gate":{"type":"string","description":"Optional gate label for compatibility metadata."},"command":{"type":"string","description":"Optional original command for compatibility metadata."}}"#,
+        properties_json: r#"{"task_id":{"type":"string","description":"Background shell task id returned by task_shell_start or exec_shell."},"id":{"type":"string","description":"Alias for task_id."},"cwd":{"type":"string","description":"Working directory used to find detached durable shell records."},"wait":{"type":"string","description":"Set false to poll once without waiting."},"timeout_ms":{"type":"string","description":"Maximum wait milliseconds, default 5000."},"gate":{"type":"string","description":"Optional gate label for compatibility metadata."},"command":{"type":"string","description":"Optional original command for compatibility metadata."}}"#,
         required_json: r#"["task_id"]"#,
     },
     StaticToolSpec {
         name: "exec_shell_wait",
         description: "Wait for or poll a background exec_shell task and return incremental output.",
-        properties_json: r#"{"task_id":{"type":"string","description":"Task id returned by exec_shell background=true."},"id":{"type":"string","description":"Alias for task_id."},"timeout_ms":{"type":"string","description":"Maximum wait milliseconds, default 5000."},"wait":{"type":"string","description":"Set false to poll once without waiting."}}"#,
+        properties_json: r#"{"task_id":{"type":"string","description":"Task id returned by exec_shell background=true."},"id":{"type":"string","description":"Alias for task_id."},"cwd":{"type":"string","description":"Working directory used to find detached durable shell records."},"timeout_ms":{"type":"string","description":"Maximum wait milliseconds, default 5000."},"wait":{"type":"string","description":"Set false to poll once without waiting."}}"#,
         required_json: r#"["task_id"]"#,
     },
     StaticToolSpec {
         name: "exec_wait",
         description: "Alias for exec_shell_wait.",
-        properties_json: r#"{"task_id":{"type":"string","description":"Task id returned by exec_shell background=true."},"id":{"type":"string","description":"Alias for task_id."},"timeout_ms":{"type":"string","description":"Maximum wait milliseconds, default 5000."},"wait":{"type":"string","description":"Set false to poll once without waiting."}}"#,
+        properties_json: r#"{"task_id":{"type":"string","description":"Task id returned by exec_shell background=true."},"id":{"type":"string","description":"Alias for task_id."},"cwd":{"type":"string","description":"Working directory used to find detached durable shell records."},"timeout_ms":{"type":"string","description":"Maximum wait milliseconds, default 5000."},"wait":{"type":"string","description":"Set false to poll once without waiting."}}"#,
         required_json: r#"["task_id"]"#,
     },
     StaticToolSpec {
         name: "exec_shell_interact",
-        description: "Send stdin to a background exec_shell task and return incremental output.",
-        properties_json: r#"{"task_id":{"type":"string","description":"Task id returned by exec_shell background=true."},"id":{"type":"string","description":"Alias for task_id."},"input":{"type":"string","description":"Input to send to stdin."},"stdin":{"type":"string","description":"Alias for input."},"data":{"type":"string","description":"Alias for input."},"timeout_ms":{"type":"string","description":"Wait milliseconds after sending input, default 1000."},"close_stdin":{"type":"string","description":"Set true to close stdin after sending input."}}"#,
+        description: "Send stdin to an attached background exec_shell task, or to a detached Unix FIFO-backed task when cwd is supplied.",
+        properties_json: r#"{"task_id":{"type":"string","description":"Task id returned by exec_shell background=true."},"id":{"type":"string","description":"Alias for task_id."},"cwd":{"type":"string","description":"Working directory used to find detached durable shell records."},"input":{"type":"string","description":"Input to send to stdin."},"stdin":{"type":"string","description":"Alias for input."},"data":{"type":"string","description":"Alias for input."},"timeout_ms":{"type":"string","description":"Wait milliseconds after sending input, default 1000."},"close_stdin":{"type":"string","description":"Set true to close stdin after sending input."}}"#,
         required_json: r#"["task_id"]"#,
     },
     StaticToolSpec {
         name: "exec_interact",
         description: "Alias for exec_shell_interact.",
-        properties_json: r#"{"task_id":{"type":"string","description":"Task id returned by exec_shell background=true."},"id":{"type":"string","description":"Alias for task_id."},"input":{"type":"string","description":"Input to send to stdin."},"stdin":{"type":"string","description":"Alias for input."},"data":{"type":"string","description":"Alias for input."},"timeout_ms":{"type":"string","description":"Wait milliseconds after sending input, default 1000."},"close_stdin":{"type":"string","description":"Set true to close stdin after sending input."}}"#,
+        properties_json: r#"{"task_id":{"type":"string","description":"Task id returned by exec_shell background=true."},"id":{"type":"string","description":"Alias for task_id."},"cwd":{"type":"string","description":"Working directory used to find detached durable shell records."},"input":{"type":"string","description":"Input to send to stdin."},"stdin":{"type":"string","description":"Alias for input."},"data":{"type":"string","description":"Alias for input."},"timeout_ms":{"type":"string","description":"Wait milliseconds after sending input, default 1000."},"close_stdin":{"type":"string","description":"Set true to close stdin after sending input."}}"#,
         required_json: r#"["task_id"]"#,
     },
     StaticToolSpec {
         name: "exec_shell_cancel",
         description: "Cancel a running background exec_shell task by task_id, or all running tasks with all=true.",
-        properties_json: r#"{"task_id":{"type":"string","description":"Task id returned by exec_shell background=true."},"id":{"type":"string","description":"Alias for task_id."},"all":{"type":"string","description":"Set true to cancel all running background shell tasks."}}"#,
+        properties_json: r#"{"task_id":{"type":"string","description":"Task id returned by exec_shell background=true."},"id":{"type":"string","description":"Alias for task_id."},"cwd":{"type":"string","description":"Working directory used to find detached durable shell records."},"all":{"type":"string","description":"Set true to cancel all running background shell tasks."}}"#,
         required_json: r#"[]"#,
     },
     StaticToolSpec {
@@ -5105,6 +5105,7 @@ mod tests {
         assert!(openai.contains("\"name\":\"exec_shell_wait\""));
         assert!(openai.contains("\"name\":\"exec_shell_interact\""));
         assert!(openai.contains("\"name\":\"exec_shell_cancel\""));
+        assert!(openai.contains("detached durable shell records"));
 
         let anthropic = build_anthropic_tools(&["exec_shell".to_string()]);
         assert!(anthropic.contains("\"name\":\"exec_shell\""));

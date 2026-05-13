@@ -15,11 +15,11 @@ web, review, RLM helper, and request-user-input surfaces landed.
 
 1. Shell parity is now feature-complete for the common DeepSeek-TUI workflow:
    start, list, show, poll, wait, stdin, close stdin, cancel, ACP streaming, and
-   detached manifest/log inspection. A later slice also adds best-effort
-   detached cancel by persisted pid/process group. The remaining shell gap is
-   detached stdin/PTY takeover and robust supervisor semantics after the owner
-   DeepSeekCode process has exited, which requires more than file metadata
-   alone.
+   detached manifest/log inspection. Later slices also add best-effort
+   detached cancel by persisted pid/process group, direct durable stdout/stderr
+   logs, and Unix FIFO detached stdin for new background jobs. The remaining
+   shell gap is true PTY takeover and robust supervisor ownership after the
+   owner DeepSeekCode process has exited.
 2. TUI interaction parity no longer has a first-order open item in the plan.
    The workbench has command history/completion, modal approvals, user-input
    Other answers, MCP manager keyboard/mouse/bulk flows, task multiselect, shell
@@ -45,18 +45,18 @@ web, review, RLM helper, and request-user-input surfaces landed.
 
 The remaining gap is concentrated in hard infrastructure and external-fixture
 areas rather than the everyday DeepSeek-TUI terminal workflow. The objective is
-not complete because full cross-process shell control, model-backed long-lived
-RLM process semantics, platform-specific rollback edges, and live external
+not complete because true shell PTY/supervisor ownership, true live model-backed
+RLM daemon semantics, platform-specific rollback edges, and live external
 publishing/write fixtures still need either more architecture or explicit
 external resources. Shell cancel has since narrowed to best-effort detached
-process-group cancellation; RLM process semantics have since narrowed to
-durable model-session context; stdin/PTY takeover and a true live model daemon
-remain open.
+process-group cancellation; detached stdin has since narrowed to Unix FIFO
+control for new jobs; RLM process semantics have since narrowed to durable
+model-session context. PTY takeover and a true live model daemon remain open.
 
 ## Next Candidate Specs
 
-- Shell supervisor/PTY design for cross-process takeover of detached stdin/PTY
-  sessions and stronger process ownership guarantees.
+- Shell supervisor/PTY design for true PTY sessions and stronger cross-process
+  ownership guarantees.
 - True live model-backed RLM REPL/daemon design, likely backed by durable
   runtime threads rather than persisted child-agent summaries.
 - Platform restore strategy for device nodes and Windows symlink semantics.
