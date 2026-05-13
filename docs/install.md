@@ -399,7 +399,7 @@ curl http://127.0.0.1:8765/runtime
 ```
 
 `serve --http` 当前公开 health、runtime metadata、file-backed sessions、threads、turn records、task metadata records、automation metadata records、JSON/SSE event replay、token/cache/cost usage records、usage summary / 1M-context policy 和 non-destructive thread compaction endpoint；
-并支持 active automation 手动 trigger 成 pending task、pending task 被外部 runner claim 成 running；本地后台执行可用 `deepseek agents daemon` 轮询同一 runtime store，并对超过 800k latest-context tokens 的 thread 做 non-destructive compaction。systemd/launchd supervisor 文件可由 `deepseek agents service` 渲染。schema 草案见
+并支持 active automation 手动 trigger 成 pending task、pending task 被外部 runner claim 成 running；本地后台执行可用 `deepseek agents daemon` 轮询同一 runtime store，并对超过 800k latest-context tokens 的 thread 做 non-destructive compaction。systemd/launchd runtime、agents daemon、diagnostics watch 和 shell-supervisor protocol skeleton 文件可由 `deepseek agents service` 渲染。schema 草案见
 [`docs/runtime.md`](./runtime.md)。
 
 ## 基本用法
@@ -418,7 +418,7 @@ curl http://127.0.0.1:8765/runtime
 - `deepseek config network allow|deny <host>`：把网络 host 策略写回项目 `.dscode/config.toml`，用于持久化 web/search/fetch 的允许或拒绝规则
 - `deepseek agents run-task <task-id>`：认领并执行 pending durable runtime task，写回同一 thread 的 turns/items/usage/status
 - `deepseek agents daemon [--interval-ms 1000] [--budget N]`：本地轮询 `.dscode/runtime`，触发到期 automation、执行 thread-linked pending task，并自动追加 non-destructive compaction summary
-- `deepseek diagnostics [--changed] [--json] [paths...]` / `deepseek diagnostics --watch --json ...`：运行本地语言诊断；watch 模式会在同一进程内复用 warmed stdio LSP session，失败时回退到 compiler/type-check checker；JSON 模式输出 `deepseek.diagnostics.report.v1` 或 newline-delimited `deepseek.diagnostics.daemon_tick.v1`；`deepseek agents service` 可为 `diagnostics --watch --changed --json` 生成常驻 worker 模板
+- `deepseek diagnostics [--changed] [--json] [paths...]` / `deepseek diagnostics --watch --json ...`：运行本地语言诊断；watch 模式会在同一进程内复用 warmed stdio LSP session，失败时回退到 compiler/type-check checker；JSON 模式输出 `deepseek.diagnostics.report.v1` 或 newline-delimited `deepseek.diagnostics.daemon_tick.v1`；`deepseek agents service` 可为 `diagnostics --watch --changed --json` 和 `agents shell-supervisor --json` 生成常驻 worker 模板
 - `deepseek restore snapshot [label]` / `list` / `show <id>` / `revert-turn <id> [--apply]`：管理 rollback snapshots（tracked diff + untracked files、目录 metadata、Unix special files）
 - `deepseek serve --http`：启动本地 runtime skeleton，提供 `/health` 与 `/runtime`
 - `deepseek mcp init|add|add-self|get|remove|enable|disable|validate|list|doctor|tools|prompts|resources|resource-templates|call|prompt|resource`：管理、校验、枚举或手动调用 MCP server tools/prompts/resources

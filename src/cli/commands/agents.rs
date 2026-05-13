@@ -1,4 +1,6 @@
 use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -7,7 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::cli::app::{
     AgentsAction, AgentsRlmCancelArgs, AgentsRlmDrainArgs, AgentsRlmEventsArgs,
     AgentsRlmRecoverArgs, AgentsRlmRunNextArgs, AgentsRlmStatusArgs, AgentsRlmStopArgs,
-    AgentsRlmWaitArgs, AgentsServiceArgs, AgentsServiceKind,
+    AgentsRlmWaitArgs, AgentsServiceArgs, AgentsServiceKind, AgentsShellSupervisorArgs,
 };
 use crate::config::load::load_or_default;
 use crate::config::types::AppConfig;
@@ -29,6 +31,7 @@ use crate::model::protocol::{ModelAction, ModelRequest, ObservationStatus};
 use crate::tools::dispatch_subagent::{
     active_agent_thread_path, agent_threads_dir, thread_file_path, validate_thread_id,
 };
+use crate::tools::exec_shell::ExecShellSupervisorStatusTool;
 use crate::tools::rlm::{
     rlm_live_session_ids_by_runtime_thread, RlmLiveCancelTool, RlmLiveDrainTool, RlmLiveEventsTool,
     RlmLiveRecoverTool, RlmLiveRunNextTool, RlmLiveStatusTool, RlmLiveStopTool, RlmLiveWaitTool,
@@ -60,6 +63,7 @@ pub fn run(action: AgentsAction) -> AppResult<()> {
         AgentsAction::RlmStop(args) => run_rlm_stop(config, args),
         AgentsAction::RlmRunNext(args) => run_rlm_run_next(config, args),
         AgentsAction::RlmDrain(args) => run_rlm_drain(config, args),
+        AgentsAction::ShellSupervisor(args) => run_shell_supervisor(args),
         AgentsAction::Service(args) => render_agent_services(args),
         AgentsAction::Threads => list_threads(&config.workspace.config_dir),
         AgentsAction::ShowThread { id } => show_thread(&config.workspace.config_dir, &id),
@@ -683,6 +687,321 @@ struct ServiceTemplateConfig {
     budget: Option<usize>,
 }
 
+fn run_shell_supervisor(args: AgentsShellSupervisorArgs) -> AppResult<()> {
+    let cwd = std::env::current_dir()?;
+    if args.once {
+        let output = ExecShellSupervisorStatusTool
+            .execute(ToolInput::new().with_arg("cwd", cwd.display().to_string()))?;
+        if args.json {
+            let mut object = BTreeMap::new();
+            object.insert(
+                "kind".to_string(),
+                JsonValue::String("deepseek.exec_shell.supervisor_once.v1".to_string()),
+            );
+            object.insert(
+                "cwd".to_string(),
+                JsonValue::String(cwd.display().to_string()),
+            );
+            object.insert("status".to_string(), JsonValue::String(output.summary));
+            println!("{}", json_value_to_string(&JsonValue::Object(object)));
+        } else {
+            println!("{}", output.summary);
+        }
+        return Ok(());
+    }
+    run_shell_supervisor_daemon(&cwd, args.json)
+}
+
+#[cfg(unix)]
+fn run_shell_supervisor_daemon(cwd: &Path, json: bool) -> AppResult<()> {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::{UnixListener, UnixStream};
+
+    let state_dir = cwd.join(".dscode/shell-supervisor");
+    fs::create_dir_all(&state_dir)?;
+    fs::set_permissions(&state_dir, fs::Permissions::from_mode(0o700))?;
+    let socket = state_dir.join("supervisor.sock");
+    if socket.exists() {
+        if UnixStream::connect(&socket).is_ok() {
+            return Err(app_error(format!(
+                "shell supervisor socket is already active: {}",
+                socket.display()
+            )));
+        }
+        fs::remove_file(&socket)?;
+    }
+    let listener = UnixListener::bind(&socket)?;
+    fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))?;
+    let epoch = format_epoch_seconds(current_epoch_seconds());
+    write_shell_supervisor_manifest(cwd, &socket, &epoch)?;
+    if json {
+        println!(
+            "{}",
+            json_value_to_string(&shell_supervisor_event_json(
+                "started", cwd, &socket, &epoch, None,
+            ))
+        );
+    } else {
+        println!(
+            "shell supervisor protocol skeleton listening: {}",
+            socket.display()
+        );
+    }
+
+    for stream in listener.incoming() {
+        let stream = stream?;
+        let shutdown = handle_shell_supervisor_stream(stream, cwd, &socket, &epoch)?;
+        if shutdown {
+            break;
+        }
+    }
+    let _ = fs::remove_file(&socket);
+    if json {
+        println!(
+            "{}",
+            json_value_to_string(&shell_supervisor_event_json(
+                "stopped", cwd, &socket, &epoch, None,
+            ))
+        );
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn run_shell_supervisor_daemon(_cwd: &Path, _json: bool) -> AppResult<()> {
+    Err(app_error(
+        "shell supervisor protocol skeleton is currently supported only on Unix",
+    ))
+}
+
+#[cfg(unix)]
+fn handle_shell_supervisor_stream(
+    mut stream: std::os::unix::net::UnixStream,
+    cwd: &Path,
+    socket: &Path,
+    epoch: &str,
+) -> AppResult<bool> {
+    let mut line = String::new();
+    {
+        let mut reader = BufReader::new(&mut stream);
+        reader.read_line(&mut line)?;
+    }
+    let (response, shutdown) = match parse_shell_supervisor_method(&line) {
+        Ok(request) => (
+            shell_supervisor_protocol_response(&request, cwd, socket, epoch),
+            request == "shutdown",
+        ),
+        Err(error) => (
+            shell_supervisor_protocol_error_response(cwd, socket, epoch, &error.to_string()),
+            false,
+        ),
+    };
+    stream.write_all(json_value_to_string(&response).as_bytes())?;
+    stream.write_all(b"\n")?;
+    stream.flush()?;
+    Ok(shutdown)
+}
+
+fn parse_shell_supervisor_method(line: &str) -> AppResult<String> {
+    let value = if line.trim().is_empty() {
+        JsonValue::Object(BTreeMap::new())
+    } else {
+        parse_json_value(line.trim())?
+    };
+    let Some(object) = json_as_object(&value) else {
+        return Err(app_error("shell supervisor request must be a JSON object"));
+    };
+    Ok(object
+        .get("method")
+        .and_then(json_as_string)
+        .unwrap_or("health")
+        .to_string())
+}
+
+fn shell_supervisor_protocol_response(
+    method: &str,
+    cwd: &Path,
+    socket: &Path,
+    epoch: &str,
+) -> JsonValue {
+    let supported = matches!(method, "health" | "status" | "show" | "shutdown");
+    let mut response = BTreeMap::from([
+        (
+            "kind".to_string(),
+            JsonValue::String("deepseek.exec_shell.supervisor.response.v1".to_string()),
+        ),
+        ("method".to_string(), JsonValue::String(method.to_string())),
+        (
+            "status".to_string(),
+            JsonValue::String(if supported { "ok" } else { "unsupported" }.to_string()),
+        ),
+        (
+            "cwd".to_string(),
+            JsonValue::String(cwd.display().to_string()),
+        ),
+        (
+            "supervisor_pid".to_string(),
+            JsonValue::Number(std::process::id().to_string()),
+        ),
+        (
+            "supervisor_socket".to_string(),
+            JsonValue::String(socket.display().to_string()),
+        ),
+        (
+            "supervisor_epoch".to_string(),
+            JsonValue::String(epoch.to_string()),
+        ),
+        (
+            "protocol".to_string(),
+            JsonValue::String("newline-json-v1".to_string()),
+        ),
+        (
+            "pty_backend".to_string(),
+            JsonValue::String("none".to_string()),
+        ),
+        ("native_pty".to_string(), JsonValue::Bool(false)),
+        (
+            "active_jobs".to_string(),
+            JsonValue::Number("0".to_string()),
+        ),
+    ]);
+    if !supported {
+        response.insert(
+            "error".to_string(),
+            JsonValue::String(format!(
+                "shell supervisor method `{method}` is not implemented before native PTY support"
+            )),
+        );
+    }
+    JsonValue::Object(response)
+}
+
+fn shell_supervisor_protocol_error_response(
+    cwd: &Path,
+    socket: &Path,
+    epoch: &str,
+    error: &str,
+) -> JsonValue {
+    JsonValue::Object(BTreeMap::from([
+        (
+            "kind".to_string(),
+            JsonValue::String("deepseek.exec_shell.supervisor.response.v1".to_string()),
+        ),
+        (
+            "method".to_string(),
+            JsonValue::String("invalid_request".to_string()),
+        ),
+        ("status".to_string(), JsonValue::String("error".to_string())),
+        (
+            "cwd".to_string(),
+            JsonValue::String(cwd.display().to_string()),
+        ),
+        (
+            "supervisor_pid".to_string(),
+            JsonValue::Number(std::process::id().to_string()),
+        ),
+        (
+            "supervisor_socket".to_string(),
+            JsonValue::String(socket.display().to_string()),
+        ),
+        (
+            "supervisor_epoch".to_string(),
+            JsonValue::String(epoch.to_string()),
+        ),
+        (
+            "protocol".to_string(),
+            JsonValue::String("newline-json-v1".to_string()),
+        ),
+        (
+            "pty_backend".to_string(),
+            JsonValue::String("none".to_string()),
+        ),
+        ("native_pty".to_string(), JsonValue::Bool(false)),
+        (
+            "active_jobs".to_string(),
+            JsonValue::Number("0".to_string()),
+        ),
+        ("error".to_string(), JsonValue::String(error.to_string())),
+    ]))
+}
+
+#[cfg(unix)]
+fn write_shell_supervisor_manifest(cwd: &Path, socket: &Path, epoch: &str) -> AppResult<()> {
+    let manifest = JsonValue::Object(BTreeMap::from([
+        (
+            "kind".to_string(),
+            JsonValue::String("deepseek.exec_shell.supervisor.v1".to_string()),
+        ),
+        (
+            "supervisor_pid".to_string(),
+            JsonValue::Number(std::process::id().to_string()),
+        ),
+        (
+            "supervisor_socket".to_string(),
+            JsonValue::String(socket.display().to_string()),
+        ),
+        (
+            "supervisor_epoch".to_string(),
+            JsonValue::String(epoch.to_string()),
+        ),
+        (
+            "protocol".to_string(),
+            JsonValue::String("newline-json-v1".to_string()),
+        ),
+        (
+            "active_jobs".to_string(),
+            JsonValue::Number("0".to_string()),
+        ),
+        (
+            "started_at".to_string(),
+            JsonValue::String(epoch.to_string()),
+        ),
+        (
+            "updated_at".to_string(),
+            JsonValue::String(epoch.to_string()),
+        ),
+        ("control_token_hash".to_string(), JsonValue::Null),
+    ]));
+    std::fs::write(
+        cwd.join(".dscode/shell-supervisor/manifest.json"),
+        json_value_to_string(&manifest),
+    )?;
+    Ok(())
+}
+
+fn shell_supervisor_event_json(
+    event: &str,
+    cwd: &Path,
+    socket: &Path,
+    epoch: &str,
+    message: Option<&str>,
+) -> JsonValue {
+    let mut object = BTreeMap::from([
+        (
+            "kind".to_string(),
+            JsonValue::String("deepseek.exec_shell.supervisor_daemon.v1".to_string()),
+        ),
+        ("event".to_string(), JsonValue::String(event.to_string())),
+        (
+            "cwd".to_string(),
+            JsonValue::String(cwd.display().to_string()),
+        ),
+        (
+            "socket".to_string(),
+            JsonValue::String(socket.display().to_string()),
+        ),
+        ("epoch".to_string(), JsonValue::String(epoch.to_string())),
+    ]);
+    if let Some(message) = message {
+        object.insert(
+            "message".to_string(),
+            JsonValue::String(message.to_string()),
+        );
+    }
+    JsonValue::Object(object)
+}
+
 fn render_agent_services(args: AgentsServiceArgs) -> AppResult<()> {
     let config = service_template_config(args)?;
     let templates = service_templates(&config);
@@ -756,6 +1075,10 @@ fn service_templates(config: &ServiceTemplateConfig) -> Vec<ServiceTemplate> {
             path: "systemd/deepseek-diagnostics.service",
             body: systemd_diagnostics_service(config),
         });
+        templates.push(ServiceTemplate {
+            path: "systemd/deepseek-shell-supervisor.service",
+            body: systemd_shell_supervisor_service(config),
+        });
     }
     if matches!(
         config.kind,
@@ -772,6 +1095,10 @@ fn service_templates(config: &ServiceTemplateConfig) -> Vec<ServiceTemplate> {
         templates.push(ServiceTemplate {
             path: "launchd/com.deepseek.diagnostics.plist",
             body: launchd_diagnostics_service(config),
+        });
+        templates.push(ServiceTemplate {
+            path: "launchd/com.deepseek.shell-supervisor.plist",
+            body: launchd_shell_supervisor_service(config),
         });
     }
     templates
@@ -846,6 +1173,27 @@ WantedBy=default.target\n",
     )
 }
 
+fn systemd_shell_supervisor_service(config: &ServiceTemplateConfig) -> String {
+    format!(
+        "[Unit]\n\
+Description=DeepSeekCode shell supervisor protocol skeleton\n\
+# Exposes the workspace-local shell supervisor socket/status; native PTY sessions are not implemented yet.\n\
+After=network.target\n\
+\n\
+[Service]\n\
+Type=simple\n\
+WorkingDirectory={workdir}\n\
+ExecStart=/usr/bin/env {bin} agents shell-supervisor --json\n\
+Restart=on-failure\n\
+RestartSec=5\n\
+\n\
+[Install]\n\
+WantedBy=default.target\n",
+        workdir = systemd_quote(&config.workdir),
+        bin = systemd_quote(&config.bin),
+    )
+}
+
 fn launchd_runtime_service(config: &ServiceTemplateConfig) -> String {
     launchd_plist(
         "com.deepseek.runtime",
@@ -907,6 +1255,25 @@ fn launchd_diagnostics_service(config: &ServiceTemplateConfig) -> String {
         "/tmp/deepseek-diagnostics.out.log",
         "/tmp/deepseek-diagnostics.err.log",
         None,
+    )
+}
+
+fn launchd_shell_supervisor_service(config: &ServiceTemplateConfig) -> String {
+    launchd_plist(
+        "com.deepseek.shell-supervisor",
+        &config.workdir,
+        &[
+            "/usr/bin/env".to_string(),
+            config.bin.clone(),
+            "agents".to_string(),
+            "shell-supervisor".to_string(),
+            "--json".to_string(),
+        ],
+        "/tmp/deepseek-shell-supervisor.out.log",
+        "/tmp/deepseek-shell-supervisor.err.log",
+        Some(
+            "Exposes the workspace-local shell supervisor socket/status; native PTY sessions are not implemented yet.",
+        ),
     )
 }
 
@@ -2231,6 +2598,81 @@ mod tests {
     }
 
     #[test]
+    fn shell_supervisor_protocol_parses_methods_and_defaults_to_health() {
+        assert_eq!(parse_shell_supervisor_method("").unwrap(), "health");
+        assert_eq!(
+            parse_shell_supervisor_method(r#"{"method":"status"}"#).unwrap(),
+            "status"
+        );
+        assert!(parse_shell_supervisor_method("[]")
+            .unwrap_err()
+            .to_string()
+            .contains("must be a JSON object"));
+    }
+
+    #[test]
+    fn shell_supervisor_protocol_reports_unsupported_before_native_pty() {
+        let response = shell_supervisor_protocol_response(
+            "start",
+            Path::new("/work/repo"),
+            Path::new("/work/repo/.dscode/shell-supervisor/supervisor.sock"),
+            "epoch+1",
+        );
+        let object = json_as_object(&response).unwrap();
+
+        assert_eq!(
+            json_as_string(object.get("status").unwrap()),
+            Some("unsupported")
+        );
+        assert_eq!(
+            json_as_string(object.get("pty_backend").unwrap()),
+            Some("none")
+        );
+        assert!(matches!(
+            object.get("native_pty"),
+            Some(JsonValue::Bool(false))
+        ));
+        assert!(matches!(
+            object.get("active_jobs"),
+            Some(JsonValue::Number(value)) if value == "0"
+        ));
+        assert!(json_as_string(object.get("error").unwrap())
+            .unwrap()
+            .contains("not implemented before native PTY support"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn shell_supervisor_manifest_writes_protocol_without_control_secret() {
+        let root = temp_root("shell-supervisor-manifest");
+        let state_dir = root.join(".dscode/shell-supervisor");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        let socket = state_dir.join("supervisor.sock");
+
+        write_shell_supervisor_manifest(&root, &socket, "epoch+1").unwrap();
+
+        let manifest = std::fs::read_to_string(state_dir.join("manifest.json")).unwrap();
+        assert!(manifest.contains(r#""kind":"deepseek.exec_shell.supervisor.v1""#));
+        assert!(manifest.contains(r#""protocol":"newline-json-v1""#));
+        assert!(manifest.contains(r#""control_token_hash":null"#));
+        assert!(!manifest.contains("control_token\":\""));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn shell_supervisor_stream_handles_status_and_invalid_request() {
+        let (shutdown, response) = shell_supervisor_stream_roundtrip(r#"{"method":"status"}"#);
+        assert!(!shutdown);
+        assert!(response.contains(r#""method":"status""#));
+        assert!(response.contains(r#""status":"ok""#));
+
+        let (shutdown, response) = shell_supervisor_stream_roundtrip("[]");
+        assert!(!shutdown);
+        assert!(response.contains(r#""method":"invalid_request""#));
+        assert!(response.contains(r#""status":"error""#));
+    }
+
+    #[test]
     fn service_templates_render_runtime_and_agent_supervisors() {
         let config = ServiceTemplateConfig {
             kind: AgentsServiceKind::All,
@@ -2253,9 +2695,11 @@ mod tests {
                 "systemd/deepseek-runtime.service",
                 "systemd/deepseek-agents.service",
                 "systemd/deepseek-diagnostics.service",
+                "systemd/deepseek-shell-supervisor.service",
                 "launchd/com.deepseek.runtime.plist",
                 "launchd/com.deepseek.agents.plist",
                 "launchd/com.deepseek.diagnostics.plist",
+                "launchd/com.deepseek.shell-supervisor.plist",
             ]
         );
         assert!(templates[0]
@@ -2268,17 +2712,27 @@ mod tests {
         assert!(templates[2]
             .body
             .contains("diagnostics --watch --changed --interval-ms 750 --json"));
+        assert!(templates[3].body.contains("agents shell-supervisor --json"));
         assert!(templates[3]
             .body
-            .contains("<string>com.deepseek.runtime</string>"));
+            .contains("native PTY sessions are not implemented yet"));
         assert!(templates[4]
             .body
-            .contains("<string>com.deepseek.agents</string>"));
-        assert!(templates[4].body.contains("queued live RLM turn per tick"));
+            .contains("<string>com.deepseek.runtime</string>"));
         assert!(templates[5]
             .body
+            .contains("<string>com.deepseek.agents</string>"));
+        assert!(templates[5].body.contains("queued live RLM turn per tick"));
+        assert!(templates[6]
+            .body
             .contains("<string>com.deepseek.diagnostics</string>"));
-        assert!(templates[5].body.contains("<string>--json</string>"));
+        assert!(templates[6].body.contains("<string>--json</string>"));
+        assert!(templates[7]
+            .body
+            .contains("<string>com.deepseek.shell-supervisor</string>"));
+        assert!(templates[7]
+            .body
+            .contains("<string>shell-supervisor</string>"));
     }
 
     #[test]
@@ -3012,6 +3466,28 @@ mod tests {
             "deepseek-agents-{name}-{}-{suffix}",
             std::process::id()
         ))
+    }
+
+    #[cfg(unix)]
+    fn shell_supervisor_stream_roundtrip(request: &str) -> (bool, String) {
+        let (mut client, server) = std::os::unix::net::UnixStream::pair().unwrap();
+        let handle = std::thread::spawn(move || {
+            handle_shell_supervisor_stream(
+                server,
+                Path::new("/work/repo"),
+                Path::new("/work/repo/.dscode/shell-supervisor/supervisor.sock"),
+                "epoch+1",
+            )
+            .unwrap()
+        });
+
+        client.write_all(request.as_bytes()).unwrap();
+        client.write_all(b"\n").unwrap();
+        let mut response = String::new();
+        let mut reader = BufReader::new(&mut client);
+        reader.read_line(&mut response).unwrap();
+        let shutdown = handle.join().unwrap();
+        (shutdown, response)
     }
 
     fn meta_value(summary: &str, key: &str) -> Option<String> {

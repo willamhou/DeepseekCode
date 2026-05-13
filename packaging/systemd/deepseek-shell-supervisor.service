@@ -1,0 +1,14 @@
+[Unit]
+Description=DeepSeekCode shell supervisor protocol skeleton
+# Exposes the workspace-local shell supervisor socket/status; native PTY sessions are not implemented yet.
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=__WORKDIR__
+ExecStart=/usr/bin/env __DEEPSEEK_BIN__ agents shell-supervisor --json
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -81,7 +81,8 @@ path, recovers stale live RLM ownership, and runs one queued live RLM turn per
 tick.
 
 Render local supervisor files for running the HTTP runtime, the durable task
-and live RLM worker daemon, and diagnostics watch as long-lived services:
+and live RLM worker daemon, diagnostics watch, and the shell supervisor
+protocol skeleton as long-lived services:
 
 ```sh
 deepseek agents service --kind systemd --out ./services --workdir "$PWD" --bin "$(command -v deepseek)"
@@ -92,6 +93,11 @@ The generated files are reviewable templates; the command does not enable or
 start services. Static placeholder templates also live under
 `packaging/systemd/` and `packaging/launchd/`, while release packages include
 them under `services/`.
+
+The shell supervisor service runs `deepseek agents shell-supervisor --json`.
+It binds the workspace-local `.dscode/shell-supervisor/supervisor.sock` and
+writes a manifest for `exec_shell_supervisor_status`; native PTY sessions are
+still a later implementation slice.
 
 After a supervisor starts the agents daemon, use the RLM lifecycle commands to
 check live worker state:

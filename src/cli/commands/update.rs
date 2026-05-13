@@ -1082,8 +1082,12 @@ deepseek agents service --kind launchd --out ./services --workdir "$PWD" --bin "
 ```
 
 The generated set runs the HTTP runtime (`deepseek serve --http`), the durable
-task and live RLM worker daemon (`deepseek agents daemon --json`), and the
-diagnostics watch worker (`deepseek diagnostics --watch --changed --json`).
+task and live RLM worker daemon (`deepseek agents daemon --json`), the
+diagnostics watch worker (`deepseek diagnostics --watch --changed --json`), and
+the workspace shell supervisor protocol skeleton
+(`deepseek agents shell-supervisor --json`). The shell supervisor currently
+publishes the workspace-local socket/status protocol for inspection; native PTY
+sessions are still a later implementation slice.
 The agents daemon triggers due automations, executes pending runtime tasks,
 recovers stale live RLM ownership, and runs one queued live RLM turn per tick.
 Review the generated WorkingDirectory, bind address, poll interval, and budget
@@ -1114,6 +1118,10 @@ fn write_packaged_service_templates(root: &Path) -> AppResult<()> {
             include_str!("../../../packaging/systemd/deepseek-diagnostics.service"),
         ),
         (
+            "systemd/deepseek-shell-supervisor.service",
+            include_str!("../../../packaging/systemd/deepseek-shell-supervisor.service"),
+        ),
+        (
             "launchd/com.deepseek.runtime.plist",
             include_str!("../../../packaging/launchd/com.deepseek.runtime.plist"),
         ),
@@ -1124,6 +1132,10 @@ fn write_packaged_service_templates(root: &Path) -> AppResult<()> {
         (
             "launchd/com.deepseek.diagnostics.plist",
             include_str!("../../../packaging/launchd/com.deepseek.diagnostics.plist"),
+        ),
+        (
+            "launchd/com.deepseek.shell-supervisor.plist",
+            include_str!("../../../packaging/launchd/com.deepseek.shell-supervisor.plist"),
         ),
     ];
     for (relative, body) in templates {
@@ -1672,11 +1684,19 @@ mod tests {
             .is_file());
         assert!(package
             .service_templates
+            .join("systemd/deepseek-shell-supervisor.service")
+            .is_file());
+        assert!(package
+            .service_templates
             .join("launchd/com.deepseek.agents.plist")
             .is_file());
         assert!(package
             .service_templates
             .join("launchd/com.deepseek.diagnostics.plist")
+            .is_file());
+        assert!(package
+            .service_templates
+            .join("launchd/com.deepseek.shell-supervisor.plist")
             .is_file());
         let packaged_agents_service = std::fs::read_to_string(
             package
@@ -1692,6 +1712,20 @@ mod tests {
         )
         .unwrap();
         assert!(packaged_agents_plist.contains("queued live RLM turn per tick"));
+        let packaged_shell_supervisor_service = std::fs::read_to_string(
+            package
+                .service_templates
+                .join("systemd/deepseek-shell-supervisor.service"),
+        )
+        .unwrap();
+        assert!(packaged_shell_supervisor_service.contains("agents shell-supervisor --json"));
+        let packaged_shell_supervisor_plist = std::fs::read_to_string(
+            package
+                .service_templates
+                .join("launchd/com.deepseek.shell-supervisor.plist"),
+        )
+        .unwrap();
+        assert!(packaged_shell_supervisor_plist.contains("<string>shell-supervisor</string>"));
         assert!(package.package_dir.join("VERIFY.md").is_file());
         let manifest = std::fs::read_to_string(package.manifest).unwrap();
         assert!(manifest.contains("\"name\": \"deepseek\""));
@@ -1699,6 +1733,7 @@ mod tests {
         let services = std::fs::read_to_string(package.services_doc).unwrap();
         assert!(services.contains("deepseek agents service"));
         assert!(services.contains("live RLM worker daemon"));
+        assert!(services.contains("deepseek agents shell-supervisor --json"));
         assert!(services.contains("deepseek agents rlm-status --json"));
     }
 

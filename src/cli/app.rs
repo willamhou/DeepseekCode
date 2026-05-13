@@ -481,6 +481,7 @@ pub enum AgentsAction {
     RlmStop(AgentsRlmStopArgs),
     RlmRunNext(AgentsRlmRunNextArgs),
     RlmDrain(AgentsRlmDrainArgs),
+    ShellSupervisor(AgentsShellSupervisorArgs),
     Service(AgentsServiceArgs),
     Threads,
     ShowThread {
@@ -491,6 +492,12 @@ pub enum AgentsAction {
     },
     CurrentThread,
     ClearThread,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentsShellSupervisorArgs {
+    pub once: bool,
+    pub json: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1822,6 +1829,9 @@ fn parse_agents_subcommand(args: Vec<String>) -> Result<AgentsAction, String> {
         "rlm-stop" => parse_agents_rlm_stop_args(args.into_iter().skip(1).collect()),
         "rlm-run-next" => parse_agents_rlm_run_next_args(args.into_iter().skip(1).collect()),
         "rlm-drain" => parse_agents_rlm_drain_args(args.into_iter().skip(1).collect()),
+        "shell-supervisor" => {
+            parse_agents_shell_supervisor_args(args.into_iter().skip(1).collect())
+        }
         "service" => parse_agents_service_args(args.into_iter().skip(1).collect()),
         "threads" => {
             if args.len() > 1 {
@@ -1858,9 +1868,28 @@ fn parse_agents_subcommand(args: Vec<String>) -> Result<AgentsAction, String> {
             Ok(AgentsAction::ClearThread)
         }
         other => Err(format!(
-            "unknown agents sub-action `{other}`; expected list|show|validate|run-task|daemon|rlm-status|rlm-events|rlm-wait|rlm-cancel|rlm-recover|rlm-stop|rlm-run-next|rlm-drain|service|threads|show-thread|switch|current|clear-current"
+            "unknown agents sub-action `{other}`; expected list|show|validate|run-task|daemon|rlm-status|rlm-events|rlm-wait|rlm-cancel|rlm-recover|rlm-stop|rlm-run-next|rlm-drain|shell-supervisor|service|threads|show-thread|switch|current|clear-current"
         )),
     }
+}
+
+fn parse_agents_shell_supervisor_args(args: Vec<String>) -> Result<AgentsAction, String> {
+    let mut parsed = AgentsShellSupervisorArgs {
+        once: false,
+        json: false,
+    };
+    for arg in args {
+        match arg.as_str() {
+            "--once" => parsed.once = true,
+            "--json" => parsed.json = true,
+            other => {
+                return Err(format!(
+                    "unknown flag for `agents shell-supervisor`: {other}; expected --once|--json"
+                ));
+            }
+        }
+    }
+    Ok(AgentsAction::ShellSupervisor(parsed))
 }
 
 fn parse_agents_run_task_args(args: Vec<String>) -> Result<AgentsAction, String> {
@@ -4019,6 +4048,23 @@ mod tests {
                 dry_run: true,
                 json: true,
             }))) if session_id == "live.1"
+        ));
+
+        let shell_supervisor = Cli::from_argv(vec![
+            "agents".to_string(),
+            "shell-supervisor".to_string(),
+            "--once".to_string(),
+            "--json".to_string(),
+        ])
+        .expect("parse should succeed");
+        assert!(matches!(
+            shell_supervisor.command,
+            Some(Command::Agents(AgentsAction::ShellSupervisor(
+                AgentsShellSupervisorArgs {
+                    once: true,
+                    json: true,
+                }
+            )))
         ));
 
         let service = Cli::from_argv(vec![

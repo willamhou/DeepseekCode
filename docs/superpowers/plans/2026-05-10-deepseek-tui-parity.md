@@ -239,9 +239,14 @@ Landed first slice:
   `native-supervisor` records can be read without downgrading their backend;
   `exec_shell_supervisor_status` now exposes the planned workspace-local
   `.dscode/shell-supervisor` manifest/socket status and protocol method names
-  without starting a supervisor or leaking `control_token_hash`; manifests now
-  keep stable child pid, process-group, and owner-pid metadata so detached
-  snapshots can report owner liveness separately from child status
+  without leaking `control_token_hash`; `deepseek agents shell-supervisor
+  --json` now starts a Unix newline-JSON protocol daemon skeleton that writes
+  the workspace supervisor manifest, binds `supervisor.sock`, answers
+  health/status/show/shutdown, and returns structured unsupported responses for
+  native PTY methods until supervisor-owned PTYs land; `deepseek agents service`
+  and packaged systemd/launchd templates include that shell-supervisor service;
+  manifests now keep stable child pid, process-group, and owner-pid metadata so
+  detached snapshots can report owner liveness separately from child status
 - richer structured data validation
 
 ### Phase D: TUI
@@ -822,7 +827,7 @@ Landed first slice:
 - Release matrix archives now include sibling `.sha256` files for published asset verification and Homebrew formula updates
 - Release matrix creates GitHub signed artifact attestations for each archive and checksum file with `actions/attest`
 - `packaging/homebrew/deepseek.rb` provides a Homebrew formula template for macOS arm64/x64 and Linux x64 release assets
-- `packaging/systemd/` and `packaging/launchd/` provide runtime service placeholders; `deepseek agents service` renders workspace-specific systemd/launchd files for `serve --http`, `agents daemon --json`, and `diagnostics --watch --changed`
+- `packaging/systemd/` and `packaging/launchd/` provide runtime service placeholders; `deepseek agents service` renders workspace-specific systemd/launchd files for `serve --http`, `agents daemon --json`, `diagnostics --watch --changed`, and `agents shell-supervisor --json`
 - `deepseek update package` includes `SERVICES.md` and packaged service templates under `services/`
 - Cargo registry distribution now has an explicit source-build/package-only
   decision: the release workflow skips Cargo registry publishing while

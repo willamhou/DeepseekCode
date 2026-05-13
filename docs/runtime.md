@@ -164,9 +164,11 @@ deepseek agents service --kind launchd --out ./services --workdir "$PWD" --bin "
 ```
 
 The rendered set runs `deepseek serve --http`,
-`deepseek agents daemon --json`, and
-`deepseek diagnostics --watch --changed` against the selected workspace. It is
-still a local service template, not a hosted multi-user runtime.
+`deepseek agents daemon --json`, `deepseek diagnostics --watch --changed`, and
+`deepseek agents shell-supervisor --json` against the selected workspace. The
+shell supervisor service publishes the workspace-local protocol socket/status
+skeleton for inspection; native PTY sessions are still not implemented. The
+service set is still local template output, not a hosted multi-user runtime.
 
 ### Health Schema
 
@@ -1338,12 +1340,15 @@ also carry the supervisor capability skeleton for a later native PTY supervisor:
 plain-pipe and `script` jobs render `attachable: false` and `resizable: false`;
 those flags are reserved for future supervisor-owned PTY sessions and should not
 be confused with the best-effort `script` resize path.
-`exec_shell_supervisor_status cwd=<path>` inspects the planned
-`.dscode/shell-supervisor/manifest.json` and `supervisor.sock` protocol state,
-reports absent/stale/ready status and supported method names, and never prints
-`control_token_hash`; it is a protocol/status skeleton, not a supervisor
-launcher. Optional `tty_rows` plus `tty_cols` set the initial PTY geometry and
-are persisted in the same manifest.
+`deepseek agents shell-supervisor --json` starts the workspace-local protocol
+skeleton on Unix, writes `.dscode/shell-supervisor/manifest.json`, binds
+`supervisor.sock`, and answers newline-JSON `health`, `status`, `show`, and
+`shutdown` requests. `exec_shell_supervisor_status cwd=<path>` inspects that
+manifest/socket state, reports absent/stale/ready status and supported method
+names, and never prints `control_token_hash`. Unsupported PTY methods return
+structured `unsupported` responses until native supervisor-owned PTY sessions
+land. Optional `tty_rows` plus `tty_cols` set the initial PTY geometry and are
+persisted in shell job manifests.
 `exec_shell_resize cwd=<path> task_id=<id> tty_rows=<n>
 tty_cols=<n>` updates the durable PTY geometry and, for running TTY jobs with
 stdin control, sends a best-effort `stty rows <n> cols <n>` control command

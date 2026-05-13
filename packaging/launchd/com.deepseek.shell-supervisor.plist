@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Exposes the workspace-local shell supervisor socket/status; native PTY sessions are not implemented yet. -->
+  <key>Label</key>
+  <string>com.deepseek.shell-supervisor</string>
+  <key>WorkingDirectory</key>
+  <string>__WORKDIR__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/env</string>
+    <string>__DEEPSEEK_BIN__</string>
+    <string>agents</string>
+    <string>shell-supervisor</string>
+    <string>--json</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/deepseek-shell-supervisor.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/deepseek-shell-supervisor.err.log</string>
+</dict>
+</plist>
