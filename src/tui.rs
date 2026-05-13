@@ -569,6 +569,7 @@ pub enum TuiMcpDetailKind {
     Home,
     Note,
     Hooks,
+    Goal,
     Mode,
     Help,
     Settings,
@@ -605,6 +606,7 @@ impl TuiMcpDetailKind {
             Self::Home => "home",
             Self::Note => "note",
             Self::Hooks => "hooks",
+            Self::Goal => "goal",
             Self::Mode => "mode",
             Self::Help => "help",
             Self::Settings => "settings",
@@ -641,6 +643,7 @@ impl TuiMcpDetailKind {
             Self::Home => "Home",
             Self::Note => "Note",
             Self::Hooks => "Hooks",
+            Self::Goal => "Goal",
             Self::Mode => "Mode",
             Self::Help => "Help",
             Self::Settings => "Settings",
@@ -677,6 +680,7 @@ impl TuiMcpDetailKind {
             Self::Home => Self::Manager,
             Self::Note => Self::Manager,
             Self::Hooks => Self::Manager,
+            Self::Goal => Self::Manager,
             Self::Mode => Self::Manager,
             Self::Help => Self::Manager,
             Self::Settings => Self::Manager,
@@ -713,6 +717,7 @@ impl TuiMcpDetailKind {
             Self::Home => Self::Manager,
             Self::Note => Self::Manager,
             Self::Hooks => Self::Manager,
+            Self::Goal => Self::Manager,
             Self::Mode => Self::Manager,
             Self::Help => Self::Manager,
             Self::Settings => Self::Manager,
@@ -898,6 +903,16 @@ pub enum TuiNoteCommand {
 pub enum TuiHooksCommand {
     List,
     Events,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TuiGoalCommand {
+    Show,
+    Set {
+        objective: String,
+        token_budget: Option<u64>,
+    },
+    Clear,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1325,6 +1340,65 @@ fn parse_tui_hooks_command(line: &str) -> Option<Result<TuiHooksCommand, String>
     }
 }
 
+fn parse_tui_goal_command(line: &str) -> Option<Result<TuiGoalCommand, String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/goal")
+        .or_else(|| strip_tui_command_prefix(trimmed, "goal"))?;
+    let arg = rest.trim();
+    if arg.is_empty() || matches!(arg, "show" | "status" | "help" | "--help" | "-h") {
+        return Some(Ok(TuiGoalCommand::Show));
+    }
+    if matches!(arg, "clear" | "reset" | "done") {
+        return Some(Ok(TuiGoalCommand::Clear));
+    }
+    let (objective, token_budget) = parse_tui_goal_budget(arg);
+    if objective.trim().is_empty() {
+        return Some(Err(
+            "usage: goal <objective> [budget: N] or /goal clear".to_string()
+        ));
+    }
+    Some(Ok(TuiGoalCommand::Set {
+        objective,
+        token_budget,
+    }))
+}
+
+fn parse_tui_goal_budget(value: &str) -> (String, Option<u64>) {
+    if let Some((objective, rest)) = value.split_once(" | budget:") {
+        return (
+            objective.trim().to_string(),
+            rest.split_whitespace()
+                .next()
+                .and_then(|value| value.parse::<u64>().ok()),
+        );
+    }
+    if let Some((objective, rest)) = value.split_once("budget:") {
+        return (
+            objective.trim().to_string(),
+            rest.split_whitespace()
+                .next()
+                .and_then(|value| value.parse::<u64>().ok()),
+        );
+    }
+    (value.trim().to_string(), None)
+}
+
+fn format_tui_goal_elapsed(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    let days = seconds / 86_400;
+    let hours = (seconds % 86_400) / 3_600;
+    let minutes = (seconds % 3_600) / 60;
+    if days > 0 {
+        format!("{days}d {hours}h")
+    } else if hours > 0 {
+        format!("{hours}h {minutes}m")
+    } else if minutes > 0 {
+        format!("{minutes}m")
+    } else {
+        format!("{seconds}s")
+    }
+}
+
 fn parse_note_index_arg(value: &str) -> Option<usize> {
     value.parse::<usize>().ok().filter(|index| *index > 0)
 }
@@ -1672,6 +1746,13 @@ const TUI_HELP_COMMANDS: &[TuiHelpCommandInfo] = &[
     },
     TuiHelpCommandInfo {
         category: "Workbench",
+        name: "goal",
+        aliases: &[],
+        usage: "/goal [objective [budget: N]|clear]",
+        description: "Set, inspect, or clear the current TUI session goal.",
+    },
+    TuiHelpCommandInfo {
+        category: "Workbench",
         name: "settings",
         aliases: &["config"],
         usage: "/settings",
@@ -1944,6 +2025,8 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "hooks list",
     "hooks events",
     "hook events",
+    "goal ",
+    "goal clear",
     "network",
     "network allow ",
     "network deny ",
@@ -2089,6 +2172,8 @@ const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
     "/hooks list",
     "/hooks events",
     "/hook events",
+    "/goal ",
+    "/goal clear",
     "/stash",
     "/stash list",
     "/stash pop",
@@ -2347,6 +2432,9 @@ pub struct TuiApp {
     composer_stash_path: Option<PathBuf>,
     transcript_scroll: usize,
     verbose_transcript: bool,
+    goal_objective: Option<String>,
+    goal_token_budget: Option<u64>,
+    goal_started_at: Option<SystemTime>,
     reasoning_replay_limit: usize,
     reasoning_replay_pinned_turn_ids: BTreeSet<String>,
     reasoning_replay_preferences_path: Option<PathBuf>,
@@ -2512,6 +2600,9 @@ impl TuiApp {
             composer_stash_path: None,
             transcript_scroll: 0,
             verbose_transcript: false,
+            goal_objective: None,
+            goal_token_budget: None,
+            goal_started_at: None,
             reasoning_replay_limit: DEFAULT_TUI_REASONING_REPLAY_LIMIT,
             reasoning_replay_pinned_turn_ids: BTreeSet::new(),
             reasoning_replay_preferences_path: None,
@@ -4385,6 +4476,19 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(command) = parse_tui_goal_command(&content) {
+                    match command {
+                        Ok(command) => {
+                            self.handle_goal_command(command);
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some(command) = parse_tui_stash_command(&content) {
                     match command {
                         Ok(command) => self.handle_composer_stash_command(command),
@@ -4914,6 +5018,15 @@ impl TuiApp {
         if let Some(command) = parse_tui_hooks_command(command) {
             match command {
                 Ok(command) => self.request_hooks_command(command),
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_goal_command(command) {
+            match command {
+                Ok(command) => self.handle_goal_command(command),
                 Err(message) => {
                     self.status = message;
                 }
@@ -5805,7 +5918,7 @@ impl TuiApp {
             }
             ["cancel"] | ["stop"] => self.request_cancel_run(),
             ["help"] => {
-                self.status = "commands: mode plan|agent|yolo, sessions [filter], threads [filter], task <summary>|select all|select clear|pause [id]|resume [id]|cancel [id]|bulk pause|bulk resume|bulk cancel, shell <cmd>|list|show|wait|poll|stdin|close-stdin|cancel, stash [list|pop|clear], memory [show|path|clear|edit|help], mcp manager|list|tools|prompts|resources|resource-templates|close|init|add|enable|disable|remove|user add|user enable|user disable|user remove|validate, diagnostics [--changed|paths...], restore snapshot|list|show, revert turn <id> [--apply], compact, approval, cancel".to_string();
+                self.status = "commands: mode plan|agent|yolo, goal [objective|clear], sessions [filter], threads [filter], task <summary>|select all|select clear|pause [id]|resume [id]|cancel [id]|bulk pause|bulk resume|bulk cancel, shell <cmd>|list|show|wait|poll|stdin|close-stdin|cancel, stash [list|pop|clear], memory [show|path|clear|edit|help], mcp manager|list|tools|prompts|resources|resource-templates|close|init|add|enable|disable|remove|user add|user enable|user disable|user remove|validate, diagnostics [--changed|paths...], restore snapshot|list|show, revert turn <id> [--apply], compact, approval, cancel".to_string();
             }
             _ => {
                 self.status = format!("unknown command: {command}");
@@ -6421,6 +6534,94 @@ impl TuiApp {
         self.status = "hooks command queued".to_string();
     }
 
+    fn handle_goal_command(&mut self, command: TuiGoalCommand) {
+        match command {
+            TuiGoalCommand::Show => {
+                self.status = "goal shown".to_string();
+            }
+            TuiGoalCommand::Set {
+                objective,
+                token_budget,
+            } => {
+                self.goal_objective = Some(objective);
+                self.goal_token_budget = token_budget;
+                self.goal_started_at = Some(SystemTime::now());
+                self.status = "goal set".to_string();
+            }
+            TuiGoalCommand::Clear => {
+                self.goal_objective = None;
+                self.goal_token_budget = None;
+                self.goal_started_at = None;
+                self.status = "goal cleared".to_string();
+            }
+        }
+        self.set_mcp_detail(TuiMcpDetailKind::Goal, self.render_goal_detail());
+    }
+
+    fn render_goal_detail(&self) -> String {
+        let mut detail = String::new();
+        let _ = writeln!(detail, "DeepSeekCode Goal");
+        let _ = writeln!(detail, "=================");
+        let _ = writeln!(detail);
+        match self.goal_objective.as_deref() {
+            Some(objective) => {
+                push_status_row(&mut detail, "Objective:", objective);
+                let elapsed = self
+                    .goal_started_at
+                    .and_then(|started| started.elapsed().ok())
+                    .map(format_tui_goal_elapsed)
+                    .unwrap_or_else(|| "unknown".to_string());
+                push_status_row(&mut detail, "Elapsed:", &elapsed);
+                match self.goal_token_budget {
+                    Some(budget) => {
+                        push_status_row(&mut detail, "Token budget:", &budget.to_string());
+                        match self.active_usage_summary() {
+                            Some(summary) => {
+                                let percent = if budget > 0 {
+                                    (summary.total_tokens as f64 / budget as f64 * 100.0).min(100.0)
+                                } else {
+                                    0.0
+                                };
+                                push_status_row(
+                                    &mut detail,
+                                    "Used tokens:",
+                                    &format!("{} ({percent:.0}%)", summary.total_tokens),
+                                );
+                            }
+                            None => push_status_row(
+                                &mut detail,
+                                "Used tokens:",
+                                "no active-thread usage telemetry",
+                            ),
+                        }
+                    }
+                    None => push_status_row(&mut detail, "Token budget:", "not set"),
+                }
+                let _ = writeln!(detail);
+                let _ = writeln!(detail, "Commands");
+                let _ = writeln!(detail, "--------");
+                let _ = writeln!(detail, "- /goal              Show this goal");
+                let _ = writeln!(detail, "- /goal clear        Clear the goal");
+                let _ = writeln!(
+                    detail,
+                    "- /goal <objective>  Replace it; append `budget: N` for tokens"
+                );
+            }
+            None => {
+                let _ = writeln!(
+                    detail,
+                    "No goal set. Use /goal <objective> [budget: N] to set one."
+                );
+                let _ = writeln!(detail);
+                let _ = writeln!(detail, "Examples");
+                let _ = writeln!(detail, "--------");
+                let _ = writeln!(detail, "- /goal Stabilize TUI parity budget: 50000");
+                let _ = writeln!(detail, "- /goal clear");
+            }
+        }
+        detail
+    }
+
     fn show_feedback_detail(&mut self, command: TuiFeedbackCommand) {
         let detail = render_feedback_detail(command);
         self.set_mcp_detail(TuiMcpDetailKind::Feedback, detail);
@@ -6509,6 +6710,7 @@ impl TuiApp {
         let _ = writeln!(detail, "- /mode [agent|plan|yolo|1|2|3]");
         let _ = writeln!(detail, "- /theme [dark|light|grayscale|system]");
         let _ = writeln!(detail, "- /verbose [on|off|toggle|show]");
+        let _ = writeln!(detail, "- /goal [objective [budget: N]|clear]");
         let _ = writeln!(detail, "- /model [name|list]");
         let _ = writeln!(detail, "- /provider [name [model]|list]");
         let _ = writeln!(detail, "- /network [list|allow|deny|remove|default]");
@@ -12929,6 +13131,73 @@ mod tests {
             }]
         );
         assert_eq!(app.composer, "");
+    }
+
+    #[test]
+    fn goal_command_sets_shows_and_clears_budget() {
+        let mut app = TuiApp::with_runtime_usage_and_approvals(
+            vec![TuiSession {
+                id: "session-one".to_string(),
+                title: "One".to_string(),
+                workspace: "/workspace/project".to_string(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-one".to_string()),
+                thread_count: 1,
+            }],
+            vec![TuiThread {
+                id: "thread-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                title: "First thread".to_string(),
+                mode: "agent".to_string(),
+                status: "active".to_string(),
+                latest_turn_id: Some("turn-one".to_string()),
+                event_seq: 7,
+            }],
+            Vec::new(),
+            vec![TuiUsageSummary {
+                thread_id: "thread-one".to_string(),
+                record_count: 2,
+                prompt_tokens: 700,
+                completion_tokens: 534,
+                total_tokens: 1234,
+                latest_prompt_tokens: 500,
+                latest_completion_tokens: 300,
+                latest_total_tokens: 800,
+                prompt_cache_hit_tokens: 300,
+                prompt_cache_miss_tokens: 100,
+                estimated_input_cost_microusd: Some(10),
+                estimated_output_cost_microusd: Some(20),
+                estimated_total_cost_microusd: Some(30),
+                context_remaining_tokens: 999_200,
+                context_strategy: "normal".to_string(),
+            }],
+            Vec::new(),
+        );
+
+        run_palette_command(&mut app, "goal Stabilize TUI parity | budget: 2000");
+        assert_eq!(app.status, "goal set");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("goal detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Goal);
+        assert!(detail.contains("Objective:"));
+        assert!(detail.contains("Stabilize TUI parity"));
+        assert!(detail.contains("Token budget:"));
+        assert!(detail.contains("2000"));
+        assert!(detail.contains("1234 (62%)"));
+
+        run_palette_command(&mut app, "goal");
+        assert_eq!(app.status, "goal shown");
+        let (_, detail) = app.mcp_detail.as_ref().expect("goal detail");
+        assert!(detail.contains("Stabilize TUI parity"));
+
+        app.composer_focused = true;
+        app.composer = "/goal clear".to_string();
+        app.composer_cursor = app.composer.len();
+        assert!(app.handle_key(KeyCode::Enter));
+        assert_eq!(app.status, "goal cleared");
+        assert_eq!(app.composer, "");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("goal detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Goal);
+        assert!(detail.contains("No goal set"));
     }
 
     #[test]

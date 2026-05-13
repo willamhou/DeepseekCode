@@ -26,6 +26,8 @@ Current surfaces:
   `dashboard` / `/dashboard` and `api` / `/api` aliases
 - home dashboard with `home` / `/home` plus `stats` / `/stats` and
   `overview` / `/overview` aliases
+- session goal tracking with `goal` / `/goal`, including optional token budget
+  display from active-thread usage telemetry
 - slash-mode switching with `mode` / `/mode` and
   `mode agent|plan|yolo|1|2|3`
 - help index and command topics with `help` / `/help`, `help <command>`, and
@@ -273,6 +275,9 @@ Command palette commands currently implemented:
 | `verbose`, `/verbose` | Toggle whether live reasoning text is rendered in full in the transcript |
 | `verbose on|off|show`, `/verbose on|off|show` | Enable, disable, or inspect verbose transcript mode |
 | `context`, `/context`, `ctx`, `/ctx` | Show active-thread context window, token/cache, item, and reasoning replay state |
+| `goal`, `/goal` | Show the current TUI session goal and token budget progress |
+| `goal <objective> [budget: N]`, `/goal <objective> [budget: N]` | Set or replace the current TUI session goal |
+| `goal clear`, `/goal clear` | Clear the current TUI session goal |
 | `exit`, `/exit`, `quit`, `/quit`, `q`, `/q` | Quit the TUI workbench |
 | `mode`, `/mode` | Show current mode and mode-switching commands in the right-side detail panel |
 | `mode agent|plan|yolo|1|2|3`, `/mode agent|plan|yolo|1|2|3` | Switch Plan / Agent / YOLO mode |

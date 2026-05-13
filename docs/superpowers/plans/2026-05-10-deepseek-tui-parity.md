@@ -374,6 +374,9 @@ Landed first slice:
 - local file-backed TUI now supports DeepSeek-TUI-style `/hooks` read-only
   inspection, listing the configured hook enabled state, timeout, project/user
   hook roots, executable scripts by event directory, and supported event names
+- TUI now supports DeepSeek-TUI-style `/goal`, tracking an in-memory session
+  objective with optional token budget progress from active-thread usage
+  telemetry
 - local file-backed TUI composer and command palette now expand project/user
   custom markdown slash commands from `.dscode/commands/*.md` and the
   configured user commands dir, reusing REPL argument expansion semantics and
