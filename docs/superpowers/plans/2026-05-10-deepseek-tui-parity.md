@@ -225,7 +225,8 @@ Landed first slice:
   `exec_shell_interact cwd=<path> task_id=<id>` can write stdin or close it
   without the original in-memory manager; `tty=true` now runs new background
   shell jobs through the Unix `script` PTY backend and persists `tty` /
-  `pty_backend` metadata
+  `pty_backend` metadata; `tty_rows` plus `tty_cols` set and persist initial
+  PTY geometry
 - richer structured data validation
 
 ### Phase D: TUI
@@ -339,8 +340,8 @@ Remaining:
 
 - post-shell review found no open first-order TUI interaction gaps; remaining
   work is now in harder cross-process/platform/external buckets: dedicated
-  shell supervisor ownership after owner-process exit, PTY resize/replay and
-  terminal takeover beyond the `script` backend, side-git/platform restore
+  shell supervisor ownership after owner-process exit, live PTY resize/replay
+  and terminal takeover beyond the `script` backend, side-git/platform restore
   fidelity beyond the Unix special files already captured, true live
   model-backed RLM daemon semantics, and external live PR/release fixtures
 

@@ -1300,9 +1300,11 @@ jobs also get a durable FIFO stdin path plus a keeper process, so
 record and `close_stdin=true` closes that FIFO by killing the keeper.
 `exec_shell background=true tty=true` and `task_shell_start tty=true` request a
 Unix `script` PTY backend for new background jobs; manifests record `tty` and
-`pty_backend`, and wait/show snapshots surface the same fields. This is
-PTY-backed command execution, detached logs, and FIFO stdin, not a full shell
-supervisor with resize/replay or owner-process-independent terminal takeover.
+`pty_backend`, and wait/show snapshots surface the same fields. Optional
+`tty_rows` plus `tty_cols` set the initial PTY geometry and are persisted in
+the same manifest. This is PTY-backed command execution with initial geometry,
+detached logs, and FIFO stdin, not a full shell supervisor with live
+resize/replay or owner-process-independent terminal takeover.
 `exec_shell_cancel cwd=<path> task_id=<id>` can best-effort cancel a detached
 `running` record by its persisted pid/process group and then update the durable
 manifest to `killed`.

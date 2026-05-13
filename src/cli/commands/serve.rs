@@ -3417,6 +3417,14 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
                     ("cwd", string_property("Working directory, default workspace root.")),
                     ("background", string_property("Set true to run in background.")),
                     ("tty", string_property("Set true to request the Unix script PTY backend.")),
+                    (
+                        "tty_rows",
+                        string_property("Optional initial PTY row count; requires tty=true and tty_cols."),
+                    ),
+                    (
+                        "tty_cols",
+                        string_property("Optional initial PTY column count; requires tty=true and tty_rows."),
+                    ),
                     ("stdin", string_property("Optional initial stdin.")),
                     ("input", string_property("Alias for stdin.")),
                     ("data", string_property("Alias for stdin.")),
@@ -3435,6 +3443,14 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
                     ("input", string_property("Alias for stdin.")),
                     ("timeout_ms", number_property("Compatibility timeout metadata.")),
                     ("tty", string_property("Set true to request the Unix script PTY backend.")),
+                    (
+                        "tty_rows",
+                        string_property("Optional initial PTY row count; requires tty=true and tty_cols."),
+                    ),
+                    (
+                        "tty_cols",
+                        string_property("Optional initial PTY column count; requires tty=true and tty_rows."),
+                    ),
                 ],
                 &["command"],
             ),

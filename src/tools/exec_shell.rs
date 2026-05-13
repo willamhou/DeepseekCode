@@ -46,10 +46,11 @@ pub fn run_trusted_background_shell(command: &str, cwd: &str) -> AppResult<ToolO
     if command.is_empty() {
         return Err(app_error("trusted background shell requires a command"));
     }
-    let task_id = shell_manager()
-        .lock()
-        .unwrap()
-        .spawn(command, cwd, None, false)?;
+    let task_id =
+        shell_manager()
+            .lock()
+            .unwrap()
+            .spawn(command, cwd, None, ShellTtyOptions::default())?;
     Ok(ToolOutput {
         summary: format!(
             "task_id: {task_id}\nstatus: running\ncommand: {command}\ncwd: {cwd}\ntrusted_foreground_approval: true\nPoll with exec_shell_wait task_id={task_id} or cancel with exec_shell_cancel task_id={task_id}."
@@ -70,10 +71,10 @@ impl Tool for ExecShellTool {
             return Err(app_error(format!("command not allowed: {command}")));
         }
         let background = truthy(input.get("background"));
-        let tty = truthy(input.get("tty"));
+        let tty_options = parse_tty_options(&input)?;
         if !background {
-            if tty {
-                return Err(app_error("exec_shell tty=true requires background=true"));
+            if tty_options.requested() {
+                return Err(app_error("exec_shell tty options require background=true"));
             }
             let mut shell_input = ToolInput::new().with_arg("command", command.to_string());
             if let Some(cwd) = input.get("cwd") {
@@ -90,11 +91,14 @@ impl Tool for ExecShellTool {
         let task_id = shell_manager()
             .lock()
             .unwrap()
-            .spawn(command, cwd, stdin, tty)?;
+            .spawn(command, cwd, stdin, tty_options)?;
         Ok(ToolOutput {
             summary: format!(
-                "task_id: {task_id}\nstatus: running\ncommand: {command}\ncwd: {cwd}\ntty: {tty}\npty_backend: {}\nPoll with exec_shell_wait task_id={task_id} or cancel with exec_shell_cancel task_id={task_id}.",
-                if tty { "script" } else { "none" }
+                "task_id: {task_id}\nstatus: running\ncommand: {command}\ncwd: {cwd}\ntty: {}\npty_backend: {}\ntty_rows: {}\ntty_cols: {}\nPoll with exec_shell_wait task_id={task_id} or cancel with exec_shell_cancel task_id={task_id}.",
+                tty_options.enabled,
+                pty_backend_label(tty_options),
+                tty_rows_label(tty_options.size),
+                tty_cols_label(tty_options.size)
             ),
         })
     }
@@ -124,6 +128,12 @@ impl Tool for TaskShellStartTool {
         let tty = truthy(input.get("tty"));
         if tty {
             shell_input = shell_input.with_arg("tty", "true");
+        }
+        if let Some(tty_rows) = input.get("tty_rows") {
+            shell_input = shell_input.with_arg("tty_rows", tty_rows.to_string());
+        }
+        if let Some(tty_cols) = input.get("tty_cols") {
+            shell_input = shell_input.with_arg("tty_cols", tty_cols.to_string());
         }
         let mut output = ExecShellTool.execute(shell_input)?;
         output.summary = output
@@ -321,7 +331,7 @@ struct BackgroundShellJob {
     id: String,
     command: String,
     cwd: String,
-    tty: bool,
+    tty_options: ShellTtyOptions,
     child: Option<Child>,
     stdin: Option<ShellStdinControl>,
     stdout_cursor: usize,
@@ -331,6 +341,18 @@ struct BackgroundShellJob {
     started_at: String,
     updated_at: String,
     record_dir: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ShellTtyOptions {
+    enabled: bool,
+    size: Option<ShellTtySize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ShellTtySize {
+    rows: u16,
+    cols: u16,
 }
 
 enum ShellStdinControl {
@@ -371,7 +393,7 @@ impl BackgroundShellManager {
         command: &str,
         cwd: &str,
         stdin_data: Option<&str>,
-        tty: bool,
+        tty_options: ShellTtyOptions,
     ) -> AppResult<String> {
         let id = generated_job_id();
         let record_dir = shell_job_record_dir(cwd, &id);
@@ -388,7 +410,7 @@ impl BackgroundShellManager {
             stdio: stdin_stdio,
             mode: stdin_mode,
         } = prepare_background_stdin(&record_dir)?;
-        let mut process = shell_process_for_background_job(command, tty)?;
+        let mut process = shell_process_for_background_job(command, tty_options)?;
         process
             .current_dir(cwd)
             .stdin(stdin_stdio)
@@ -410,7 +432,7 @@ impl BackgroundShellManager {
                 id: id.clone(),
                 command: command.to_string(),
                 cwd: cwd.to_string(),
-                tty,
+                tty_options,
                 child: Some(child),
                 stdin,
                 stdout_cursor: 0,
@@ -489,7 +511,7 @@ impl BackgroundShellManager {
             let stdout_total = durable_log_bytes(&job.record_dir, "stdout.log", 0);
             let stderr_total = durable_log_bytes(&job.record_dir, "stderr.log", 0);
             lines.push(format!(
-                "- {} [{}] exit={} stdout={} stderr={} tty={} cwd={}",
+                "- {} [{}] exit={} stdout={} stderr={} tty={} tty_size={} cwd={}",
                 job.id,
                 job.status.as_str(),
                 job.exit_code
@@ -497,7 +519,8 @@ impl BackgroundShellManager {
                     .unwrap_or_else(|| "null".to_string()),
                 stdout_total,
                 stderr_total,
-                job.tty,
+                job.tty_options.enabled,
+                tty_size_label(job.tty_options.size),
                 job.cwd
             ));
             lines.push(format!("  command: {}", job.command));
@@ -507,7 +530,7 @@ impl BackgroundShellManager {
                 continue;
             }
             lines.push(format!(
-                "- {} [{} detached] exit={} stdout={} stderr={} tty={} cwd={}",
+                "- {} [{} detached] exit={} stdout={} stderr={} tty={} tty_size={} cwd={}",
                 record.id,
                 record.status,
                 record
@@ -517,6 +540,7 @@ impl BackgroundShellManager {
                 record.stdout_total_bytes,
                 record.stderr_total_bytes,
                 record.tty,
+                tty_size_label(record.tty_size),
                 record.cwd
             ));
             lines.push(format!("  command: {}", record.command));
@@ -538,7 +562,7 @@ impl BackgroundShellManager {
         let stdout_total = durable_log_bytes(&job.record_dir, "stdout.log", 0);
         let stderr_total = durable_log_bytes(&job.record_dir, "stderr.log", 0);
         let mut out = format!(
-            "task_id: {}\nstatus: {}\nexit_code: {}\ncommand: {}\ncwd: {}\ntty: {}\npty_backend: {}\nstdout_total_bytes: {stdout_total}\nstderr_total_bytes: {stderr_total}\n",
+            "task_id: {}\nstatus: {}\nexit_code: {}\ncommand: {}\ncwd: {}\ntty: {}\npty_backend: {}\ntty_rows: {}\ntty_cols: {}\nstdout_total_bytes: {stdout_total}\nstderr_total_bytes: {stderr_total}\n",
             job.id,
             job.status.as_str(),
             job.exit_code
@@ -546,8 +570,10 @@ impl BackgroundShellManager {
                 .unwrap_or_else(|| "null".to_string()),
             job.command,
             job.cwd,
-            job.tty,
-            if job.tty { "script" } else { "none" }
+            job.tty_options.enabled,
+            pty_backend_label(job.tty_options),
+            tty_rows_label(job.tty_options.size),
+            tty_cols_label(job.tty_options.size)
         );
         if !stdout_delta.trim().is_empty() {
             out.push_str("stdout_delta:\n");
@@ -574,7 +600,7 @@ impl BackgroundShellManager {
         let stdout_total = stdout.len();
         let stderr_total = stderr.len();
         let mut out = format!(
-            "task_id: {}\nstatus: {}\nexit_code: {}\ncommand: {}\ncwd: {}\ntty: {}\npty_backend: {}\nstdout_total_bytes: {stdout_total}\nstderr_total_bytes: {stderr_total}\n",
+            "task_id: {}\nstatus: {}\nexit_code: {}\ncommand: {}\ncwd: {}\ntty: {}\npty_backend: {}\ntty_rows: {}\ntty_cols: {}\nstdout_total_bytes: {stdout_total}\nstderr_total_bytes: {stderr_total}\n",
             job.id,
             job.status.as_str(),
             job.exit_code
@@ -582,8 +608,10 @@ impl BackgroundShellManager {
                 .unwrap_or_else(|| "null".to_string()),
             job.command,
             job.cwd,
-            job.tty,
-            if job.tty { "script" } else { "none" }
+            job.tty_options.enabled,
+            pty_backend_label(job.tty_options),
+            tty_rows_label(job.tty_options.size),
+            tty_cols_label(job.tty_options.size)
         );
         if !stdout.trim().is_empty() {
             out.push_str("stdout:\n");
@@ -685,22 +713,104 @@ fn shell_manager() -> &'static Mutex<BackgroundShellManager> {
     SHELL_JOBS.get_or_init(|| Mutex::new(BackgroundShellManager::default()))
 }
 
-fn shell_process_for_background_job(command: &str, tty: bool) -> AppResult<Command> {
-    if tty {
+impl ShellTtyOptions {
+    fn requested(self) -> bool {
+        self.enabled || self.size.is_some()
+    }
+}
+
+fn parse_tty_options(input: &ToolInput) -> AppResult<ShellTtyOptions> {
+    let enabled = truthy(input.get("tty"));
+    let rows = optional_input_u16(input, "tty_rows", 1, 2000)?;
+    let cols = optional_input_u16(input, "tty_cols", 1, 2000)?;
+    let size = match (rows, cols) {
+        (Some(rows), Some(cols)) => Some(ShellTtySize { rows, cols }),
+        (None, None) => None,
+        _ => {
+            return Err(app_error(
+                "exec_shell tty_rows and tty_cols must be provided together",
+            ));
+        }
+    };
+    if size.is_some() && !enabled {
+        return Err(app_error("exec_shell tty_rows/tty_cols require tty=true"));
+    }
+    Ok(ShellTtyOptions { enabled, size })
+}
+
+fn optional_input_u16(input: &ToolInput, key: &str, min: u16, max: u16) -> AppResult<Option<u16>> {
+    let Some(raw) = input
+        .get(key)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    let value = raw
+        .parse::<u16>()
+        .map_err(|_| app_error(format!("exec_shell {key} must be an integer")))?;
+    if value < min || value > max {
+        return Err(app_error(format!(
+            "exec_shell {key} must be between {min} and {max}"
+        )));
+    }
+    Ok(Some(value))
+}
+
+fn shell_process_for_background_job(
+    command: &str,
+    tty_options: ShellTtyOptions,
+) -> AppResult<Command> {
+    if tty_options.enabled {
         if !script_pty_backend_available() {
             return Err(app_error(
                 "exec_shell/task_shell_start tty=true requires the `script` PTY utility",
             ));
         }
         let mut process = Command::new("script");
-        process.args(["-q", "-f", "-e", "-c", command, "/dev/null"]);
+        let script_command = script_pty_command(command, tty_options.size);
+        process.args(["-q", "-f", "-e", "-c", &script_command, "/dev/null"]);
         process.env("TERM", "xterm-256color");
+        if let Some(size) = tty_options.size {
+            process.env("LINES", size.rows.to_string());
+            process.env("COLUMNS", size.cols.to_string());
+        }
         Ok(process)
     } else {
         let mut process = Command::new("sh");
         process.args(["-lc", command]);
         Ok(process)
     }
+}
+
+fn script_pty_command(command: &str, size: Option<ShellTtySize>) -> String {
+    match size {
+        Some(size) => format!("stty rows {} cols {}; {command}", size.rows, size.cols),
+        None => command.to_string(),
+    }
+}
+
+fn pty_backend_label(tty_options: ShellTtyOptions) -> &'static str {
+    if tty_options.enabled {
+        "script"
+    } else {
+        "none"
+    }
+}
+
+fn tty_size_label(size: Option<ShellTtySize>) -> String {
+    size.map(|size| format!("{}x{}", size.rows, size.cols))
+        .unwrap_or_else(|| "null".to_string())
+}
+
+fn tty_rows_label(size: Option<ShellTtySize>) -> String {
+    size.map(|size| size.rows.to_string())
+        .unwrap_or_else(|| "null".to_string())
+}
+
+fn tty_cols_label(size: Option<ShellTtySize>) -> String {
+    size.map(|size| size.cols.to_string())
+        .unwrap_or_else(|| "null".to_string())
 }
 
 fn script_pty_backend_available() -> bool {
@@ -874,6 +984,7 @@ struct DurableShellJobRecord {
     command: String,
     cwd: String,
     tty: bool,
+    tty_size: Option<ShellTtySize>,
     status: String,
     exit_code: Option<i32>,
     pid: u32,
@@ -1030,14 +1141,28 @@ fn persist_job_snapshot(job: &BackgroundShellJob) -> AppResult<()> {
             JsonValue::String(job.command.clone()),
         ),
         ("cwd".to_string(), JsonValue::String(job.cwd.clone())),
-        ("tty".to_string(), JsonValue::Bool(job.tty)),
+        ("tty".to_string(), JsonValue::Bool(job.tty_options.enabled)),
         (
             "pty_backend".to_string(),
-            if job.tty {
+            if job.tty_options.enabled {
                 JsonValue::String("script".to_string())
             } else {
                 JsonValue::Null
             },
+        ),
+        (
+            "tty_rows".to_string(),
+            job.tty_options
+                .size
+                .map(|size| JsonValue::Number(size.rows.to_string()))
+                .unwrap_or(JsonValue::Null),
+        ),
+        (
+            "tty_cols".to_string(),
+            job.tty_options
+                .size
+                .map(|size| JsonValue::Number(size.cols.to_string()))
+                .unwrap_or(JsonValue::Null),
         ),
         (
             "status".to_string(),
@@ -1109,6 +1234,20 @@ fn write_durable_shell_job_manifest(cwd: &str, record: &DurableShellJobRecord) -
             } else {
                 JsonValue::Null
             },
+        ),
+        (
+            "tty_rows".to_string(),
+            record
+                .tty_size
+                .map(|size| JsonValue::Number(size.rows.to_string()))
+                .unwrap_or(JsonValue::Null),
+        ),
+        (
+            "tty_cols".to_string(),
+            record
+                .tty_size
+                .map(|size| JsonValue::Number(size.cols.to_string()))
+                .unwrap_or(JsonValue::Null),
         ),
         (
             "status".to_string(),
@@ -1189,7 +1328,7 @@ fn render_durable_snapshot(cwd: &str, task_id: &str) -> AppResult<String> {
         "unavailable"
     };
     let mut out = format!(
-        "task_id: {}\nstatus: {}\nmanaged: false\nexit_code: {}\npid: {}\ncommand: {}\ncwd: {}\ntty: {}\npty_backend: {}\nstarted_at: {}\nupdated_at: {}\nstdout_total_bytes: {}\nstderr_total_bytes: {}\nstdin_control: {}\nnote: durable metadata and logs are available; detached cancel is best-effort and detached stdin is available only when stdin_control=detached_fifo.\n",
+        "task_id: {}\nstatus: {}\nmanaged: false\nexit_code: {}\npid: {}\ncommand: {}\ncwd: {}\ntty: {}\npty_backend: {}\ntty_rows: {}\ntty_cols: {}\nstarted_at: {}\nupdated_at: {}\nstdout_total_bytes: {}\nstderr_total_bytes: {}\nstdin_control: {}\nnote: durable metadata and logs are available; detached cancel is best-effort and detached stdin is available only when stdin_control=detached_fifo.\n",
         record.id,
         record.status,
         record
@@ -1200,7 +1339,12 @@ fn render_durable_snapshot(cwd: &str, task_id: &str) -> AppResult<String> {
         record.command,
         record.cwd,
         record.tty,
-        if record.tty { "script" } else { "none" },
+        pty_backend_label(ShellTtyOptions {
+            enabled: record.tty,
+            size: record.tty_size,
+        }),
+        tty_rows_label(record.tty_size),
+        tty_cols_label(record.tty_size),
         record.started_at,
         record.updated_at,
         record.stdout_total_bytes,
@@ -1237,6 +1381,7 @@ fn read_durable_shell_job_manifest(path: &Path) -> AppResult<DurableShellJobReco
         command: required_manifest_string(&root, "command")?,
         cwd: required_manifest_string(&root, "cwd")?,
         tty: matches!(root.get("tty"), Some(JsonValue::Bool(true))),
+        tty_size: manifest_tty_size(&root)?,
         status: required_manifest_string(&root, "status")?,
         exit_code: match root.get("exit_code") {
             Some(JsonValue::Null) | None => None,
@@ -1257,6 +1402,30 @@ fn read_durable_shell_job_manifest(path: &Path) -> AppResult<DurableShellJobReco
         stdout_total_bytes: durable_log_bytes(record_dir, "stdout.log", manifest_stdout_total),
         stderr_total_bytes: durable_log_bytes(record_dir, "stderr.log", manifest_stderr_total),
     })
+}
+
+fn manifest_tty_size(root: &BTreeMap<String, JsonValue>) -> AppResult<Option<ShellTtySize>> {
+    let rows = manifest_tty_dimension(root, "tty_rows")?;
+    let cols = manifest_tty_dimension(root, "tty_cols")?;
+    match (rows, cols) {
+        (Some(rows), Some(cols)) => Ok(Some(ShellTtySize { rows, cols })),
+        (None, None) => Ok(None),
+        _ => Err(app_error(
+            "exec_shell manifest tty_rows and tty_cols must both be present",
+        )),
+    }
+}
+
+fn manifest_tty_dimension(root: &BTreeMap<String, JsonValue>, key: &str) -> AppResult<Option<u16>> {
+    let Some(value) = root.get(key).and_then(json_as_u64) else {
+        return Ok(None);
+    };
+    if value == 0 || value > 2000 {
+        return Err(app_error(format!(
+            "exec_shell manifest {key} must be between 1 and 2000"
+        )));
+    }
+    Ok(Some(value as u16))
 }
 
 fn refresh_durable_running_status(cwd: &str, record: &mut DurableShellJobRecord) -> AppResult<()> {
@@ -1771,6 +1940,7 @@ mod tests {
             command: "sleep 30".to_string(),
             cwd: cwd.clone(),
             tty: false,
+            tty_size: None,
             status: "running".to_string(),
             exit_code: None,
             pid: child.id(),
@@ -1834,6 +2004,7 @@ mod tests {
             command: "sleep 30".to_string(),
             cwd: cwd.clone(),
             tty: false,
+            tty_size: None,
             status: "running".to_string(),
             exit_code: None,
             pid: 9_999_999,
@@ -1934,7 +2105,10 @@ mod tests {
                 "test -t 1 && echo tty-ready || echo not-tty",
                 &cwd,
                 None,
-                true,
+                ShellTtyOptions {
+                    enabled: true,
+                    size: None,
+                },
             )
             .unwrap();
         let waited = ExecShellWaitTool {
@@ -1987,6 +2161,105 @@ mod tests {
             )
             .unwrap();
         assert!(started.summary.contains("tty: true"), "{}", started.summary);
+        assert!(
+            started.summary.contains("meta.tty=true"),
+            "{}",
+            started.summary
+        );
+        let started_id = task_id_from(&started.summary);
+        let _ = TaskShellWaitTool.execute(
+            ToolInput::new()
+                .with_arg("task_id", started_id)
+                .with_arg("cwd", cwd.clone())
+                .with_arg("timeout_ms", "1000"),
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn task_shell_start_tty_size_sets_script_geometry() {
+        if !script_pty_backend_available() {
+            return;
+        }
+        let root = temp_root("task-shell-tty-size");
+        fs::create_dir_all(&root).unwrap();
+        let cwd = root.display().to_string();
+
+        let geometry_task_id = shell_manager()
+            .lock()
+            .unwrap()
+            .spawn(
+                "stty size",
+                &cwd,
+                None,
+                ShellTtyOptions {
+                    enabled: true,
+                    size: Some(ShellTtySize {
+                        rows: 33,
+                        cols: 111,
+                    }),
+                },
+            )
+            .unwrap();
+        let geometry_waited = TaskShellWaitTool
+            .execute(
+                ToolInput::new()
+                    .with_arg("task_id", geometry_task_id.clone())
+                    .with_arg("cwd", cwd.clone())
+                    .with_arg("timeout_ms", "1000"),
+            )
+            .unwrap();
+        assert!(
+            geometry_waited.summary.contains("tty: true"),
+            "{}",
+            geometry_waited.summary
+        );
+        assert!(
+            geometry_waited.summary.contains("tty_rows: 33"),
+            "{}",
+            geometry_waited.summary
+        );
+        assert!(
+            geometry_waited.summary.contains("tty_cols: 111"),
+            "{}",
+            geometry_waited.summary
+        );
+        assert!(
+            geometry_waited.summary.contains("33 111"),
+            "{}",
+            geometry_waited.summary
+        );
+
+        let manifest = fs::read_to_string(
+            root.join(".dscode/shell-jobs")
+                .join(&geometry_task_id)
+                .join("manifest.json"),
+        )
+        .unwrap();
+        assert!(manifest.contains(r#""tty_rows":33"#), "{manifest}");
+        assert!(manifest.contains(r#""tty_cols":111"#), "{manifest}");
+
+        let started = TaskShellStartTool
+            .execute(
+                ToolInput::new()
+                    .with_arg("command", "echo task-tty-size")
+                    .with_arg("cwd", cwd.clone())
+                    .with_arg("tty", "true")
+                    .with_arg("tty_rows", "33")
+                    .with_arg("tty_cols", "111"),
+            )
+            .unwrap();
+        assert!(
+            started.summary.contains("tty_rows: 33"),
+            "{}",
+            started.summary
+        );
+        assert!(
+            started.summary.contains("tty_cols: 111"),
+            "{}",
+            started.summary
+        );
         assert!(
             started.summary.contains("meta.tty=true"),
             "{}",

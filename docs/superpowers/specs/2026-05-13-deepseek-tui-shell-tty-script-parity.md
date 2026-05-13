@@ -24,6 +24,7 @@ or adjust terminal behavior could not run through a PTY-backed path.
 - Tool specs and MCP schemas should advertise the `tty` option.
 - Durable shell manifests and rendered snapshots should expose `tty` and
   `pty_backend`, so detached show/wait/list calls preserve the execution mode.
+  A later slice adds persisted initial PTY geometry.
 
 ## Implementation
 
@@ -33,6 +34,8 @@ or adjust terminal behavior could not run through a PTY-backed path.
 - Preserved the existing `sh -lc` path for non-TTY jobs.
 - Added `tty` / `pty_backend` output to start, wait, show, list, and detached
   durable snapshots.
+- A later slice adds `tty_rows` / `tty_cols` to set and persist initial PTY
+  geometry.
 - Forwarded `task_shell_start tty=true` into `exec_shell background=true
   tty=true`.
 - Updated OpenAI-format tool specs and MCP tool definitions.
@@ -51,6 +54,7 @@ or adjust terminal behavior could not run through a PTY-backed path.
 
 This narrows `tty=true` from inert compatibility metadata to a real PTY-backed
 execution path for new Unix background jobs. It is still not a dedicated shell
-supervisor: there is no terminal resize control, replay protocol, attachable
-interactive terminal UI, or independent daemon that owns PTY lifecycle after
-the original DeepSeekCode process exits.
+supervisor: even with the later initial-geometry slice, there is no live
+terminal resize control, replay protocol, attachable interactive terminal UI,
+or independent daemon that owns PTY lifecycle after the original DeepSeekCode
+process exits.

@@ -18,9 +18,10 @@ web, review, RLM helper, and request-user-input surfaces landed.
    detached manifest/log inspection. Later slices also add best-effort
    detached cancel by persisted pid/process group, direct durable stdout/stderr
    logs, Unix FIFO detached stdin for new background jobs, and `tty=true`
-   execution through the Unix `script` PTY backend. The remaining shell gap is
-   a dedicated PTY supervisor with resize/replay and robust ownership after the
-   owner DeepSeekCode process has exited.
+   execution through the Unix `script` PTY backend. A later slice also adds
+   initial PTY geometry with `tty_rows` plus `tty_cols`. The remaining shell
+   gap is a dedicated PTY supervisor with live resize/replay and robust
+   ownership after the owner DeepSeekCode process has exited.
 2. TUI interaction parity no longer has a first-order open item in the plan.
    The workbench has command history/completion, modal approvals, user-input
    Other answers, MCP manager keyboard/mouse/bulk flows, task multiselect, shell
@@ -53,9 +54,10 @@ external publishing/write fixtures still need either more architecture or
 explicit external resources. Shell cancel has since narrowed to best-effort
 detached process-group cancellation; detached stdin has since narrowed to Unix
 FIFO control for new jobs; `tty=true` has since narrowed to a Unix `script` PTY
-backend; RLM process semantics have since narrowed to durable model-session
-context. PTY resize/replay/supervisor takeover and a true live model daemon
-remain open.
+backend; initial PTY geometry has since narrowed to `tty_rows` plus `tty_cols`;
+RLM process semantics have since narrowed to durable model-session context.
+Live PTY resize/replay/supervisor takeover and a true live model daemon remain
+open.
 
 ## Next Candidate Specs
 
