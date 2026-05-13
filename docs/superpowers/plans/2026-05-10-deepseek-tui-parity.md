@@ -366,6 +366,9 @@ Landed first slice:
 - `deepseek diagnostics --watch` keeps a warmed stdio LSP session alive inside the watcher process, and `deepseek agents service` renders a diagnostics watch supervisor for local always-on use
 - agent registry exposes a read-only `diagnostics` tool, and OpenAI/Anthropic tool schemas include it
 - `diagnostics.post_edit = true` enables opt-in post-edit diagnostics appended to successful `apply_patch` tool results
+- `serve --http` exposes `/v1/diagnostics` as a runtime diagnostics broker
+  with warmed LSP session reuse inside the runtime process, and HTTP-runtime
+  TUI sessions route `diagnostics [--changed|paths...]` through that broker
 - `src/core/rollback.rs` stores rollback snapshots under `.dscode/rollback/snapshots/`, including combined, staged, and unstaged tracked diffs plus captured untracked regular files
 - `deepseek restore snapshot [label]`, `restore list`, `restore show <id> [--patch]`, and `restore revert-turn <id> [--apply]`
 - REPL `/restore snapshot [label]`, `/restore list`, `/restore show <id>`, and `/revert_turn <id> [--apply]`
@@ -381,7 +384,8 @@ Landed first slice:
 
 Remaining:
 
-- cross-process diagnostics broker shared by TUI, daemon, and CLI processes
+- dedicated standalone diagnostics daemon protocol beyond the HTTP runtime
+  broker
 - side-git/worktree snapshot strategy for richer non-regular-file fidelity
 - richer restore UX in the future TUI
 
