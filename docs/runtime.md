@@ -1231,7 +1231,11 @@ evidence without invoking `gh`; callers can then pass its dry-run
 `github_comment_input` through the normal approval-gated mutation path when they
 explicitly want to post. The offline planner performs that handoff only for
 explicit post/publish/leave/add/submit/send wording; draft and prepare tasks stop
-at the read-only plan.
+at the read-only plan. If the guarded `github_comment` attempt fails or is
+denied, the planner does not blindly resend the same mutation. It rebuilds a
+fresh `pr_review_comment_plan` with the previous comment error recorded in the
+comment body and evidence, leaving the next retry to an explicit follow-up and
+approval.
 
 Agent runs also expose DeepSeek-TUI-compatible `revert_turn`. It restores
 workspace files from rollback snapshots by `snapshot_id`, `checkpoint_id`,

@@ -37,5 +37,6 @@ the guarded GitHub mutation path without bypassing approval.
 
 - `/home/willamhou/.cargo/bin/cargo test remote_pr --lib`
 
-Live GitHub posting fixtures and retry handling for failed or denied comments
-remain follow-up work.
+Follow-up work added failure recovery by rebuilding the comment plan with the
+previous error recorded in evidence. Live GitHub posting fixtures and inline
+review-comment posting remain follow-up work.

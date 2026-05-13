@@ -298,6 +298,10 @@ impl DeepSeekClient {
         let latest_review_output = latest_successful_tool_summary(&input.observations, "review");
         let latest_pr_review_comment_plan =
             latest_successful_tool_summary(&input.observations, "pr_review_comment_plan");
+        let last_failed_github_comment =
+            last_failed_tool_summary(&input.observations, "github_comment");
+        let pr_review_comment_plan_call_count =
+            tool_call_count(&input.observations, "pr_review_comment_plan");
         let successful_apply_patch_count =
             successful_tool_call_count(&input.observations, "apply_patch");
         let git_diff_call_count = tool_call_count(&input.observations, "git_diff");
@@ -492,6 +496,37 @@ impl DeepSeekClient {
                             ),
                             action: ModelAction::CallTool {
                                 tool_name: "github_comment".to_string(),
+                                input: tool_input,
+                            },
+                        };
+                    }
+                }
+            }
+            if let Some(comment_error) = last_failed_github_comment {
+                if task_requests_remote_pr_comment_post(&task_lower)
+                    && tool_available("pr_review_comment_plan")
+                    && pr_review_comment_plan_call_count < 2
+                {
+                    if let Some(review_output) = latest_review_output {
+                        let mut tool_input = ToolInput::new()
+                            .with_arg("review_output", review_output.to_string())
+                            .with_arg("comment_error", comment_error.to_string());
+                        if let Some(context) = latest_github_pr_context {
+                            tool_input = tool_input.with_arg("pr_context", context.to_string());
+                        }
+                        if let Some(pr_request) = github_pr_context_request.as_ref() {
+                            tool_input = tool_input.with_arg("number", pr_request.number.clone());
+                            if let Some(repo) = pr_request.repo.as_ref() {
+                                tool_input = tool_input.with_arg("repo", repo.clone());
+                            }
+                        }
+                        return ModelResponse {
+                            message: format!(
+                                "{} planner is rebuilding the PR review comment plan after the guarded GitHub comment attempt failed.",
+                                model_name
+                            ),
+                            action: ModelAction::CallTool {
+                                tool_name: "pr_review_comment_plan".to_string(),
                                 input: tool_input,
                             },
                         };
@@ -1913,6 +1948,16 @@ fn latest_successful_tool_summary<'a>(
         .iter()
         .rev()
         .find(|observation| observation.tool_name == tool_name && !observation.is_failure())
+        .map(|observation| observation.summary.as_str())
+}
+
+fn last_failed_tool_summary<'a>(
+    observations: &'a [crate::model::protocol::Observation],
+    tool_name: &str,
+) -> Option<&'a str> {
+    observations
+        .last()
+        .filter(|observation| observation.tool_name == tool_name && observation.is_failure())
         .map(|observation| observation.summary.as_str())
 }
 
@@ -6313,6 +6358,93 @@ diff --git a/src/cli/app.rs b/src/cli/app.rs\n";
                 Observation::ok("github_pr_context", "meta.kind=pr\nmeta.number=42\n"),
                 Observation::ok("review", "{\"issues\":[]}"),
                 Observation::ok("pr_review_comment_plan", comment_plan),
+            ],
+            todos: Vec::new(),
+            planning_mode: false,
+            recent_steps: Vec::new(),
+        };
+
+        let response = planner()
+            .respond(request, &mut crate::ui::stream::NoopStreamEvents)
+            .unwrap()
+            .0;
+        assert!(matches!(response.action, ModelAction::Finish));
+    }
+
+    #[test]
+    fn offline_planner_replans_after_failed_pr_comment_post() {
+        let context = "meta.kind=pr\nmeta.number=42\n";
+        let review_output = "{\"issues\":[],\"source\":{\"kind\":\"github_pr_diff\",\"target\":\"github_pr_context\",\"truncated\":false}}";
+        let comment_plan = r###"{"comment_body":"draft","evidence":{"tool":"review"},"github_comment_input":{"target":"pr","number":"42","body":"draft","evidence":"{\"tool\":\"review\"}","dry_run":"true","repo":"owner/repo"}}"###;
+        let request = ModelRequest {
+            system_prompt: String::new(),
+            task: "Review pull request #42 on owner/repo and post a PR comment with the findings."
+                .to_string(),
+            image_inputs: Vec::new(),
+            profile_name: "rust".to_string(),
+            profile_hints: Vec::new(),
+            primary_file: None,
+            suggested_test_command: None,
+            available_tools: vec![
+                "github_pr_context".to_string(),
+                "review".to_string(),
+                "pr_review_comment_plan".to_string(),
+                "github_comment".to_string(),
+            ],
+            observations: vec![
+                Observation::ok("github_pr_context", context),
+                Observation::ok("review", review_output),
+                Observation::ok("pr_review_comment_plan", comment_plan),
+                Observation::failed("github_comment", "policy denied by reviewer"),
+            ],
+            todos: Vec::new(),
+            planning_mode: false,
+            recent_steps: Vec::new(),
+        };
+
+        let response = planner()
+            .respond(request, &mut crate::ui::stream::NoopStreamEvents)
+            .unwrap()
+            .0;
+        match response.action {
+            ModelAction::CallTool { tool_name, input } => {
+                assert_eq!(tool_name, "pr_review_comment_plan");
+                assert_eq!(input.get("review_output"), Some(review_output));
+                assert_eq!(input.get("pr_context"), Some(context));
+                assert_eq!(
+                    input.get("comment_error"),
+                    Some("policy denied by reviewer")
+                );
+                assert_eq!(input.get("number"), Some("42"));
+                assert_eq!(input.get("repo"), Some("owner/repo"));
+            }
+            ModelAction::Finish => panic!("expected comment-plan retry after failed post"),
+        }
+    }
+
+    #[test]
+    fn offline_planner_finishes_after_pr_comment_retry_plan() {
+        let request = ModelRequest {
+            system_prompt: String::new(),
+            task: "Review pull request #42 on owner/repo and post a PR comment with the findings."
+                .to_string(),
+            image_inputs: Vec::new(),
+            profile_name: "rust".to_string(),
+            profile_hints: Vec::new(),
+            primary_file: None,
+            suggested_test_command: None,
+            available_tools: vec![
+                "github_pr_context".to_string(),
+                "review".to_string(),
+                "pr_review_comment_plan".to_string(),
+                "github_comment".to_string(),
+            ],
+            observations: vec![
+                Observation::ok("github_pr_context", "meta.kind=pr\nmeta.number=42\n"),
+                Observation::ok("review", "{\"issues\":[]}"),
+                Observation::ok("pr_review_comment_plan", "{\"comment_body\":\"first\",\"evidence\":{\"tool\":\"review\"},\"number\":\"42\"}"),
+                Observation::failed("github_comment", "gh auth failed"),
+                Observation::ok("pr_review_comment_plan", "{\"comment_body\":\"retry\",\"evidence\":{\"tool\":\"review\",\"previous_comment_error\":\"gh auth failed\"},\"number\":\"42\"}"),
             ],
             todos: Vec::new(),
             planning_mode: false,

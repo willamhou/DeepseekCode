@@ -85,6 +85,12 @@ impl Tool for PrReviewCommentPlanTool {
         let suggestions = comment_suggestions_from_review(&root);
         let source = comment_source_from_review(&root);
         let max_issues = parse_comment_max_issues(&input);
+        let comment_error = input
+            .get("comment_error")
+            .or_else(|| input.get("previous_comment_error"))
+            .or_else(|| input.get("retry_reason"))
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
         let pr_context = input
             .get("github_context")
             .or_else(|| input.get("pr_context"))
@@ -93,9 +99,15 @@ impl Tool for PrReviewCommentPlanTool {
             .filter(|value| !value.is_empty());
         let pr_number = comment_pr_number(&input, pr_context);
         let repo = comment_repo(&input, pr_context);
-        let body =
-            render_pr_review_comment_body(&issues, &suggestions, source.as_ref(), max_issues);
-        let evidence = pr_review_comment_evidence(&root, &issues, source.as_ref(), max_issues);
+        let body = render_pr_review_comment_body(
+            &issues,
+            &suggestions,
+            source.as_ref(),
+            max_issues,
+            comment_error,
+        );
+        let evidence =
+            pr_review_comment_evidence(&root, &issues, source.as_ref(), max_issues, comment_error);
         let github_input =
             pr_review_comment_github_input(pr_number.as_deref(), repo.as_deref(), &body, &evidence);
 
@@ -876,9 +888,15 @@ fn render_pr_review_comment_body(
     suggestions: &[String],
     source: Option<&CommentSource>,
     max_issues: usize,
+    comment_error: Option<&str>,
 ) -> String {
     let mut body = String::new();
     body.push_str("## Automated PR Review\n\n");
+    if let Some(error) = comment_error {
+        body.push_str("Previous comment attempt failed or was denied: ");
+        body.push_str(&compact_text(error, 240));
+        body.push_str("\n\n");
+    }
     if let Some(source) = source {
         body.push_str(&format!(
             "Reviewed `{}` target `{}`.",
@@ -936,6 +954,7 @@ fn pr_review_comment_evidence(
     issues: &[CommentIssue],
     source: Option<&CommentSource>,
     max_issues: usize,
+    comment_error: Option<&str>,
 ) -> JsonValue {
     let mut error_count = 0usize;
     let mut warning_count = 0usize;
@@ -976,6 +995,12 @@ fn pr_review_comment_evidence(
         fields.push(("source_kind", JsonValue::String(source.kind.clone())));
         fields.push(("source_target", JsonValue::String(source.target.clone())));
         fields.push(("source_truncated", JsonValue::Bool(source.truncated)));
+    }
+    if let Some(error) = comment_error {
+        fields.push((
+            "previous_comment_error",
+            JsonValue::String(compact_text(error, 500)),
+        ));
     }
     comment_json_object(fields)
 }
@@ -1575,6 +1600,26 @@ json:\n\
             .contains("warning: GitHub PR status checks failing"));
         assert!(output.summary.contains(r#""github_comment_input""#));
         assert!(output.summary.contains(r#""dry_run":"true""#));
+    }
+
+    #[test]
+    fn pr_review_comment_plan_includes_previous_comment_error() {
+        let review_output = r#"{"summary":"Reviewed github_pr_diff target `github_pr_context` with 0 deterministic issue(s).","issues":[],"suggestions":[],"source":{"kind":"github_pr_diff","target":"github_pr_context","path":null,"truncated":false}}"#;
+
+        let output = PrReviewCommentPlanTool
+            .execute(
+                ToolInput::new()
+                    .with_arg("review_output", review_output)
+                    .with_arg("number", "42")
+                    .with_arg("comment_error", "policy denied by reviewer"),
+            )
+            .unwrap();
+
+        assert!(output
+            .summary
+            .contains("Previous comment attempt failed or was denied"));
+        assert!(output.summary.contains("policy denied by reviewer"));
+        assert!(output.summary.contains(r#""previous_comment_error""#));
     }
 
     #[test]

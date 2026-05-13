@@ -490,8 +490,12 @@ Remaining:
   post/publish/leave/add/submit/send the prepared PR comment, the offline
   planner hands the comment plan to `github_comment` with `dry_run=false`, still
   relying on the existing write-approval path before any GitHub mutation runs
+- PR comment failure recovery now exists: if the guarded `github_comment`
+  attempt fails or is denied, the planner rebuilds a fresh
+  `pr_review_comment_plan` with the previous comment error recorded in body and
+  evidence, instead of blindly re-sending the same GitHub mutation
 - Remaining: stronger live end-to-end semantic review fixtures / remote PR
-  retry loops after failed or denied comment attempts
+  live retry fixtures and inline review-comment posting
 
 ### Phase G2: MCP Server Mode
 

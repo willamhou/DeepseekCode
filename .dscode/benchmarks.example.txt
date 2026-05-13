@@ -180,6 +180,19 @@ expect_tool_output_contains = "pr_review_comment_plan:github_comment_input"
 max_failed_tools = 0
 max_tool_calls = 1
 
+name = "seeded-pr-comment-failure-recovery-plan"
+task = "Review pull request #42 'Route benchmark command' on owner/repo and post a PR comment with the findings."
+category = "pr_workflow"
+workdir = "fixtures/rust-cli-mini"
+notes = "Seeded failed GitHub comment attempt should rebuild a comment plan with the failure reason instead of reposting"
+seed_observations = "github_pr_context:ok:meta.kind=pr\nmeta.number=42\nmeta.state=OPEN\nPR #42: Route benchmark command\njson:\n{\"number\":42,\"title\":\"Route benchmark command\",\"url\":\"https://github.com/owner/repo/pull/42\"}\ndiff:\ndiff --git a/src/cli/app.rs b/src/cli/app.rs\n || review:ok:{\"summary\":\"Reviewed github_pr_diff target `github_pr_context` with 1 deterministic issue(s).\",\"issues\":[{\"severity\":\"warning\",\"title\":\"GitHub PR status checks failing\",\"description\":\"1 status check(s) are failing or cancelled: unit-tests\",\"path\":null,\"line\":null}],\"suggestions\":[],\"source\":{\"kind\":\"github_pr_diff\",\"target\":\"github_pr_context\",\"path\":null,\"truncated\":false}} || pr_review_comment_plan:ok:{\"comment_body\":\"draft\",\"evidence\":{\"tool\":\"review\"},\"github_comment_input\":{\"target\":\"pr\",\"number\":\"42\",\"body\":\"draft\",\"evidence\":\"{\\\"tool\\\":\\\"review\\\"}\",\"dry_run\":\"true\",\"repo\":\"owner/repo\"}} || github_comment:failed:policy denied by reviewer"
+budget = 2
+expect_tool = "pr_review_comment_plan"
+expect_tool_sequence = ["pr_review_comment_plan"]
+expect_tool_output_contains = "pr_review_comment_plan:previous_comment_error"
+max_failed_tools = 0
+max_tool_calls = 1
+
 name = "seeded-pr-ci-lint"
 task = "CI job `lint-rust` (run #556) on PR #42 failed at step `cargo clippy`. Reproduce locally, fix the root cause, and rerun the failing check. Failed log tail follows."
 category = "pr_workflow"
