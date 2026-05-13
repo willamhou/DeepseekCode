@@ -1404,13 +1404,17 @@ runtime thread id, queued turn count, active turn id, and last error. This is a
 read-only inventory surface for the live RLM daemon design; it does not start a
 daemon. `rlm_process live=true session_id=<id>` creates or reuses a live
 session runtime thread, enqueues a pending `rlm_process` runtime task, writes
-the live manifest, and appends a `turn_queued` event without spending model
-tokens. `rlm_process_cancel session_id=<id> turn_id=<task-id>` cancels a queued
-pending live turn, appends `turn_cancelled`, and refreshes `queued_turns`;
-`all=true` cancels every queued pending turn in that live session. It does not
-cancel a turn already claimed by a future worker. Live worker claiming, model
-delta streaming, active worker cancellation, and completion recording remain
-future work.
+the live manifest, persists the turn payload under
+`.dscode/rlm-daemon/<session_id>/turns/<task-id>.json`, and appends a
+`turn_queued` event without spending model tokens. The payload contains the
+task, steps, model, workspace, input label, input content, and input size so a
+future worker can recover and execute queued turns after the CLI exits.
+`rlm_process_cancel session_id=<id> turn_id=<task-id>` cancels a queued pending
+live turn, marks the payload cancelled when present, appends `turn_cancelled`,
+and refreshes `queued_turns`; `all=true` cancels every queued pending turn in
+that live session. It does not cancel a turn already claimed by a future worker.
+Live worker claiming, model delta streaming, active worker cancellation, and
+completion recording remain future work.
 `rlm_process_events session_id=<id> cursor=<seq>` replays parsed
 `.dscode/rlm-daemon/<session_id>/events.jsonl` records with `seq` greater than
 the cursor and returns `next_cursor` for clients that want deterministic live

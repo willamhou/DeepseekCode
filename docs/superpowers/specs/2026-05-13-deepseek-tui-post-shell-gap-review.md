@@ -62,9 +62,10 @@ shell ownership diagnostics now persist stable child pid, owner pid, and process
 group metadata; RLM process semantics have since narrowed to durable
 model-session context plus session-only continuation; live RLM daemon
 manifest/inventory discovery, runtime-thread-backed turn queueing, cursor
-event replay, and queued-turn cancellation have landed. Live PTY resize, attachable terminal
-replay/supervisor takeover, and live RLM worker execution, delta streaming,
-active worker cancellation, and recovery remain open.
+event replay, per-turn payload persistence, and queued-turn cancellation have
+landed. Live PTY resize, attachable terminal replay/supervisor takeover, and
+live RLM worker execution, delta streaming, active worker cancellation, and
+recovery remain open.
 
 ## Next Candidate Specs
 

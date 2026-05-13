@@ -146,10 +146,12 @@ resumption.
      `2026-05-13-deepseek-tui-rlm-live-session-inventory.md`
 2. Runtime-thread-backed live session:
    - create/reuse runtime thread per live RLM session
+   - persist per-turn payloads with task, input, and execution options
    - enqueue turns
    - persist `events.jsonl`
    - status: implemented by
-     `2026-05-13-deepseek-tui-rlm-live-turn-queue.md`
+     `2026-05-13-deepseek-tui-rlm-live-turn-queue.md` and
+     `2026-05-13-deepseek-tui-rlm-live-turn-payload.md`
 3. Tool routing:
    - `rlm_process live=true`
    - `rlm_process_cancel`

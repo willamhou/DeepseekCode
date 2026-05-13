@@ -661,7 +661,7 @@ impl RlmTool {
             .filter(|value| !value.is_empty());
         let reset_session = parse_bool_arg(input.get("reset"));
         if parse_bool_arg(input.get("live")) {
-            return self.enqueue_live_process_turn(&input, task, session_id, reset_session);
+            return self.enqueue_live_process_turn(&input, task, steps, session_id, reset_session);
         }
         let mut session = match session_id {
             Some(session_id) => {
@@ -702,6 +702,7 @@ impl RlmTool {
         &self,
         input: &ToolInput,
         task: &str,
+        steps: &str,
         session_id: Option<&str>,
         reset_session: bool,
     ) -> AppResult<ToolOutput> {
@@ -776,6 +777,17 @@ impl RlmTool {
             "rlm_process".to_string(),
             "pending".to_string(),
             summary,
+        )?;
+        write_rlm_live_session_turn_payload(
+            &self.config,
+            session_id,
+            &thread.id,
+            &runtime_task.id,
+            task,
+            &process_input,
+            steps,
+            &model,
+            &workspace,
         )?;
         let previous_queued = existing
             .as_ref()
@@ -1483,6 +1495,12 @@ impl Tool for RlmLiveCancelTool {
         for task in candidates {
             let original_summary = task.summary.clone();
             let (updated, _event) = store.cancel_task(&task.id, reason.clone())?;
+            mark_rlm_live_session_turn_payload_cancelled(
+                &self.config,
+                session_id,
+                &updated.id,
+                &reason,
+            )?;
             append_rlm_live_session_cancel_event(
                 &self.config,
                 session_id,
@@ -2097,6 +2115,115 @@ fn write_rlm_live_session_manifest(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn write_rlm_live_session_turn_payload(
+    config: &AppConfig,
+    session_id: &str,
+    runtime_thread_id: &str,
+    task_id: &str,
+    task: &str,
+    process_input: &RlmProcessInput,
+    steps: &str,
+    model: &str,
+    workspace: &str,
+) -> AppResult<()> {
+    let path = rlm_live_session_turn_payload_path(config, session_id, task_id);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            tool_failure(format!("rlm live turn payload mkdir failed: {error}"))
+        })?;
+    }
+    let now = rlm_epoch_label();
+    let payload = JsonValue::Object(BTreeMap::from([
+        (
+            "kind".to_string(),
+            JsonValue::String("deepseek.rlm.live_turn.v1".to_string()),
+        ),
+        (
+            "session_id".to_string(),
+            JsonValue::String(session_id.to_string()),
+        ),
+        (
+            "runtime_thread_id".to_string(),
+            JsonValue::String(runtime_thread_id.to_string()),
+        ),
+        (
+            "task_id".to_string(),
+            JsonValue::String(task_id.to_string()),
+        ),
+        (
+            "status".to_string(),
+            JsonValue::String("queued".to_string()),
+        ),
+        ("task".to_string(), JsonValue::String(task.to_string())),
+        ("steps".to_string(), JsonValue::String(steps.to_string())),
+        ("model".to_string(), JsonValue::String(model.to_string())),
+        (
+            "workspace".to_string(),
+            JsonValue::String(workspace.to_string()),
+        ),
+        (
+            "input".to_string(),
+            JsonValue::Object(BTreeMap::from([
+                (
+                    "label".to_string(),
+                    JsonValue::String(process_input.label.clone()),
+                ),
+                (
+                    "content".to_string(),
+                    JsonValue::String(process_input.content.clone()),
+                ),
+                (
+                    "char_count".to_string(),
+                    JsonValue::Number(process_input.char_count.to_string()),
+                ),
+                (
+                    "line_count".to_string(),
+                    JsonValue::Number(process_input.line_count.to_string()),
+                ),
+            ])),
+        ),
+        ("created_at".to_string(), JsonValue::String(now.clone())),
+        ("updated_at".to_string(), JsonValue::String(now)),
+    ]));
+    fs::write(path, json_value_to_string(&payload))
+        .map_err(|error| tool_failure(format!("rlm live turn payload write failed: {error}")))?;
+    Ok(())
+}
+
+fn mark_rlm_live_session_turn_payload_cancelled(
+    config: &AppConfig,
+    session_id: &str,
+    task_id: &str,
+    reason: &str,
+) -> AppResult<()> {
+    let path = rlm_live_session_turn_payload_path(config, session_id, task_id);
+    if !path.exists() {
+        return Ok(());
+    }
+    let content = fs::read_to_string(&path)
+        .map_err(|error| tool_failure(format!("rlm live turn payload read failed: {error}")))?;
+    let JsonValue::Object(mut root) = parse_json_value(&content)
+        .map_err(|error| tool_failure(format!("rlm live turn payload invalid JSON: {error}")))?
+    else {
+        return Err(tool_failure("rlm live turn payload must be a JSON object"));
+    };
+    let now = rlm_epoch_label();
+    root.insert(
+        "status".to_string(),
+        JsonValue::String("cancelled".to_string()),
+    );
+    root.insert("updated_at".to_string(), JsonValue::String(now.clone()));
+    root.insert("cancelled_at".to_string(), JsonValue::String(now));
+    root.insert(
+        "cancel_reason".to_string(),
+        JsonValue::String(reason.to_string()),
+    );
+    fs::write(path, json_value_to_string(&JsonValue::Object(root)))
+        .map_err(|error| tool_failure(format!("rlm live turn payload write failed: {error}")))?;
+    Ok(())
+}
+
 fn append_rlm_live_session_event(
     config: &AppConfig,
     session_id: &str,
@@ -2289,6 +2416,17 @@ fn rlm_live_session_event_log_path(config: &AppConfig, session_id: &str) -> Path
     rlm_live_sessions_dir(config)
         .join(session_id)
         .join("events.jsonl")
+}
+
+fn rlm_live_session_turn_payload_path(
+    config: &AppConfig,
+    session_id: &str,
+    task_id: &str,
+) -> PathBuf {
+    rlm_live_sessions_dir(config)
+        .join(session_id)
+        .join("turns")
+        .join(format!("{task_id}.json"))
 }
 
 fn rlm_live_manifest_string_field(manifest: &JsonValue, key: &str) -> Option<String> {
@@ -3661,6 +3799,16 @@ mod tests {
         assert!(first.summary.contains("meta.rlm_live=true"));
         assert!(first.summary.contains("meta.rlm_status=queued"));
         assert!(first.summary.contains("meta.rlm_queued_turns=1"));
+        let first_turn = meta_value(&first.summary, "meta.rlm_turn_id").unwrap();
+        let first_payload = fs::read_to_string(rlm_live_session_turn_payload_path(
+            &config,
+            "live.queue",
+            &first_turn,
+        ))
+        .unwrap();
+        assert!(first_payload.contains(r#""task":"summarize alpha""#));
+        assert!(first_payload.contains(r#""content":"alpha""#));
+        assert!(first_payload.contains(r#""steps":"6""#));
 
         let manifest_path = rlm_live_session_manifest_path(&config, "live.queue");
         let manifest = read_rlm_live_session_manifest(&manifest_path, "live.queue").unwrap();
@@ -3684,6 +3832,15 @@ mod tests {
             .unwrap();
         assert!(second.summary.contains("meta.rlm_queued_turns=2"));
         assert!(second.summary.contains("live session context only"));
+        let second_turn = meta_value(&second.summary, "meta.rlm_turn_id").unwrap();
+        let second_payload = fs::read_to_string(rlm_live_session_turn_payload_path(
+            &config,
+            "live.queue",
+            &second_turn,
+        ))
+        .unwrap();
+        assert!(second_payload.contains(r#""label":"live session context only""#));
+        assert!(second_payload.contains(r#""content":"""#));
 
         let updated = read_rlm_live_session_manifest(&manifest_path, "live.queue").unwrap();
         assert_eq!(
@@ -3855,6 +4012,14 @@ mod tests {
         assert!(events.summary.contains(r#""kind":"turn_cancelled""#));
         assert!(events.summary.contains(r#""reason":"superseded""#));
         assert!(events.summary.contains(&first_turn));
+        let cancelled_payload = fs::read_to_string(rlm_live_session_turn_payload_path(
+            &config,
+            "cancel.1",
+            &first_turn,
+        ))
+        .unwrap();
+        assert!(cancelled_payload.contains(r#""status":"cancelled""#));
+        assert!(cancelled_payload.contains(r#""cancel_reason":"superseded""#));
 
         let all = RlmLiveCancelTool {
             config: config.clone(),
