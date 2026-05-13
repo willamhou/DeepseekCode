@@ -33,6 +33,9 @@ TUI or MCP server restart.
   basic pid safety checks.
 - Kept unknown task ids as unknown and non-running durable records as
   non-error status reports.
+- A later detached status refresh slice probes stale `running` manifests before
+  rendering or canceling them, so already-exited detached records do not stay
+  permanently `running`.
 
 ## Verification
 

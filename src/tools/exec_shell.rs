@@ -743,6 +743,7 @@ fn cancel_detached_shell_job(cwd: &str, task_id: &str) -> AppResult<String> {
         )));
     }
     let mut record = read_durable_shell_job_manifest(&manifest)?;
+    refresh_durable_running_status(cwd, &mut record)?;
     if record.status != "running" {
         return Ok(format!(
             "Detached background shell job is not running: {task_id}\nmanaged: false\nstatus: {}",
@@ -881,6 +882,8 @@ fn list_durable_shell_jobs(cwd: &str) -> AppResult<Vec<DurableShellJobRecord>> {
             continue;
         }
         if let Ok(record) = read_durable_shell_job_manifest(&path) {
+            let mut record = record;
+            refresh_durable_running_status(cwd, &mut record)?;
             records.push(record);
         }
     }
@@ -899,7 +902,8 @@ fn render_durable_snapshot(cwd: &str, task_id: &str) -> AppResult<String> {
             "unknown background shell task: {task_id}"
         )));
     }
-    let record = read_durable_shell_job_manifest(&manifest)?;
+    let mut record = read_durable_shell_job_manifest(&manifest)?;
+    refresh_durable_running_status(cwd, &mut record)?;
     let record_dir = shell_job_record_dir(cwd, task_id);
     let stdout = read_durable_log(&record_dir, "stdout.log");
     let stderr = read_durable_log(&record_dir, "stderr.log");
@@ -959,6 +963,15 @@ fn read_durable_shell_job_manifest(path: &Path) -> AppResult<DurableShellJobReco
         stdout_total_bytes: durable_log_bytes(record_dir, "stdout.log", manifest_stdout_total),
         stderr_total_bytes: durable_log_bytes(record_dir, "stderr.log", manifest_stderr_total),
     })
+}
+
+fn refresh_durable_running_status(cwd: &str, record: &mut DurableShellJobRecord) -> AppResult<()> {
+    if record.status == "running" && record.pid > 0 && !detached_process_is_alive(record.pid) {
+        record.status = "exited".to_string();
+        record.updated_at = epoch_label();
+        write_durable_shell_job_manifest(cwd, record)?;
+    }
+    Ok(())
 }
 
 fn required_manifest_string(root: &BTreeMap<String, JsonValue>, key: &str) -> AppResult<String> {
@@ -1095,6 +1108,27 @@ fn kill_detached_process_group(pid: u32) -> AppResult<()> {
         Err(app_error(
             "detached shell cancellation is not supported on this platform",
         ))
+    }
+}
+
+fn detached_process_is_alive(pid: u32) -> bool {
+    if pid <= 1 || pid > i32::MAX as u32 {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        unsafe extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        let result = unsafe { kill(pid as i32, 0) };
+        if result == 0 {
+            return true;
+        }
+        matches!(std::io::Error::last_os_error().raw_os_error(), Some(1))
+    }
+    #[cfg(not(unix))]
+    {
+        true
     }
 }
 
@@ -1372,6 +1406,57 @@ mod tests {
             shown.summary.contains("status: killed"),
             "{}",
             shown.summary
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exec_shell_show_marks_stale_running_detached_job_exited() {
+        let root = temp_root("detached-stale");
+        fs::create_dir_all(&root).unwrap();
+        let cwd = root.display().to_string();
+        let task_id = generated_job_id();
+        let record_dir = shell_job_record_dir(&cwd, &task_id);
+        fs::create_dir_all(&record_dir).unwrap();
+        fs::write(record_dir.join("stdout.log"), b"stale output\n").unwrap();
+        fs::write(record_dir.join("stderr.log"), b"").unwrap();
+        let record = DurableShellJobRecord {
+            id: task_id.clone(),
+            command: "sleep 30".to_string(),
+            cwd: cwd.clone(),
+            status: "running".to_string(),
+            exit_code: None,
+            pid: 9_999_999,
+            started_at: epoch_label(),
+            updated_at: epoch_label(),
+            stdout_total_bytes: 0,
+            stderr_total_bytes: 0,
+        };
+        write_durable_shell_job_manifest(&cwd, &record).unwrap();
+
+        let shown = ExecShellShowTool
+            .execute(
+                ToolInput::new()
+                    .with_arg("task_id", task_id.clone())
+                    .with_arg("cwd", cwd.clone()),
+            )
+            .unwrap();
+        assert!(
+            shown.summary.contains("status: exited"),
+            "{}",
+            shown.summary
+        );
+        assert!(shown.summary.contains("stale output"), "{}", shown.summary);
+
+        let listed = ExecShellListTool
+            .execute(ToolInput::new().with_arg("cwd", cwd))
+            .unwrap();
+        assert!(listed.summary.contains(&task_id), "{}", listed.summary);
+        assert!(
+            listed.summary.contains("[exited detached]"),
+            "{}",
+            listed.summary
         );
         let _ = fs::remove_dir_all(root);
     }

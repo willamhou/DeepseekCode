@@ -219,9 +219,10 @@ Landed first slice:
   stdout/stderr logs under `<cwd>/.dscode/shell-jobs/<task_id>/`, so detached
   `exec_shell_list` / `exec_shell_show` / `exec_shell_wait` calls can inspect
   prior records; detached running jobs can also be best-effort cancelled by
-  persisted pid/process group, while detached stdin remains attached-process
-  scoped and reports that explicit boundary instead of looking like an unknown
-  task id
+  persisted pid/process group, stale detached `running` manifests are refreshed
+  to `exited` when the pid is gone, while detached stdin remains
+  attached-process scoped and reports that explicit boundary instead of looking
+  like an unknown task id
 - richer structured data validation
 
 ### Phase D: TUI
