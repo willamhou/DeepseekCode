@@ -5560,12 +5560,16 @@ mod tests {
         assert!(rendered.contains(r#""name":"file_search""#));
         assert!(rendered.contains(r#""name":"web_search""#));
         assert!(rendered.contains(r#""name":"fetch_url""#));
+        assert!(rendered.contains(r#""name":"finance""#));
         assert!(rendered.contains(r#""name":"git_status""#));
         assert!(rendered.contains(r#""name":"project_map""#));
         assert!(rendered.contains(r#""name":"validate_data""#));
         assert!(rendered.contains(r#""name":"git_log""#));
+        assert!(rendered.contains(r#""name":"git_show""#));
+        assert!(rendered.contains(r#""name":"git_blame""#));
         assert!(rendered.contains(r#""name":"github_issue_context""#));
         assert!(rendered.contains(r#""name":"github_pr_context""#));
+        assert!(rendered.contains(r#""name":"diagnostics""#));
         assert!(rendered.contains(r#""name":"runtime_list_sessions""#));
         assert!(!rendered.contains(r#""name":"run_shell""#));
         assert!(!rendered.contains(r#""name":"run_tests""#));
@@ -5800,6 +5804,23 @@ mod tests {
         let rendered = json_value_to_string(&response);
 
         assert!(rendered.contains("Dry run: would comment on pr #7"));
+        assert!(rendered.contains(r#""isError":false"#));
+    }
+
+    #[test]
+    fn mcp_tools_call_executes_github_close_issue_after_runtime_approval() {
+        let state = mcp_state_with_durable_approvals("mcp-github-close-approval");
+        let responder = spawn_mcp_permission_responder(
+            state.store.clone(),
+            state.approval_thread_id.clone().unwrap(),
+            "approved",
+        );
+        let request = r#"{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"github_close_issue","arguments":{"number":"9","acceptance_criteria":["implementation complete"],"evidence":{"files_changed":["src/lib.rs"],"tests_run":["cargo test"],"final_status":"completed"},"allow_dirty":true,"dry_run":true}}}"#;
+        let response = mcp_response_for_message(request, &state).unwrap();
+        responder.join().unwrap();
+        let rendered = json_value_to_string(&response);
+
+        assert!(rendered.contains("Dry run: would close issue #9"));
         assert!(rendered.contains(r#""isError":false"#));
     }
 

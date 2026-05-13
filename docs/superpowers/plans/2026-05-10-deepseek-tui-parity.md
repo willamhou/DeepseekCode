@@ -453,9 +453,9 @@ Landed first slice:
   and `resources/read`
 - read-only workspace tools exposed through MCP: `list_files`, `list_dir`,
   `read_file`, `retrieve_tool_result`, `search_text`, `grep_files`,
-  `file_search`, `web_run`, `web_search`, `fetch_url`, `git_status`, `git_diff`,
-  `project_map`, `validate_data`, `git_log`, `git_show`, `git_blame`,
-  `diagnostics`
+  `file_search`, `web_search`, `fetch_url`, `finance`, `git_status`,
+  `git_diff`, `project_map`, `validate_data`, `git_log`, `git_show`,
+  `git_blame`, `github_issue_context`, `github_pr_context`, and `diagnostics`
 - code-executing MCP side-effect tools exposed only with trusted side effects or
   durable approvals: `run_tests`, `run_shell`
 - read-only runtime tools exposed through MCP: `runtime_health`,
@@ -481,6 +481,8 @@ Landed first slice:
 - MCP `write_file` is now exposed only in durable approval mode, writes UTF-8
   content to safe relative paths under the MCP workspace, rejects path escapes
   and symlink targets, and records the approval decision before mutating files
+- MCP `edit_file` is now exposed only in durable approval mode and reuses the
+  exact-text edit validator after recording the approval decision
 - MCP `delete_file` is now exposed only in durable approval mode, deletes one
   regular file at a safe relative path under the MCP workspace, rejects path
   escapes/directories/symlink targets, and records the approval decision before
@@ -493,6 +495,9 @@ Landed first slice:
   regular file between safe relative paths under the MCP workspace, rejects path
   escapes/directories/symlink sources and existing destinations, and records the
   approval decision before mutating files
+- MCP `revert_turn`, `github_comment`, and `github_close_issue` are now exposed
+  only in durable approval mode, routing rollback restore and GitHub write
+  actions through runtime permission requests before executing
 - focused unit tests cover initialize, tool listing, `read_file`, and runtime
   session listing; resource tests cover listing and reading runtime thread JSON;
   stdio smoke validates real `deepseek serve --mcp` output
@@ -558,9 +563,11 @@ Landed first slice:
 
 Remaining:
 
-- broader side-effect MCP server surface beyond `run_shell`, `apply_patch`,
-  `write_file`, `delete_file`, `copy_file`, and `move_file`, still guarded by
-  durable approval and safe-command/file-write policies
+- broader long-tail side-effect MCP server surface beyond the current
+  `run_tests`/`run_shell`, file write/patch/edit/delete/copy/move,
+  `revert_turn`, and GitHub write tools; remaining candidates include
+  agent-only task, automation, subagent, shell-session, and RLM tools that still
+  need explicit MCP safety contracts before exposure
 - full ACP standard tool streaming beyond started/result notifications
 
 ### Phase H: Packaging
