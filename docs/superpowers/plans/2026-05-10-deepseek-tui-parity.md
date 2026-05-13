@@ -562,7 +562,6 @@ Remaining:
   `write_file`, `delete_file`, `copy_file`, and `move_file`, still guarded by
   durable approval and safe-command/file-write policies
 - full ACP standard tool streaming beyond started/result notifications
-- richer MCP manager affordances such as drag selection
 
 ### Phase H: Packaging
 
