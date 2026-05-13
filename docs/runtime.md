@@ -1463,12 +1463,16 @@ restore list [limit]
 restore show <snapshot-id-or-runtime-turn-id|last>
 restore hunks <snapshot-id-or-runtime-turn-id|last>
 restore hunk <snapshot-id-or-runtime-turn-id|last> [index]
+restore hunk <snapshot-id-or-runtime-turn-id|last> <index> --check
+restore hunk <snapshot-id-or-runtime-turn-id|last> <index> --apply
 revert turn <snapshot-id-or-runtime-turn-id|last> [--apply]
 ```
 
 `last` resolves to the active thread's latest durable turn id. These commands
 show list/show/hunk/revert details in the scrollable right-side rollback panel,
-and `--apply` opens a confirmation modal before mutating files. They are
+and `--apply` opens a confirmation modal before mutating files. Hunk apply
+builds a single-hunk patch from the stored snapshot diff and runs `git apply` on
+the local worktree; `--check` verifies that patch without mutation. They are
 intentionally local-only because rollback applies to the client's git worktree;
 `deepseek tui --runtime-url ...` reports rollback as unsupported instead of
 mutating a remote host implicitly.

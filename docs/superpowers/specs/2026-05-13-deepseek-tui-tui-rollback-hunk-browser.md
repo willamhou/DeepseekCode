@@ -16,11 +16,13 @@ gap is finer-grained diff inspection before deciding whether to restore.
   - `restore hunk <id|last> [index]` shows a single 1-based hunk in the
     existing right-side rollback detail panel.
 - Parse unified diff hunk headers from stored snapshot patches.
-- Keep restore/apply behavior unchanged; this is an inspection-only feature.
+- Keep full restore/apply behavior unchanged; this slice is an inspection-only
+  feature.
 
 ## Non-Goals
 
-- Selective hunk restore/apply.
+- Selective hunk restore/apply, covered later by
+  `2026-05-13-deepseek-tui-tui-rollback-hunk-restore.md`.
 - Editing patch content.
 - Remote HTTP-runtime rollback support.
 
@@ -33,6 +35,7 @@ gap is finer-grained diff inspection before deciding whether to restore.
 - `cargo fmt --check`
 - `git diff --check`
 
-## Remaining Differences
+## Follow-Up
 
-- Selective hunk restore remains future Phase F work.
+- Selective hunk restore is covered by
+  `2026-05-13-deepseek-tui-tui-rollback-hunk-restore.md`.

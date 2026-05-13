@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{
@@ -712,6 +713,7 @@ fn handle_tui_http_action(
         | TuiAction::ListRollbackSnapshots { .. }
         | TuiAction::ShowRollbackSnapshot { .. }
         | TuiAction::ShowRollbackHunk { .. }
+        | TuiAction::RestoreRollbackHunk { .. }
         | TuiAction::RevertTurn { .. } => {
             app.set_status("rollback commands require local file-backed TUI".to_string());
         }
@@ -1563,6 +1565,40 @@ fn handle_tui_action_with_live(
                 }
             }
         }
+        TuiAction::RestoreRollbackHunk { id, hunk, apply } => {
+            let Some(rollback_store) = rollback_store_for_config(config, app) else {
+                return Ok(());
+            };
+            match restore_rollback_hunk(&rollback_store, &id, hunk, apply) {
+                Ok(plan) if plan.applied => {
+                    app.set_status(format!(
+                        "restored rollback hunk {} #{} changed_files={}",
+                        plan.snapshot_id,
+                        plan.hunk,
+                        plan.changed_files.len()
+                    ));
+                    app.set_mcp_detail(
+                        TuiMcpDetailKind::Rollback,
+                        render_rollback_hunk_restore_plan(&plan),
+                    );
+                }
+                Ok(plan) => {
+                    app.set_status(format!(
+                        "dry-run rollback hunk {} #{} file={}",
+                        plan.snapshot_id, plan.hunk, plan.file
+                    ));
+                    app.set_mcp_detail(
+                        TuiMcpDetailKind::Rollback,
+                        render_rollback_hunk_restore_plan(&plan),
+                    );
+                }
+                Err(error) => {
+                    app.set_status(format!(
+                        "rollback hunk restore failed for {id} #{hunk}: {error}"
+                    ));
+                }
+            }
+        }
         TuiAction::RevertTurn { id, apply } => {
             let Some(rollback_store) = rollback_store_for_config(config, app) else {
                 return Ok(());
@@ -2124,14 +2160,29 @@ fn render_rollback_snapshot_detail(snapshot: &SnapshotRecord, patch: Option<&str
 struct RollbackPatchHunk {
     file: String,
     header: String,
+    prelude: Vec<String>,
     added: usize,
     removed: usize,
     lines: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RollbackHunkRestorePlan {
+    snapshot_id: String,
+    applied: bool,
+    git_root: String,
+    git_head: String,
+    hunk: usize,
+    hunk_count: usize,
+    file: String,
+    patch_bytes: u64,
+    changed_files: Vec<String>,
+}
+
 fn parse_rollback_patch_hunks(patch: &str) -> Vec<RollbackPatchHunk> {
     let mut hunks = Vec::new();
     let mut current_file = String::new();
+    let mut current_prelude = Vec::new();
     let mut current: Option<RollbackPatchHunk> = None;
 
     for line in patch.lines() {
@@ -2141,7 +2192,12 @@ fn parse_rollback_patch_hunks(patch: &str) -> Vec<RollbackPatchHunk> {
             }
             current_file =
                 rollback_diff_file_from_header(line).unwrap_or_else(|| current_file.clone());
+            current_prelude.clear();
+            current_prelude.push(line.to_string());
             continue;
+        }
+        if current.is_none() && !current_prelude.is_empty() && !line.starts_with("@@ ") {
+            current_prelude.push(line.to_string());
         }
         if line.starts_with("+++ ") {
             if let Some(file) = rollback_diff_file_from_marker(line) {
@@ -2160,6 +2216,7 @@ fn parse_rollback_patch_hunks(patch: &str) -> Vec<RollbackPatchHunk> {
                     current_file.clone()
                 },
                 header: line.to_string(),
+                prelude: current_prelude.clone(),
                 added: 0,
                 removed: 0,
                 lines: vec![line.to_string()],
@@ -2179,6 +2236,152 @@ fn parse_rollback_patch_hunks(patch: &str) -> Vec<RollbackPatchHunk> {
         hunks.push(hunk);
     }
     hunks
+}
+
+fn restore_rollback_hunk(
+    store: &RollbackStore,
+    id: &str,
+    hunk: usize,
+    apply: bool,
+) -> AppResult<RollbackHunkRestorePlan> {
+    let snapshot = store.load_snapshot_or_turn(id)?;
+    let root = Path::new(&snapshot.git_root);
+    let current_head = rollback_git_stdout(root, &["rev-parse", "HEAD"])?;
+    let current_head = current_head.trim();
+    if current_head != snapshot.git_head {
+        return Err(app_error(format!(
+            "snapshot {} was captured at {}, current HEAD is {}; checkout the original commit before restoring",
+            snapshot.id, snapshot.git_head, current_head
+        )));
+    }
+    let patch = store.snapshot_patch(&snapshot.id)?;
+    let hunks = parse_rollback_patch_hunks(&patch);
+    if hunk == 0 || hunk > hunks.len() {
+        return Err(app_error(format!(
+            "rollback hunk {hunk} out of range for {} (hunks={})",
+            snapshot.id,
+            hunks.len()
+        )));
+    }
+    let selected = &hunks[hunk - 1];
+    let hunk_patch = rollback_single_hunk_patch(selected)?;
+    rollback_git_apply(root, &hunk_patch, apply)?;
+    let mut changed_files = if apply {
+        rollback_git_changed_files(root)?
+    } else {
+        vec![selected.file.clone()]
+    };
+    normalize_rollback_files(&mut changed_files);
+    Ok(RollbackHunkRestorePlan {
+        snapshot_id: snapshot.id,
+        applied: apply,
+        git_root: snapshot.git_root,
+        git_head: snapshot.git_head,
+        hunk,
+        hunk_count: hunks.len(),
+        file: selected.file.clone(),
+        patch_bytes: hunk_patch.len() as u64,
+        changed_files,
+    })
+}
+
+fn rollback_single_hunk_patch(hunk: &RollbackPatchHunk) -> AppResult<String> {
+    if hunk.file == "(unknown file)" {
+        return Err(app_error("rollback hunk has no file path"));
+    }
+    if !hunk.prelude.iter().any(|line| line.starts_with("--- "))
+        || !hunk.prelude.iter().any(|line| line.starts_with("+++ "))
+    {
+        return Err(app_error(format!(
+            "rollback hunk for {} is missing file diff headers",
+            hunk.file
+        )));
+    }
+    let mut patch = String::new();
+    for line in &hunk.prelude {
+        patch.push_str(line);
+        patch.push('\n');
+    }
+    for line in &hunk.lines {
+        patch.push_str(line);
+        patch.push('\n');
+    }
+    Ok(patch)
+}
+
+fn rollback_git_stdout(cwd: &Path, args: &[&str]) -> AppResult<String> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .map_err(|error| app_error(format!("could not invoke git: {error}")))?;
+    if !output.status.success() {
+        return Err(app_error(format!(
+            "git {} failed: {}",
+            args.first().copied().unwrap_or(""),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn rollback_git_apply(cwd: &Path, patch: &str, apply: bool) -> AppResult<()> {
+    let mut command = Command::new("git");
+    command.arg("apply").arg("--binary");
+    if !apply {
+        command.arg("--check");
+    }
+    let mut child = command
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| app_error(format!("could not invoke git apply: {error}")))?;
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| app_error("git apply produced no stdin pipe"))?;
+        stdin
+            .write_all(patch.as_bytes())
+            .map_err(|error| app_error(format!("failed to write patch to git apply: {error}")))?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|error| app_error(format!("failed to await git apply: {error}")))?;
+    if !output.status.success() {
+        return Err(app_error(format!(
+            "git apply failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(())
+}
+
+fn rollback_git_changed_files(cwd: &Path) -> AppResult<Vec<String>> {
+    let output = rollback_git_stdout(
+        cwd,
+        &[
+            "diff",
+            "--name-only",
+            "--diff-filter=ACMRTUXB",
+            "HEAD",
+            "--",
+        ],
+    )?;
+    let mut files = output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    normalize_rollback_files(&mut files);
+    Ok(files)
+}
+
+fn normalize_rollback_files(files: &mut Vec<String>) {
+    files.sort();
+    files.dedup();
 }
 
 fn rollback_diff_file_from_header(line: &str) -> Option<String> {
@@ -2245,12 +2448,16 @@ fn render_rollback_hunk_detail(
             hunk.added, hunk.removed
         ));
         detail.push_str(&rollback_hunk_body(hunk, 220));
-        detail.push_str("\nCommands: restore hunks <id|last> | restore hunk <id|last> <index>\n");
+        detail.push_str(
+            "\nCommands: restore hunks <id|last> | restore hunk <id|last> <index> --check | restore hunk <id|last> <index> --apply\n",
+        );
         return detail;
     }
 
     detail.push_str(&rollback_hunk_list(&hunks, 100));
-    detail.push_str("\nCommands: restore hunk <id|last> <index>\n");
+    detail.push_str(
+        "\nCommands: restore hunk <id|last> <index> | restore hunk <id|last> <index> --apply\n",
+    );
     detail
 }
 
@@ -2323,6 +2530,32 @@ fn render_rollback_restore_plan(plan: &RestorePlan) -> String {
         }
     } else {
         detail.push_str("\nDry-run only. Re-run `revert turn <id> --apply` to restore files.\n");
+    }
+    detail
+}
+
+fn render_rollback_hunk_restore_plan(plan: &RollbackHunkRestorePlan) -> String {
+    let mut detail = String::new();
+    detail.push_str("Rollback hunk restore plan\n");
+    detail.push_str(&format!("snapshot: {}\n", plan.snapshot_id));
+    detail.push_str(&format!("hunk: {}/{}\n", plan.hunk, plan.hunk_count));
+    detail.push_str(&format!("file: {}\n", plan.file));
+    detail.push_str(&format!("applied: {}\n", plan.applied));
+    detail.push_str(&format!("git_root: {}\n", plan.git_root));
+    detail.push_str(&format!("git_head: {}\n", plan.git_head));
+    detail.push_str(&format!("patch_bytes: {}\n", plan.patch_bytes));
+    if plan.changed_files.is_empty() {
+        detail.push_str("changed files: 0\n");
+    } else {
+        detail.push_str(&format!("changed files: {}\n", plan.changed_files.len()));
+        for file in &plan.changed_files {
+            detail.push_str(&format!("- {file}\n"));
+        }
+    }
+    if !plan.applied {
+        detail.push_str(
+            "\nDry-run only. Use `restore hunk <id|last> <index> --apply` to apply this hunk.\n",
+        );
     }
     detail
 }
@@ -4313,6 +4546,76 @@ mod tests {
         assert!(render_once(&app, 160, 48)
             .unwrap()
             .contains("changed files: 1"));
+    }
+
+    #[test]
+    fn handle_tui_action_restores_single_rollback_hunk() {
+        let repo = temp_root("rollback-hunk-action");
+        fs::create_dir_all(&repo).unwrap();
+        run_git(&repo, &["init"]);
+        run_git(&repo, &["config", "user.email", "test@example.com"]);
+        run_git(&repo, &["config", "user.name", "Deepseek Test"]);
+        let base = (1..=24)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        fs::write(repo.join("src.txt"), &base).unwrap();
+        run_git(&repo, &["add", "src.txt"]);
+        run_git(&repo, &["commit", "-m", "initial"]);
+
+        let mut snapshot_lines = (1..=24)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>();
+        snapshot_lines[1] = "line 2 snapshot".to_string();
+        snapshot_lines[21] = "line 22 snapshot".to_string();
+        fs::write(repo.join("src.txt"), snapshot_lines.join("\n") + "\n").unwrap();
+        let config = temp_config(&repo);
+        let rollback_store =
+            RollbackStore::new(PathBuf::from(&config.workspace.config_dir).join("rollback"));
+        let snapshot = rollback_store
+            .create_snapshot(&repo, "two hunk snapshot".to_string())
+            .unwrap();
+        run_git(&repo, &["checkout", "--", "src.txt"]);
+
+        let store = RuntimeStore::new(repo.join(".dscode/runtime"));
+        let mut app = TuiApp::new(Vec::new());
+
+        handle_tui_action(
+            &store,
+            Some(&config),
+            &mut app,
+            TuiAction::RestoreRollbackHunk {
+                id: snapshot.id.clone(),
+                hunk: 1,
+                apply: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(repo.join("src.txt")).unwrap(), base);
+        let rendered = render_once(&app, 160, 48).unwrap();
+        assert!(rendered.contains("Rollback hunk restore plan"));
+        assert!(rendered.contains("Dry-run only"));
+
+        handle_tui_action(
+            &store,
+            Some(&config),
+            &mut app,
+            TuiAction::RestoreRollbackHunk {
+                id: snapshot.id.clone(),
+                hunk: 1,
+                apply: true,
+            },
+        )
+        .unwrap();
+
+        let restored = fs::read_to_string(repo.join("src.txt")).unwrap();
+        assert!(restored.contains("line 2 snapshot"));
+        assert!(restored.contains("line 22\n"));
+        assert!(!restored.contains("line 22 snapshot"));
+        let rendered = render_once(&app, 160, 48).unwrap();
+        assert!(rendered.contains("restored rollback hunk"));
+        assert!(rendered.contains("changed files: 1"));
     }
 
     #[test]

@@ -554,6 +554,7 @@ struct TuiMcpPendingRemove {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TuiRollbackPendingApply {
     id: String,
+    hunk: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -657,6 +658,11 @@ pub enum TuiAction {
     ShowRollbackHunk {
         id: String,
         hunk: Option<usize>,
+    },
+    RestoreRollbackHunk {
+        id: String,
+        hunk: usize,
+        apply: bool,
     },
     RevertTurn {
         id: String,
@@ -855,6 +861,10 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "restore hunks ",
     "restore diff ",
     "restore hunk ",
+    "restore hunk-apply ",
+    "restore hunk-check ",
+    "restore apply-hunk ",
+    "restore check-hunk ",
     "restore revert-turn ",
     "revert turn ",
     "approval",
@@ -3175,6 +3185,16 @@ impl TuiApp {
             ["restore", "hunk", id, hunk] => {
                 self.request_rollback_hunk_from_arg(id, hunk);
             }
+            ["restore", "hunk", id, hunk, "--apply"]
+            | ["restore", "hunk-apply", id, hunk]
+            | ["restore", "apply-hunk", id, hunk] => {
+                self.request_rollback_hunk_restore_from_arg(id, hunk, true);
+            }
+            ["restore", "hunk", id, hunk, "--check"]
+            | ["restore", "hunk-check", id, hunk]
+            | ["restore", "check-hunk", id, hunk] => {
+                self.request_rollback_hunk_restore_from_arg(id, hunk, false);
+            }
             ["restore", "revert-turn", id] | ["restore", "revert_turn", id] => {
                 self.request_revert_turn(id, false);
             }
@@ -3972,11 +3992,21 @@ impl TuiApp {
         match code {
             KeyCode::Char('y') | KeyCode::Enter => {
                 if let Some(pending) = self.rollback_apply_confirmation.take() {
-                    self.pending_actions.push(TuiAction::RevertTurn {
-                        id: pending.id.clone(),
-                        apply: true,
-                    });
-                    self.status = format!("rollback apply confirmed: {}", pending.id);
+                    if let Some(hunk) = pending.hunk {
+                        self.pending_actions.push(TuiAction::RestoreRollbackHunk {
+                            id: pending.id.clone(),
+                            hunk,
+                            apply: true,
+                        });
+                        self.status =
+                            format!("rollback hunk apply confirmed: {} #{hunk}", pending.id);
+                    } else {
+                        self.pending_actions.push(TuiAction::RevertTurn {
+                            id: pending.id.clone(),
+                            apply: true,
+                        });
+                        self.status = format!("rollback apply confirmed: {}", pending.id);
+                    }
                 }
             }
             KeyCode::Char('n') | KeyCode::Esc => {
@@ -4550,12 +4580,43 @@ impl TuiApp {
         };
     }
 
+    fn request_rollback_hunk_restore_from_arg(&mut self, id: &str, hunk: &str, apply: bool) {
+        match hunk.parse::<usize>() {
+            Ok(value) if value > 0 => self.request_rollback_hunk_restore(id, value, apply),
+            Ok(_) => self.status = "rollback hunk index must be >= 1".to_string(),
+            Err(_) => self.status = format!("invalid rollback hunk index: {hunk}"),
+        }
+    }
+
+    fn request_rollback_hunk_restore(&mut self, id: &str, hunk: usize, apply: bool) {
+        let Some(id) = self.resolve_rollback_id(id) else {
+            return;
+        };
+        if apply {
+            self.rollback_apply_confirmation = Some(TuiRollbackPendingApply {
+                id: id.clone(),
+                hunk: Some(hunk),
+            });
+            self.status = format!("confirm rollback hunk apply: {id} #{hunk}");
+            return;
+        }
+        self.pending_actions.push(TuiAction::RestoreRollbackHunk {
+            id: id.clone(),
+            hunk,
+            apply: false,
+        });
+        self.status = format!("rollback hunk check requested: {id} #{hunk}");
+    }
+
     fn request_revert_turn(&mut self, id: &str, apply: bool) {
         let Some(id) = self.resolve_rollback_id(id) else {
             return;
         };
         if apply {
-            self.rollback_apply_confirmation = Some(TuiRollbackPendingApply { id: id.clone() });
+            self.rollback_apply_confirmation = Some(TuiRollbackPendingApply {
+                id: id.clone(),
+                hunk: None,
+            });
             self.status = format!("confirm rollback apply: {id}");
             return;
         }
@@ -6548,8 +6609,18 @@ fn draw_rollback_apply_confirmation_modal(frame: &mut Frame, app: &TuiApp) {
         vec![
             Line::from("Apply Rollback?"),
             Line::from(format!("Target: {}", clip_line(&pending.id, 52))),
+            Line::from(
+                pending
+                    .hunk
+                    .map(|hunk| format!("Hunk: #{hunk}"))
+                    .unwrap_or_else(|| "Scope: full snapshot".to_string()),
+            ),
             Line::from(""),
-            Line::from("This will restore files in the local git worktree."),
+            Line::from(if pending.hunk.is_some() {
+                "This will apply only the selected rollback hunk."
+            } else {
+                "This will restore files in the local git worktree."
+            }),
             Line::from("Run without --apply first to preview the restore plan."),
             Line::from(""),
             Line::from("[y] apply    [Enter] apply    [n/Esc] cancel"),
@@ -7915,6 +7986,44 @@ mod tests {
 
         assert!(app.drain_actions().is_empty());
         assert_eq!(app.status, "invalid rollback hunk index: nope");
+
+        assert!(app.handle_key(KeyCode::Char(':')));
+        for ch in "restore hunk last 2 --check".chars() {
+            assert!(app.handle_key(KeyCode::Char(ch)));
+        }
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::RestoreRollbackHunk {
+                id: "turn-latest".to_string(),
+                hunk: 2,
+                apply: false,
+            }]
+        );
+        assert!(app.status.contains("rollback hunk check requested"));
+
+        assert!(app.handle_key(KeyCode::Char(':')));
+        for ch in "restore hunk last 2 --apply".chars() {
+            assert!(app.handle_key(KeyCode::Char(ch)));
+        }
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert!(app.drain_actions().is_empty());
+        let output = render_once(&app, 120, 36).unwrap();
+        assert!(output.contains("Rollback Apply Confirmation"));
+        assert!(output.contains("Hunk: #2"));
+        assert!(app.status.contains("confirm rollback hunk apply"));
+        assert!(app.handle_key(KeyCode::Enter));
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::RestoreRollbackHunk {
+                id: "turn-latest".to_string(),
+                hunk: 2,
+                apply: true,
+            }]
+        );
+        assert_eq!(app.status, "rollback hunk apply confirmed: turn-latest #2");
     }
 
     #[test]

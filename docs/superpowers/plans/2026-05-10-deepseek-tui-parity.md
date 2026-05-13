@@ -407,6 +407,10 @@ Landed first slice:
 - TUI rollback hunk browser commands (`restore hunks`, `restore diff`, and
   `restore hunk`) parse stored snapshot patches and render hunk lists or a
   selected hunk in the right-side rollback panel
+- TUI rollback hunk restore commands (`restore hunk <id|last> <index> --check`
+  and `restore hunk <id|last> <index> --apply`, plus `hunk-check` /
+  `hunk-apply` aliases) check or apply one selected snapshot hunk through the
+  existing local-only git worktree and confirmation-modal path
 - REPL live prompts create pre-turn rollback snapshots in git worktrees, record
   the latest snapshot id for `/restore show last` and `/revert_turn last`, and
   print the rollback hint after tool-using turns
@@ -415,7 +419,6 @@ Remaining:
 
 - side-git/worktree snapshot strategy for non-empty directory and special-file
   fidelity beyond empty untracked directories
-- selective rollback hunk restore in the future TUI
 
 ### Phase G: Subagent/RLM
 
