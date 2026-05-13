@@ -40,6 +40,11 @@ const DEEPSEEK_CODE_FEATURE_URL: &str =
     "https://github.com/willamhou/DeepSeekCode/issues/new?labels=enhancement";
 const DEEPSEEK_CODE_SECURITY_URL: &str =
     "https://github.com/willamhou/DeepSeekCode/security/policy";
+const DEEPSEEK_CODE_ISSUES_URL: &str = "https://github.com/willamhou/DeepSeekCode/issues";
+const DEEPSEEK_CODE_RELEASES_URL: &str = "https://github.com/willamhou/DeepSeekCode/releases";
+const DEEPSEEK_CODE_DOCS_URL: &str = "https://github.com/willamhou/DeepSeekCode/tree/main/docs";
+const DEEPSEEK_PLATFORM_URL: &str = "https://platform.deepseek.com";
+const DEEPSEEK_API_DOCS_URL: &str = "https://api-docs.deepseek.com";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TuiMode {
@@ -478,6 +483,7 @@ pub enum TuiMcpDetailKind {
     Provider,
     Skills,
     Feedback,
+    Links,
     Rollback,
     Reasoning,
     ComposerStash,
@@ -503,6 +509,7 @@ impl TuiMcpDetailKind {
             Self::Provider => "provider",
             Self::Skills => "skills",
             Self::Feedback => "feedback",
+            Self::Links => "links",
             Self::Rollback => "rollback",
             Self::Reasoning => "reasoning",
             Self::ComposerStash => "stash",
@@ -528,6 +535,7 @@ impl TuiMcpDetailKind {
             Self::Provider => "Provider",
             Self::Skills => "Skills",
             Self::Feedback => "Feedback",
+            Self::Links => "Links",
             Self::Rollback => "Rollback",
             Self::Reasoning => "Reasoning",
             Self::ComposerStash => "Composer Stash",
@@ -553,6 +561,7 @@ impl TuiMcpDetailKind {
             Self::Provider => Self::Manager,
             Self::Skills => Self::Manager,
             Self::Feedback => Self::Manager,
+            Self::Links => Self::Manager,
             Self::Rollback => Self::Manager,
             Self::Reasoning => Self::Manager,
             Self::ComposerStash => Self::Manager,
@@ -578,6 +587,7 @@ impl TuiMcpDetailKind {
             Self::Provider => Self::Manager,
             Self::Skills => Self::Manager,
             Self::Feedback => Self::Manager,
+            Self::Links => Self::Manager,
             Self::Rollback => Self::Manager,
             Self::Reasoning => Self::Manager,
             Self::ComposerStash => Self::Manager,
@@ -956,6 +966,23 @@ fn parse_tui_feedback_command(line: &str) -> Option<Result<TuiFeedbackCommand, S
     }
 }
 
+fn parse_tui_links_command(line: &str) -> Option<Result<(), String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/links")
+        .or_else(|| strip_tui_command_prefix(trimmed, "links"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "/dashboard"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "dashboard"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "/api"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "api"))?;
+    let args = rest.split_whitespace().collect::<Vec<_>>();
+    match args.as_slice() {
+        [] | ["help" | "--help" | "-h"] => Some(Ok(())),
+        _ => Some(Err(
+            "usage: links, dashboard, api, /links, /dashboard, or /api".to_string(),
+        )),
+    }
+}
+
 fn strip_tui_command_prefix<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
     let rest = value.strip_prefix(prefix)?;
     if rest.is_empty() || rest.starts_with(char::is_whitespace) {
@@ -1277,6 +1304,9 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "feedback bug",
     "feedback feature",
     "feedback security",
+    "links",
+    "dashboard",
+    "api",
     "automations",
     "automation trigger",
     "compact",
@@ -1387,6 +1417,9 @@ const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
     "/feedback bug",
     "/feedback feature",
     "/feedback security",
+    "/links",
+    "/dashboard",
+    "/api",
     "/rename ",
     "/init",
 ];
@@ -3705,6 +3738,19 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(command) = parse_tui_links_command(&content) {
+                    match command {
+                        Ok(()) => {
+                            self.show_links_detail();
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some(title) = parse_tui_rename_command(&content) {
                     match title {
                         Ok(title) => {
@@ -4064,6 +4110,17 @@ impl TuiApp {
             match command {
                 Ok(command) => {
                     self.show_feedback_detail(command);
+                }
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_links_command(command) {
+            match command {
+                Ok(()) => {
+                    self.show_links_detail();
                 }
                 Err(message) => {
                     self.status = message;
@@ -5382,6 +5439,12 @@ impl TuiApp {
             TuiFeedbackCommand::Feature => "feedback feature link shown".to_string(),
             TuiFeedbackCommand::Security => "feedback security link shown".to_string(),
         };
+    }
+
+    fn show_links_detail(&mut self) {
+        let detail = render_links_detail();
+        self.set_mcp_detail(TuiMcpDetailKind::Links, detail);
+        self.status = "links shown".to_string();
     }
 
     fn show_status_detail(&mut self) {
@@ -7959,6 +8022,25 @@ fn render_feedback_detail(command: TuiFeedbackCommand) -> String {
             );
         }
     }
+    detail
+}
+
+fn render_links_detail() -> String {
+    let mut detail = String::new();
+    let _ = writeln!(detail, "DeepSeekCode Links");
+    let _ = writeln!(detail, "==================");
+    let _ = writeln!(detail);
+    let _ = writeln!(detail, "DeepSeekCode");
+    let _ = writeln!(detail, "- Repository  {DEEPSEEK_CODE_REPO_URL}");
+    let _ = writeln!(detail, "- Issues      {DEEPSEEK_CODE_ISSUES_URL}");
+    let _ = writeln!(detail, "- Releases    {DEEPSEEK_CODE_RELEASES_URL}");
+    let _ = writeln!(detail, "- Docs        {DEEPSEEK_CODE_DOCS_URL}");
+    let _ = writeln!(detail);
+    let _ = writeln!(detail, "DeepSeek");
+    let _ = writeln!(detail, "- Platform    {DEEPSEEK_PLATFORM_URL}");
+    let _ = writeln!(detail, "- API docs    {DEEPSEEK_API_DOCS_URL}");
+    let _ = writeln!(detail);
+    let _ = writeln!(detail, "Aliases: links, dashboard, api");
     detail
 }
 
@@ -10905,6 +10987,37 @@ mod tests {
         let (_, detail) = app.mcp_detail.as_ref().expect("security detail");
         assert!(detail.contains("Security report"));
         assert!(detail.contains(DEEPSEEK_CODE_SECURITY_URL));
+    }
+
+    #[test]
+    fn links_command_renders_repository_and_api_links() {
+        let mut app = TuiApp::new(Vec::new());
+
+        run_palette_command(&mut app, "dashboard");
+
+        assert_eq!(app.status, "links shown");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("links detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Links);
+        assert!(detail.contains("DeepSeekCode Links"));
+        assert!(detail.contains(DEEPSEEK_CODE_REPO_URL));
+        assert!(detail.contains(DEEPSEEK_API_DOCS_URL));
+
+        run_palette_command(&mut app, "/api");
+
+        let (kind, detail) = app.mcp_detail.as_ref().expect("api detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Links);
+        assert!(detail.contains(DEEPSEEK_PLATFORM_URL));
+
+        app.composer_focused = true;
+        app.composer = "/links".to_string();
+        app.composer_cursor = app.composer.len();
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert_eq!(app.status, "links shown");
+        assert_eq!(app.composer, "");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("composer links detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Links);
+        assert!(detail.contains("Aliases: links, dashboard, api"));
     }
 
     #[test]

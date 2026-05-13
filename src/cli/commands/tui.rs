@@ -1193,6 +1193,7 @@ fn mcp_detail_summary(
         TuiMcpDetailKind::Provider => Err(app_error("provider details are not MCP details")),
         TuiMcpDetailKind::Skills => Err(app_error("skill details are not MCP details")),
         TuiMcpDetailKind::Feedback => Err(app_error("feedback details are not MCP details")),
+        TuiMcpDetailKind::Links => Err(app_error("link details are not MCP details")),
         TuiMcpDetailKind::Rollback => Err(app_error("rollback details are not MCP details")),
         TuiMcpDetailKind::Reasoning => Err(app_error("reasoning details are not MCP details")),
         TuiMcpDetailKind::ComposerStash => {
