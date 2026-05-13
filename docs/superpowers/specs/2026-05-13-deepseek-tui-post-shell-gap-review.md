@@ -32,8 +32,9 @@ web, review, RLM helper, and request-user-input surfaces landed.
 4. RLM parity covers model-running one-shot/batch tools, chunk/map-reduce/
    recursive planners, restricted Python helpers, stateful Python sessions,
    persistent Python REPL processes, durable `rlm_process` model-session
-   context, and MCP/ACP exposure. The remaining RLM gap is a true live
-   model-backed RLM REPL/daemon rather than persisted child-agent summaries.
+   context plus `rlm_process_sessions` inventory, and MCP/ACP exposure. The
+   remaining RLM gap is a true live model-backed RLM REPL/daemon rather than
+   persisted child-agent summaries.
 5. Remote PR review/comment workflows have deterministic planners, guarded
    mutation tools, failure recovery, and readiness checks. Remaining validation
    depends on external live GitHub fixtures with explicit write authorization.

@@ -343,6 +343,7 @@ Exposed tools:
 | `rlm_recursive_plan` | Plan a multi-round recursive RLM map/reduce workflow without running child agents |
 | `rlm_python` | Run restricted pure-compute Python helper code with imports/files/network/subprocess blocked |
 | `rlm_python_sessions` | List or inspect persisted `rlm_python_session` JSON state without running Python |
+| `rlm_process_sessions` | List or inspect persisted `rlm_process` durable model-session summaries without running a child model |
 | `rlm_python_session` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and writes `.dscode/rlm-python` helper state |
 | `rlm` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and runs bounded model-backed RLM child analysis |
 | `rlm_query` | Alias for `rlm` |
@@ -1373,12 +1374,16 @@ file, and `reset=true` closes and rebuilds that cached process. `rlm_python_sess
 lists those persisted helper sessions or inspects a specific `session_id`
 without running Python, returning the JSON object state, file metadata, and
 `process.active` / `process.pid` when a persistent REPL is alive in the current
-DeepSeekCode process.
+DeepSeekCode process. `rlm_process_sessions` lists or inspects durable
+`rlm_process` model sessions stored under `.dscode/rlm-model/`, exposing turn
+counts, last task metadata, and full stored summaries for a requested
+`session_id` without spending model tokens.
 This gives the model DeepSeek-TUI-style Recursive Language Model entrypoints for
 synthesis/classification tasks with both file-backed and optional process-backed
 Python helper state. MCP server mode exposes the local RLM planning helpers
 (`rlm_chunk_plan`, `rlm_map_reduce_plan`, `rlm_recursive_plan`), restricted pure-compute
-`rlm_python`, and read-only `rlm_python_sessions` by default. Stateful
+`rlm_python`, read-only `rlm_python_sessions`, and read-only
+`rlm_process_sessions` by default. Stateful
 `rlm_python_session` is hidden by default and requires trusted side effects or
 durable runtime approvals because it writes `.dscode/rlm-python` state.
 Model-running child-agent RLM tools (`rlm`, `rlm_query`, `llm_query`,

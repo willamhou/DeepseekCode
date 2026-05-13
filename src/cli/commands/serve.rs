@@ -46,8 +46,8 @@ use crate::tools::recall_archive::RecallArchiveTool;
 use crate::tools::revert_turn::RevertTurnTool;
 use crate::tools::review::{PrReviewCommentPlanTool, ReviewTool};
 use crate::tools::rlm::{
-    RlmBatchTool, RlmChunkPlanTool, RlmMapReducePlanTool, RlmPythonSessionTool,
-    RlmPythonSessionsTool, RlmPythonTool, RlmRecursivePlanTool, RlmTool,
+    RlmBatchTool, RlmChunkPlanTool, RlmMapReducePlanTool, RlmModelSessionsTool,
+    RlmPythonSessionTool, RlmPythonSessionsTool, RlmPythonTool, RlmRecursivePlanTool, RlmTool,
 };
 use crate::tools::run_shell::{is_safe_shell_command, RunShellTool};
 use crate::tools::run_tests::{render_run_tests_command, RunTestsTool};
@@ -808,6 +808,10 @@ fn execute_mcp_tool(
         "rlm_recursive_plan" => RlmRecursivePlanTool.execute(input)?,
         "rlm_python" => RlmPythonTool.execute(input)?,
         "rlm_python_sessions" => RlmPythonSessionsTool {
+            config: state.config.clone(),
+        }
+        .execute(input)?,
+        "rlm_process_sessions" => RlmModelSessionsTool {
             config: state.config.clone(),
         }
         .execute(input)?,
@@ -3378,6 +3382,17 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
             ),
         ),
         mcp_tool_definition(
+            "rlm_process_sessions",
+            "List or inspect persisted rlm_process durable model-session summaries without running a child model.",
+            mcp_schema(
+                vec![
+                    ("session_id", string_property("Optional session id to inspect.")),
+                    ("limit", number_property("Maximum sessions to list.")),
+                ],
+                &[],
+            ),
+        ),
+        mcp_tool_definition(
             "diagnostics",
             "Run workspace or path-scoped diagnostics.",
             mcp_schema(
@@ -5646,6 +5661,7 @@ fn acp_tool_kind(name: &str) -> &'static str {
         | "pr_review_comment_plan"
         | "recall_archive"
         | "load_skill"
+        | "rlm_process_sessions"
         | "image_ocr" => "read",
         "write_file" | "edit_file" | "fim_edit" | "apply_patch" | "revert_turn" | "note"
         | "remember" => "edit",
@@ -8130,6 +8146,7 @@ mod tests {
         assert!(rendered.contains(r#""name":"rlm_recursive_plan""#));
         assert!(rendered.contains(r#""name":"rlm_python""#));
         assert!(rendered.contains(r#""name":"rlm_python_sessions""#));
+        assert!(rendered.contains(r#""name":"rlm_process_sessions""#));
         assert!(rendered.contains(r#""name":"diagnostics""#));
         assert!(rendered.contains(r#""name":"runtime_list_sessions""#));
         assert!(rendered.contains(r#""name":"runtime_list_agents""#));
@@ -10058,6 +10075,7 @@ shell_allowlist = ["cargo test"]
         assert!(rendered.contains(r#""name":"rlm_recursive_plan""#));
         assert!(rendered.contains(r#""name":"rlm_python""#));
         assert!(rendered.contains(r#""name":"rlm_python_sessions""#));
+        assert!(rendered.contains(r#""name":"rlm_process_sessions""#));
         assert!(!rendered.contains(r#""name":"run_shell""#));
         assert!(!rendered.contains(r#""name":"run_tests""#));
         assert!(!rendered.contains(r#""name":"image_analyze""#));

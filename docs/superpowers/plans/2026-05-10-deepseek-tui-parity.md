@@ -494,6 +494,10 @@ Remaining:
   discoverable before choosing whether to continue, reset, or create a session;
   it now also reports `process.active` / `process.pid` for persistent Python
   REPLs alive in the current DeepSeekCode process
+- RLM model-session inventory now exists: `rlm_process_sessions` can list or
+  inspect persisted `.dscode/rlm-model/` process summaries without running a
+  child model, so durable long-input RLM sessions are discoverable before
+  continuing or resetting them
 - Review remote PR context signals now exist: `review` parses
   `github_pr_context` JSON to report requested changes, failing/cancelled status
   checks, and missing `include_diff=true` context before optional semantic

@@ -3459,6 +3459,12 @@ const TOOL_SPECS: &[StaticToolSpec] = &[
         required_json: r#"[]"#,
     },
     StaticToolSpec {
+        name: "rlm_process_sessions",
+        description: "List or inspect persisted rlm_process durable model-session summaries without running a child model. Use to discover existing long-input RLM process sessions before continuing or resetting them.",
+        properties_json: r#"{"session_id":{"type":"string","description":"Optional durable RLM model session id to inspect. Omit to list sessions."},"limit":{"type":"string","description":"Optional list limit, clamped to 1-100 and defaulting to 20."}}"#,
+        required_json: r#"[]"#,
+    },
+    StaticToolSpec {
         name: "rlm_batch",
         description: "Run batched bounded RLM-style child analyses over shared context. Use for several independent classification, extraction, comparison, or critique questions.",
         properties_json: r#"{"context":{"type":"string","description":"Shared long text, extracted data, or notes for all child analyses."},"questions":{"type":"string","description":"JSON array of up to 16 question strings, or objects with question plus optional context and strategy."},"strategy":{"type":"string","description":"Optional default strategy label such as synthesize, classify, compare, critique, or extract."},"steps":{"type":"string","description":"Optional child step budget per question as a positive integer up to 12."}}"#,
@@ -5125,6 +5131,7 @@ mod tests {
             "rlm_python".to_string(),
             "rlm_python_session".to_string(),
             "rlm_python_sessions".to_string(),
+            "rlm_process_sessions".to_string(),
             "rlm_batch".to_string(),
             "rlm_query_batched".to_string(),
             "llm_query_batched".to_string(),
@@ -5139,6 +5146,7 @@ mod tests {
         assert!(openai.contains("\"name\":\"rlm_python\""));
         assert!(openai.contains("\"name\":\"rlm_python_session\""));
         assert!(openai.contains("\"name\":\"rlm_python_sessions\""));
+        assert!(openai.contains("\"name\":\"rlm_process_sessions\""));
         assert!(openai.contains("\"name\":\"rlm_batch\""));
         assert!(openai.contains("\"name\":\"rlm_query_batched\""));
         assert!(openai.contains("\"name\":\"llm_query_batched\""));
@@ -5167,6 +5175,7 @@ mod tests {
             "rlm_python".to_string(),
             "rlm_python_session".to_string(),
             "rlm_python_sessions".to_string(),
+            "rlm_process_sessions".to_string(),
             "rlm_batch".to_string(),
             "rlm_query_batched".to_string(),
             "llm_query_batched".to_string(),
@@ -5181,6 +5190,7 @@ mod tests {
         assert!(anthropic.contains("\"name\":\"rlm_python\""));
         assert!(anthropic.contains("\"name\":\"rlm_python_session\""));
         assert!(anthropic.contains("\"name\":\"rlm_python_sessions\""));
+        assert!(anthropic.contains("\"name\":\"rlm_process_sessions\""));
         assert!(anthropic.contains("\"name\":\"rlm_batch\""));
         assert!(anthropic.contains("\"name\":\"rlm_query_batched\""));
         assert!(anthropic.contains("\"name\":\"llm_query_batched\""));

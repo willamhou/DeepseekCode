@@ -705,6 +705,7 @@ struct RlmProcessInput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RlmModelSession {
     session_id: String,
+    updated_at: String,
     turns: Vec<RlmModelSessionTurn>,
 }
 
@@ -947,6 +948,10 @@ pub struct RlmPythonSessionsTool {
     pub config: AppConfig,
 }
 
+pub struct RlmModelSessionsTool {
+    pub config: AppConfig,
+}
+
 impl Tool for RlmPythonSessionsTool {
     fn name(&self) -> &str {
         "rlm_python_sessions"
@@ -1024,6 +1029,113 @@ impl Tool for RlmPythonSessionsTool {
                         bytes,
                         state,
                         process
+                    ));
+                    sessions_count += 1;
+                }
+                Err(error) => {
+                    if errors_count > 0 {
+                        errors_json.push(',');
+                    }
+                    errors_json.push_str(&format!(
+                        "{{\"session_id\":\"{}\",\"path\":\"{}\",\"error\":\"{}\"}}",
+                        json_escape(&session_id),
+                        json_escape(&path.display().to_string()),
+                        json_escape(&error.to_string())
+                    ));
+                    errors_count += 1;
+                }
+            }
+        }
+
+        Ok(ToolOutput {
+            summary: format!(
+                "{{\"sessions\":[{}],\"errors\":[{}],\"limit\":{}}}",
+                sessions_json, errors_json, limit
+            ),
+        })
+    }
+}
+
+impl Tool for RlmModelSessionsTool {
+    fn name(&self) -> &str {
+        "rlm_process_sessions"
+    }
+
+    fn execute(&self, input: ToolInput) -> AppResult<ToolOutput> {
+        if let Some(session_id) = input
+            .get("session_id")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            validate_rlm_model_session_id(session_id)?;
+            let path = rlm_model_session_path(&self.config, session_id);
+            let exists = path.exists();
+            let session = read_rlm_model_session(&self.config, session_id, false)?;
+            let bytes = fs::metadata(&path)
+                .map(|metadata| metadata.len())
+                .unwrap_or(0);
+            let summary = format!(
+                "{{\"session_id\":\"{}\",\"path\":\"{}\",\"exists\":{},\"bytes\":{},\"session\":{}}}",
+                json_escape(session_id),
+                json_escape(&path.display().to_string()),
+                exists,
+                bytes,
+                json_value_to_string(&rlm_model_session_to_json(&session))
+            );
+            return Ok(ToolOutput { summary });
+        }
+
+        let limit = parse_rlm_model_sessions_limit(input.get("limit"))?;
+        let sessions_dir = rlm_model_sessions_dir(&self.config);
+        let mut entries = Vec::new();
+        if sessions_dir.exists() {
+            for entry in fs::read_dir(&sessions_dir).map_err(|error| {
+                tool_failure(format!("rlm_process_sessions read_dir failed: {error}"))
+            })? {
+                let entry = entry.map_err(|error| {
+                    tool_failure(format!("rlm_process_sessions read entry failed: {error}"))
+                })?;
+                let path = entry.path();
+                if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                    continue;
+                }
+                let Some(session_id) = path.file_stem().and_then(|value| value.to_str()) else {
+                    continue;
+                };
+                if validate_rlm_model_session_id(session_id).is_err() {
+                    continue;
+                }
+                entries.push((session_id.to_string(), path));
+            }
+        }
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+        let mut sessions_json = String::new();
+        let mut errors_json = String::new();
+        let mut sessions_count = 0usize;
+        let mut errors_count = 0usize;
+        for (session_id, path) in entries.into_iter().take(limit) {
+            match read_rlm_model_session(&self.config, &session_id, false) {
+                Ok(session) => {
+                    if sessions_count > 0 {
+                        sessions_json.push(',');
+                    }
+                    let bytes = fs::metadata(&path)
+                        .map(|metadata| metadata.len())
+                        .unwrap_or(0);
+                    let last_task = session
+                        .turns
+                        .last()
+                        .map(|turn| turn.task.as_str())
+                        .unwrap_or("");
+                    sessions_json.push_str(&format!(
+                        "{{\"session_id\":\"{}\",\"path\":\"{}\",\"bytes\":{},\"turns\":{},\"updated_at\":\"{}\",\"last_task\":\"{}\"}}",
+                        json_escape(&session_id),
+                        json_escape(&path.display().to_string()),
+                        bytes,
+                        session.turns.len(),
+                        json_escape(&session.updated_at),
+                        json_escape(last_task)
                     ));
                     sessions_count += 1;
                 }
@@ -1250,8 +1362,15 @@ fn read_rlm_model_session(
         let remove = turns.len() - MAX_RLM_MODEL_SESSION_TURNS;
         turns.drain(0..remove);
     }
+    let updated_at = root
+        .get("updated_at")
+        .and_then(json_as_string)
+        .map(str::to_string)
+        .or_else(|| turns.last().map(|turn| turn.updated_at.clone()))
+        .unwrap_or_else(|| "epoch+0".to_string());
     Ok(RlmModelSession {
         session_id: session_id.to_string(),
+        updated_at,
         turns,
     })
 }
@@ -1259,6 +1378,7 @@ fn read_rlm_model_session(
 fn empty_rlm_model_session(session_id: &str) -> RlmModelSession {
     RlmModelSession {
         session_id: session_id.to_string(),
+        updated_at: "epoch+0".to_string(),
         turns: Vec::new(),
     }
 }
@@ -1283,14 +1403,16 @@ fn append_rlm_model_session_turn(
     input: &RlmProcessInput,
     summary: &str,
 ) {
+    let updated_at = rlm_epoch_label();
     session.turns.push(RlmModelSessionTurn {
         task: task.trim().to_string(),
         label: input.label.clone(),
         char_count: input.char_count,
         line_count: input.line_count,
         summary: clip_rlm_model_session_summary(summary.trim()),
-        updated_at: rlm_epoch_label(),
+        updated_at: updated_at.clone(),
     });
+    session.updated_at = updated_at;
     if session.turns.len() > MAX_RLM_MODEL_SESSION_TURNS {
         let remove = session.turns.len() - MAX_RLM_MODEL_SESSION_TURNS;
         session.turns.drain(0..remove);
@@ -1341,7 +1463,7 @@ fn rlm_model_session_to_json(session: &RlmModelSession) -> JsonValue {
         ),
         (
             "updated_at".to_string(),
-            JsonValue::String(rlm_epoch_label()),
+            JsonValue::String(session.updated_at.clone()),
         ),
         (
             "turns".to_string(),
@@ -1867,6 +1989,16 @@ fn parse_rlm_python_sessions_limit(raw: Option<&str>) -> AppResult<usize> {
         Some(value) => value
             .parse::<usize>()
             .map_err(|_| tool_failure("rlm_python_sessions limit must be a positive integer"))?,
+        None => 20,
+    };
+    Ok(limit.clamp(1, 100))
+}
+
+fn parse_rlm_model_sessions_limit(raw: Option<&str>) -> AppResult<usize> {
+    let limit = match raw.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => value
+            .parse::<usize>()
+            .map_err(|_| tool_failure("rlm_process_sessions limit must be a positive integer"))?,
         None => 20,
     };
     Ok(limit.clamp(1, 100))
@@ -2496,6 +2628,53 @@ mod tests {
         }
         assert_eq!(capped.turns.len(), MAX_RLM_MODEL_SESSION_TURNS);
         assert_eq!(capped.turns[0].task, "task 5");
+    }
+
+    #[test]
+    fn rlm_process_sessions_lists_and_reads_model_session_files() {
+        let cwd = std::env::current_dir().unwrap();
+        let root = cwd.join("target").join(format!(
+            "dscode-rlm-process-sessions-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut config = AppConfig::default();
+        config.workspace.config_dir = root.join(".dscode").display().to_string();
+        let mut session = empty_rlm_model_session("analysis.1");
+        let input = RlmProcessInput {
+            label: "inline content".to_string(),
+            content: "alpha".to_string(),
+            char_count: 5,
+            line_count: 1,
+        };
+        append_rlm_model_session_turn(&mut session, "summarize alpha", &input, "alpha result");
+        write_rlm_model_session(&config, &session).unwrap();
+
+        let tool = RlmModelSessionsTool {
+            config: config.clone(),
+        };
+        let listed = tool.execute(ToolInput::new()).unwrap();
+        assert!(listed.summary.contains(r#""session_id":"analysis.1""#));
+        assert!(listed.summary.contains(r#""turns":1"#));
+        assert!(listed.summary.contains(r#""last_task":"summarize alpha""#));
+        assert!(!listed.summary.contains("alpha result"));
+
+        let shown = tool
+            .execute(ToolInput::new().with_arg("session_id", "analysis.1"))
+            .unwrap();
+        assert!(shown.summary.contains(r#""exists":true"#));
+        assert!(shown.summary.contains("alpha result"));
+
+        assert_eq!(parse_rlm_model_sessions_limit(None).unwrap(), 20);
+        assert_eq!(parse_rlm_model_sessions_limit(Some("0")).unwrap(), 1);
+        assert_eq!(parse_rlm_model_sessions_limit(Some("1000")).unwrap(), 100);
+        assert!(parse_rlm_model_sessions_limit(Some("bad"))
+            .unwrap_err()
+            .to_string()
+            .contains("limit"));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
