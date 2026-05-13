@@ -1176,8 +1176,9 @@ and `image_ocr`. `pandoc_convert` converts a workspace `source_path` to a
 whitelisted `target_format` through local `pandoc`; text formats can return
 inline output, while `docx`, `odt`, and `epub` require `output_path`.
 `image_ocr` runs local `tesseract <image> -` and returns extracted text inline.
-Both tools report clear missing-binary errors if the corresponding local
-dependency is not installed.
+Both tools are also exposed through MCP/ACP; `pandoc_convert output_path=...`
+requires durable write approvals in those modes. Both tools report clear
+missing-binary errors if the corresponding local dependency is not installed.
 
 `image_analyze` reads a workspace-relative `image_path`, base64-encodes PNG,
 JPEG, GIF, WebP, or BMP content, and sends it to the configured

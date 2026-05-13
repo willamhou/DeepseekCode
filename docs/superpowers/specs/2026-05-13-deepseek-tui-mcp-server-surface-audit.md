@@ -15,7 +15,9 @@ runtime approvals. At the time of this audit it also listed `web_run` as
 MCP-visible in this section, while the MCP stdio server exposed narrower
 first-class read-only web/market tools; a follow-up slice now exposes `web_run`
 through MCP/ACP. Follow-up read-only helper slices also expose `review`,
-`recall_archive`, `tool_search_tool_regex`, and `tool_search_tool_bm25`.
+`recall_archive`, `tool_search_tool_regex`, `tool_search_tool_bm25`,
+`image_ocr`, and inline `pandoc_convert`; `pandoc_convert output_path` now
+requires durable write approval.
 
 ## Spec
 

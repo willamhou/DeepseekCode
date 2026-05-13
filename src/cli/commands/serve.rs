@@ -24,6 +24,7 @@ use crate::model::deepseek::DeepSeekClient;
 use crate::model::protocol::{ModelRequest, TokenUsage};
 use crate::tools::apply_patch::ApplyPatchTool;
 use crate::tools::diagnostics::DiagnosticsTool;
+use crate::tools::document::{ImageOcrTool, PandocConvertTool};
 use crate::tools::exec_shell::{
     ExecShellCancelTool, ExecShellInteractTool, ExecShellListTool, ExecShellShowTool,
     ExecShellTool, ExecShellWaitTool, TaskShellStartTool, TaskShellWaitTool,
@@ -737,6 +738,10 @@ fn execute_mcp_tool(
         "web_run" => WebRunTool.execute(input)?,
         "fetch_url" => FetchUrlTool.execute(input)?,
         "finance" => FinanceTool.execute(input)?,
+        "pandoc_convert" => {
+            return execute_mcp_pandoc_convert(input, state);
+        }
+        "image_ocr" => ImageOcrTool.execute(input)?,
         "git_status" => GitStatusTool.execute(input)?,
         "git_diff" => GitDiffTool.execute(input)?,
         "project_map" => ProjectMapTool.execute(input)?,
@@ -1269,6 +1274,34 @@ fn execute_mcp_write_file(input: ToolInput, state: &McpStdioState) -> AppResult<
         path,
         if existed { "overwritten" } else { "created" }
     ))
+}
+
+fn execute_mcp_pandoc_convert(input: ToolInput, state: &McpStdioState) -> AppResult<String> {
+    let writes_output = input
+        .get("output_path")
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    if writes_output {
+        let output_path = input.get("output_path").unwrap_or("");
+        let _target = safe_mcp_workspace_path(&state.workspace, output_path, "pandoc_convert")?;
+        let Some(thread_id) = state.approval_thread_id.as_deref() else {
+            return Err(app_error(
+                "MCP write mode for `pandoc_convert` is disabled; durable runtime approvals are required when output_path is set",
+            ));
+        };
+        if state.approval.require_write_confirmation && !env_flag("DSCODE_AUTO_APPROVE_WRITES") {
+            let approval = state.store.append_permission_request(
+                thread_id,
+                state.approval_turn_id.as_deref(),
+                "pandoc_convert".to_string(),
+                "write".to_string(),
+                format!("pandoc convert {output_path}"),
+                input.args.clone(),
+            )?;
+            wait_for_mcp_permission_response(state, thread_id, &approval, "pandoc_convert")?;
+        }
+    }
+    Ok(PandocConvertTool.execute(input)?.summary)
 }
 
 fn execute_mcp_edit_file(input: ToolInput, state: &McpStdioState) -> AppResult<String> {
@@ -2728,6 +2761,26 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
                     ),
                 ],
                 &[],
+            ),
+        ),
+        mcp_tool_definition(
+            "pandoc_convert",
+            "Convert a workspace document through local pandoc. Inline text output is read-only; output_path requires durable runtime approvals.",
+            mcp_schema(
+                vec![
+                    ("source_path", string_property("Workspace-relative source document path.")),
+                    ("target_format", string_property("Target format such as markdown, html, plain, docx, odt, or epub.")),
+                    ("output_path", string_property("Optional workspace-relative output path; required for binary formats and requires durable approvals.")),
+                ],
+                &["source_path", "target_format"],
+            ),
+        ),
+        mcp_tool_definition(
+            "image_ocr",
+            "Extract text from a workspace image through local tesseract.",
+            mcp_schema(
+                vec![("path", string_property("Workspace-relative image path."))],
+                &["path"],
             ),
         ),
         mcp_tool_definition(
@@ -4877,7 +4930,8 @@ fn acp_tool_kind(name: &str) -> &'static str {
         | "runtime_list_agents"
         | "runtime_agent_result"
         | "review"
-        | "recall_archive" => "read",
+        | "recall_archive"
+        | "image_ocr" => "read",
         "write_file" | "edit_file" | "fim_edit" | "apply_patch" | "revert_turn" => "edit",
         "delete_file" => "delete",
         "copy_file" | "move_file" => "move",
@@ -4888,7 +4942,7 @@ fn acp_tool_kind(name: &str) -> &'static str {
         | "web_run"
         | "tool_search_tool_regex"
         | "tool_search_tool_bm25" => "search",
-        "fetch_url" | "finance" => "fetch",
+        "fetch_url" | "finance" | "pandoc_convert" => "fetch",
         "run_shell"
         | "run_tests"
         | "exec_shell"
@@ -7305,6 +7359,8 @@ mod tests {
         assert!(rendered.contains(r#""name":"web_run""#));
         assert!(rendered.contains(r#""name":"fetch_url""#));
         assert!(rendered.contains(r#""name":"finance""#));
+        assert!(rendered.contains(r#""name":"pandoc_convert""#));
+        assert!(rendered.contains(r#""name":"image_ocr""#));
         assert!(rendered.contains(r#""name":"git_status""#));
         assert!(rendered.contains(r#""name":"project_map""#));
         assert!(rendered.contains(r#""name":"validate_data""#));
@@ -7534,6 +7590,39 @@ mod tests {
         let tool_search_text = mcp_response_text(&tool_search_response);
         assert!(tool_search_text.contains(r#""tool":"tool_search_tool_bm25""#));
         assert!(tool_search_text.contains(r#""tool_name":"finance""#));
+    }
+
+    #[test]
+    fn mcp_tools_call_handles_document_helpers_before_spawning_binaries() {
+        let state = mcp_state("mcp-document-helpers");
+        fs::write(state.workspace.join("note.md"), "# hello\n").unwrap();
+
+        let unsupported = mcp_response_for_message(
+            r#"{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"pandoc_convert","arguments":{"source_path":"note.md","target_format":"not-real"}}}"#,
+            &state,
+        )
+        .unwrap();
+        let unsupported_rendered = json_value_to_string(&unsupported);
+        assert!(unsupported_rendered.contains("unsupported target_format"));
+        assert!(unsupported_rendered.contains(r#""isError":true"#));
+
+        let disabled_write = mcp_response_for_message(
+            r#"{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"pandoc_convert","arguments":{"source_path":"note.md","target_format":"html","output_path":"out.html"}}}"#,
+            &state,
+        )
+        .unwrap();
+        let disabled_rendered = json_value_to_string(&disabled_write);
+        assert!(disabled_rendered.contains("MCP write mode for `pandoc_convert` is disabled"));
+        assert!(disabled_rendered.contains(r#""isError":true"#));
+
+        let missing_image = mcp_response_for_message(
+            r#"{"jsonrpc":"2.0","id":43,"method":"tools/call","params":{"name":"image_ocr","arguments":{"path":"missing.png"}}}"#,
+            &state,
+        )
+        .unwrap();
+        let missing_rendered = json_value_to_string(&missing_image);
+        assert!(missing_rendered.contains("image_ocr source path does not exist"));
+        assert!(missing_rendered.contains(r#""isError":true"#));
     }
 
     #[test]
@@ -8958,6 +9047,8 @@ mod tests {
         assert!(rendered.contains(r#""name":"web_search""#));
         assert!(rendered.contains(r#""name":"web_run""#));
         assert!(rendered.contains(r#""name":"fetch_url""#));
+        assert!(rendered.contains(r#""name":"pandoc_convert""#));
+        assert!(rendered.contains(r#""name":"image_ocr""#));
         assert!(rendered.contains(r#""name":"git_status""#));
         assert!(rendered.contains(r#""name":"project_map""#));
         assert!(rendered.contains(r#""name":"validate_data""#));
