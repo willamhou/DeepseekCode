@@ -3490,8 +3490,8 @@ const TOOL_SPECS: &[StaticToolSpec] = &[
     },
     StaticToolSpec {
         name: "rlm_process_cancel",
-        description: "Cancel queued pending or active running live RLM daemon turns for a session. Active worker cancellation is cooperative through the runtime task cancel path.",
-        properties_json: r#"{"session_id":{"type":"string","description":"Live RLM session id."},"task_id":{"type":"string","description":"Runtime task id for the queued or active turn to cancel."},"turn_id":{"type":"string","description":"Alias for task_id."},"id":{"type":"string","description":"Alias for task_id."},"all":{"type":"string","description":"Set true/1/yes/on to cancel all queued pending or active running turns in the live session."},"reason":{"type":"string","description":"Optional cancellation reason stored on the runtime task and live event log."}}"#,
+        description: "Cancel queued pending or active running live RLM daemon turns for a session. Active worker cancellation is cooperative by default; force=true sends SIGTERM to an external daemon_pid when an active turn is cancelled.",
+        properties_json: r#"{"session_id":{"type":"string","description":"Live RLM session id."},"task_id":{"type":"string","description":"Runtime task id for the queued or active turn to cancel."},"turn_id":{"type":"string","description":"Alias for task_id."},"id":{"type":"string","description":"Alias for task_id."},"all":{"type":"string","description":"Set true/1/yes/on to cancel all queued pending or active running turns in the live session."},"force":{"type":"string","description":"Set true/1/yes/on to send SIGTERM to an external daemon_pid when an active turn is cancelled. Unix only; never interrupts the current process."},"reason":{"type":"string","description":"Optional cancellation reason stored on the runtime task and live event log."}}"#,
         required_json: r#"["session_id"]"#,
     },
     StaticToolSpec {

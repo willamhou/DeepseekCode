@@ -58,5 +58,5 @@ future service packaging can loop over.
 
 ## Remaining Gap
 
-DeepSeekCode still needs TUI/ACP subscription polish, forced cross-process
-worker interruption, and supervisor/CLI lifecycle commands.
+DeepSeekCode still needs TUI/ACP subscription polish and supervisor/CLI
+lifecycle commands.

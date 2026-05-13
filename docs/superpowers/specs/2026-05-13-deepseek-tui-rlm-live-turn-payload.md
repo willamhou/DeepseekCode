@@ -45,5 +45,4 @@ depending on the original CLI process.
 ## Remaining Gap
 
 `rlm_process_run_next` now consumes this payload for a single queued turn. The
-remaining gap is TUI/ACP subscription polish, forced cross-process worker
-interruption, and lifecycle commands.
+remaining gap is TUI/ACP subscription polish and lifecycle commands.

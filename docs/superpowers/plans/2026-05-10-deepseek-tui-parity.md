@@ -525,7 +525,9 @@ Remaining:
   marks payloads cancelled when present, refreshes `queued_turns`, preserves a
   live owner while cancellation is pending, and appends `turn_cancelled` events;
   active workers now observe runtime task cancellation through the agent cancel
-  path and clear the live manifest as `status=cancelled`;
+  path and clear the live manifest as `status=cancelled`; `force=true` can
+  explicitly SIGTERM an external daemon owner on Unix and append
+  `worker_interrupted`;
   `rlm_process_run_next` now claims one queued payload, records `turn_started`,
   runs the bounded model-backed RLM child flow, and records `turn_completed` /
   `turn_failed`, giving live sessions a single-step worker bridge before a

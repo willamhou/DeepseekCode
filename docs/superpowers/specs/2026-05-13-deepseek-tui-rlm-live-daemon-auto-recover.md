@@ -36,5 +36,5 @@ running turns before claiming more work.
 
 ## Remaining
 
-TUI/ACP subscription polish, forced cross-process worker interruption, and
-broader explicit lifecycle/status commands remain open.
+TUI/ACP subscription polish and broader explicit lifecycle/status commands
+remain open.

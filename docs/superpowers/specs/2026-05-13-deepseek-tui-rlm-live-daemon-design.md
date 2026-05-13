@@ -181,8 +181,9 @@ resumption.
      cancellation, and single-step/batch worker completion are implemented;
      worker ownership is stamped into live manifests while a turn is running and
      inventory reports stale owner pids; HTTP SSE streaming is implemented for
-     live-session event logs; TUI/ACP subscription polish, forced cross-process
-     worker interruption, and resident daemon service packaging remain open
+     live-session event logs; `rlm_process_cancel force=true` can interrupt an
+     external daemon owner on Unix; TUI/ACP subscription polish and resident
+     daemon service packaging remain open
 5. Recovery:
    - daemon restart scan
    - stale pid detection
@@ -222,5 +223,4 @@ Future implementation should add these gates:
 Do not rename the existing bounded child-agent `rlm_process` implementation as a
 live daemon. It is already useful and should remain the default until a real
 live worker exists. The remaining executable RLM slices should focus on TUI/ACP
-subscription polish, forced cross-process worker interruption, and richer
-lifecycle commands.
+subscription polish and richer lifecycle commands.

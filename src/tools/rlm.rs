@@ -1822,6 +1822,7 @@ impl Tool for RlmLiveCancelTool {
                 "rlm_process_cancel requires `task_id`/`turn_id` or `all=true`",
             ));
         }
+        let force = parse_bool_arg(input.get("force"));
         let reason = input
             .get("reason")
             .map(str::trim)
@@ -1849,10 +1850,14 @@ impl Tool for RlmLiveCancelTool {
         };
         let mut cancelled = Vec::new();
         let mut active_cancelled = false;
+        let mut active_owner_cancelled = false;
         let active_turn_id = rlm_live_manifest_string_field(&manifest, "active_turn_id");
         for task in candidates {
             let original_summary = task.summary.clone();
-            if active_turn_id.as_deref() == Some(task.id.as_str()) || task.status == "running" {
+            if active_turn_id.as_deref() == Some(task.id.as_str()) {
+                active_owner_cancelled = true;
+                active_cancelled = true;
+            } else if task.status == "running" {
                 active_cancelled = true;
             }
             let (updated, _event) = store.cancel_task(&task.id, reason.clone())?;
@@ -1873,7 +1878,29 @@ impl Tool for RlmLiveCancelTool {
             cancelled.push(rlm_live_cancelled_task_json(&updated, &original_summary));
         }
         let queued_turns = count_pending_live_rlm_tasks(&store, &runtime_thread_id)?;
-        let status = if active_turn_id.is_some() {
+        let daemon_pid = rlm_live_manifest_u64_field(&manifest, "daemon_pid");
+        let daemon_epoch = rlm_live_manifest_string_field(&manifest, "daemon_epoch");
+        let mut next_active_turn_id = active_turn_id.clone();
+        let (interrupted, interrupt) = if force && active_owner_cancelled {
+            let (interrupted, interrupt) = rlm_interrupt_live_daemon_owner(daemon_pid);
+            if interrupted {
+                next_active_turn_id = None;
+                if let Some(active_turn_id) = active_turn_id.as_deref() {
+                    let _ = append_rlm_live_session_json_event(
+                        &self.config,
+                        session_id,
+                        "worker_interrupted",
+                        &runtime_thread_id,
+                        active_turn_id,
+                        vec![("interrupt".to_string(), interrupt.clone())],
+                    );
+                }
+            }
+            (interrupted, interrupt)
+        } else {
+            (false, JsonValue::Null)
+        };
+        let status = if next_active_turn_id.is_some() {
             "running"
         } else {
             "idle"
@@ -1885,16 +1912,14 @@ impl Tool for RlmLiveCancelTool {
         let workspace = rlm_live_manifest_string_field(&manifest, "workspace")
             .unwrap_or_else(|| thread.workspace);
         let created_at = rlm_live_manifest_string_field(&manifest, "created_at");
-        if active_turn_id.is_some() {
-            let daemon_pid = rlm_live_manifest_u64_field(&manifest, "daemon_pid");
-            let daemon_epoch = rlm_live_manifest_string_field(&manifest, "daemon_epoch");
+        if next_active_turn_id.is_some() {
             write_rlm_live_session_manifest_with_daemon(
                 &self.config,
                 session_id,
                 status,
                 &runtime_thread_id,
                 runtime_session_id.as_deref(),
-                active_turn_id.as_deref(),
+                next_active_turn_id.as_deref(),
                 queued_turns,
                 &model,
                 &workspace,
@@ -1909,7 +1934,7 @@ impl Tool for RlmLiveCancelTool {
                 status,
                 &runtime_thread_id,
                 runtime_session_id.as_deref(),
-                active_turn_id.as_deref(),
+                next_active_turn_id.as_deref(),
                 queued_turns,
                 &model,
                 &workspace,
@@ -1934,6 +1959,13 @@ impl Tool for RlmLiveCancelTool {
                     "active_cancelled".to_string(),
                     JsonValue::Bool(active_cancelled),
                 ),
+                (
+                    "active_owner_cancelled".to_string(),
+                    JsonValue::Bool(active_owner_cancelled),
+                ),
+                ("force".to_string(), JsonValue::Bool(force)),
+                ("interrupted".to_string(), JsonValue::Bool(interrupted)),
+                ("interrupt".to_string(), interrupt),
                 (
                     "queued_turns".to_string(),
                     JsonValue::Number(queued_turns.to_string()),
@@ -4720,6 +4752,105 @@ fn rlm_process_is_alive(pid: u64) -> bool {
     }
 }
 
+fn rlm_interrupt_live_daemon_owner(pid: Option<u64>) -> (bool, JsonValue) {
+    let Some(pid) = pid else {
+        return (
+            false,
+            JsonValue::Object(BTreeMap::from([
+                ("attempted".to_string(), JsonValue::Bool(false)),
+                ("interrupted".to_string(), JsonValue::Bool(false)),
+                (
+                    "error".to_string(),
+                    JsonValue::String("live manifest has no daemon_pid".to_string()),
+                ),
+            ])),
+        );
+    };
+    if pid <= 1 || pid == std::process::id() as u64 || pid > i32::MAX as u64 {
+        return (
+            false,
+            JsonValue::Object(BTreeMap::from([
+                ("attempted".to_string(), JsonValue::Bool(false)),
+                ("interrupted".to_string(), JsonValue::Bool(false)),
+                ("pid".to_string(), JsonValue::Number(pid.to_string())),
+                (
+                    "error".to_string(),
+                    JsonValue::String(format!("refusing to interrupt unsafe daemon pid {pid}")),
+                ),
+            ])),
+        );
+    }
+    if !rlm_process_is_alive(pid) {
+        return (
+            false,
+            JsonValue::Object(BTreeMap::from([
+                ("attempted".to_string(), JsonValue::Bool(false)),
+                ("interrupted".to_string(), JsonValue::Bool(false)),
+                ("pid".to_string(), JsonValue::Number(pid.to_string())),
+                (
+                    "error".to_string(),
+                    JsonValue::String(format!("daemon pid {pid} is not alive")),
+                ),
+            ])),
+        );
+    }
+    #[cfg(unix)]
+    {
+        const SIGTERM: i32 = 15;
+        unsafe extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        let result = unsafe { kill(pid as i32, SIGTERM) };
+        if result == 0 {
+            return (
+                true,
+                JsonValue::Object(BTreeMap::from([
+                    ("attempted".to_string(), JsonValue::Bool(true)),
+                    ("interrupted".to_string(), JsonValue::Bool(true)),
+                    ("pid".to_string(), JsonValue::Number(pid.to_string())),
+                    (
+                        "signal".to_string(),
+                        JsonValue::String("SIGTERM".to_string()),
+                    ),
+                ])),
+            );
+        }
+        (
+            false,
+            JsonValue::Object(BTreeMap::from([
+                ("attempted".to_string(), JsonValue::Bool(true)),
+                ("interrupted".to_string(), JsonValue::Bool(false)),
+                ("pid".to_string(), JsonValue::Number(pid.to_string())),
+                (
+                    "signal".to_string(),
+                    JsonValue::String("SIGTERM".to_string()),
+                ),
+                (
+                    "error".to_string(),
+                    JsonValue::String(format!("{}", std::io::Error::last_os_error())),
+                ),
+            ])),
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        (
+            false,
+            JsonValue::Object(BTreeMap::from([
+                ("attempted".to_string(), JsonValue::Bool(false)),
+                ("interrupted".to_string(), JsonValue::Bool(false)),
+                ("pid".to_string(), JsonValue::Number(pid.to_string())),
+                (
+                    "error".to_string(),
+                    JsonValue::String(
+                        "forced live RLM worker interruption is only supported on Unix".to_string(),
+                    ),
+                ),
+            ])),
+        )
+    }
+}
+
 #[cfg(unix)]
 fn rlm_process_is_zombie(pid: u64) -> bool {
     let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
@@ -6892,6 +7023,243 @@ mod tests {
         assert!(events.summary.contains(r#""kind":"turn_cancelled""#));
         assert!(events.summary.contains(r#""reason":"active stop""#));
         assert!(events.summary.contains(&turn_id));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rlm_process_cancel_force_interrupts_external_owner() {
+        let cwd = std::env::current_dir().unwrap();
+        let root = cwd.join("target").join(format!(
+            "dscode-rlm-live-force-cancel-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let mut owner = Command::new("sleep").arg("30").spawn().unwrap();
+        let owner_pid = owner.id() as u64;
+        let mut config = AppConfig::default();
+        config.workspace.config_dir = root.join(".dscode").display().to_string();
+        let rlm = RlmTool {
+            tool_name: "rlm_process",
+            config: config.clone(),
+            parent_depth: 0,
+        };
+        let queued = rlm
+            .execute(
+                ToolInput::new()
+                    .with_arg("task", "force active turn")
+                    .with_arg("content", "alpha")
+                    .with_arg("session_id", "cancel.force")
+                    .with_arg("live", "true"),
+            )
+            .unwrap();
+        let turn_id = meta_value(&queued.summary, "meta.rlm_turn_id").unwrap();
+        let manifest_path = rlm_live_session_manifest_path(&config, "cancel.force");
+        let manifest = read_rlm_live_session_manifest(&manifest_path, "cancel.force").unwrap();
+        let thread_id = rlm_live_manifest_string_field(&manifest, "runtime_thread_id").unwrap();
+        let created_at = rlm_live_manifest_string_field(&manifest, "created_at");
+        let store = rlm_runtime_store(&config);
+        let thread = store.load_thread(&thread_id).unwrap();
+        store
+            .claim_task(&turn_id, "force-cancel-test".to_string())
+            .unwrap();
+        update_rlm_live_session_turn_payload_status(
+            &config,
+            "cancel.force",
+            &turn_id,
+            "running",
+            Vec::new(),
+        )
+        .unwrap();
+        write_rlm_live_session_manifest_with_daemon(
+            &config,
+            "cancel.force",
+            "running",
+            &thread_id,
+            thread.session_id.as_deref(),
+            Some(&turn_id),
+            0,
+            &thread.model,
+            &thread.workspace,
+            created_at.as_deref(),
+            Some(owner_pid),
+            Some("force-epoch"),
+        )
+        .unwrap();
+
+        let cancel = RlmLiveCancelTool {
+            config: config.clone(),
+        }
+        .execute(
+            ToolInput::new()
+                .with_arg("session_id", "cancel.force")
+                .with_arg("task_id", turn_id.clone())
+                .with_arg("reason", "force stop")
+                .with_arg("force", "true"),
+        )
+        .unwrap();
+        assert!(cancel.summary.contains(r#""active_cancelled":true"#));
+        assert!(cancel.summary.contains(r#""active_owner_cancelled":true"#));
+        assert!(cancel.summary.contains(r#""force":true"#));
+        assert!(cancel.summary.contains(r#""interrupted":true"#));
+        assert!(cancel.summary.contains(r#""signal":"SIGTERM""#));
+        let _ = owner.wait();
+
+        let updated = read_rlm_live_session_manifest(&manifest_path, "cancel.force").unwrap();
+        assert_eq!(
+            rlm_live_manifest_string_field(&updated, "status").as_deref(),
+            Some("idle")
+        );
+        assert_eq!(
+            rlm_live_manifest_string_field(&updated, "active_turn_id"),
+            None
+        );
+        assert_eq!(rlm_live_manifest_u64_field(&updated, "daemon_pid"), None);
+        assert_eq!(store.load_task(&turn_id).unwrap().status, "cancelled");
+
+        let events = RlmLiveEventsTool {
+            config: config.clone(),
+        }
+        .execute(ToolInput::new().with_arg("session_id", "cancel.force"))
+        .unwrap();
+        assert!(events.summary.contains(r#""kind":"worker_interrupted""#));
+        assert!(events.summary.contains(r#""interrupted":true"#));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rlm_process_cancel_force_does_not_interrupt_non_active_running_task() {
+        let cwd = std::env::current_dir().unwrap();
+        let root = cwd.join("target").join(format!(
+            "dscode-rlm-live-force-non-active-cancel-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let mut owner = Command::new("sleep").arg("30").spawn().unwrap();
+        let owner_pid = owner.id() as u64;
+        let mut config = AppConfig::default();
+        config.workspace.config_dir = root.join(".dscode").display().to_string();
+        let rlm = RlmTool {
+            tool_name: "rlm_process",
+            config: config.clone(),
+            parent_depth: 0,
+        };
+        let first = rlm
+            .execute(
+                ToolInput::new()
+                    .with_arg("task", "active force guard turn")
+                    .with_arg("content", "alpha")
+                    .with_arg("session_id", "cancel.force.guard")
+                    .with_arg("live", "true"),
+            )
+            .unwrap();
+        let active_turn_id = meta_value(&first.summary, "meta.rlm_turn_id").unwrap();
+        let second = rlm
+            .execute(
+                ToolInput::new()
+                    .with_arg("task", "non active force guard turn")
+                    .with_arg("content", "beta")
+                    .with_arg("session_id", "cancel.force.guard")
+                    .with_arg("live", "true"),
+            )
+            .unwrap();
+        let non_active_turn_id = meta_value(&second.summary, "meta.rlm_turn_id").unwrap();
+        let manifest_path = rlm_live_session_manifest_path(&config, "cancel.force.guard");
+        let manifest =
+            read_rlm_live_session_manifest(&manifest_path, "cancel.force.guard").unwrap();
+        let thread_id = rlm_live_manifest_string_field(&manifest, "runtime_thread_id").unwrap();
+        let created_at = rlm_live_manifest_string_field(&manifest, "created_at");
+        let store = rlm_runtime_store(&config);
+        let thread = store.load_thread(&thread_id).unwrap();
+        store
+            .claim_task(&active_turn_id, "force-guard-active".to_string())
+            .unwrap();
+        store
+            .claim_task(&non_active_turn_id, "force-guard-non-active".to_string())
+            .unwrap();
+        update_rlm_live_session_turn_payload_status(
+            &config,
+            "cancel.force.guard",
+            &active_turn_id,
+            "running",
+            Vec::new(),
+        )
+        .unwrap();
+        update_rlm_live_session_turn_payload_status(
+            &config,
+            "cancel.force.guard",
+            &non_active_turn_id,
+            "running",
+            Vec::new(),
+        )
+        .unwrap();
+        write_rlm_live_session_manifest_with_daemon(
+            &config,
+            "cancel.force.guard",
+            "running",
+            &thread_id,
+            thread.session_id.as_deref(),
+            Some(&active_turn_id),
+            0,
+            &thread.model,
+            &thread.workspace,
+            created_at.as_deref(),
+            Some(owner_pid),
+            Some("force-guard-epoch"),
+        )
+        .unwrap();
+
+        let cancel = RlmLiveCancelTool {
+            config: config.clone(),
+        }
+        .execute(
+            ToolInput::new()
+                .with_arg("session_id", "cancel.force.guard")
+                .with_arg("task_id", non_active_turn_id.clone())
+                .with_arg("reason", "stop non active")
+                .with_arg("force", "true"),
+        )
+        .unwrap();
+        assert!(cancel.summary.contains(r#""active_cancelled":true"#));
+        assert!(cancel.summary.contains(r#""active_owner_cancelled":false"#));
+        assert!(cancel.summary.contains(r#""force":true"#));
+        assert!(cancel.summary.contains(r#""interrupted":false"#));
+        assert!(cancel.summary.contains(r#""interrupt":null"#));
+        assert!(owner.try_wait().unwrap().is_none());
+
+        let updated = read_rlm_live_session_manifest(&manifest_path, "cancel.force.guard").unwrap();
+        assert_eq!(
+            rlm_live_manifest_string_field(&updated, "status").as_deref(),
+            Some("running")
+        );
+        assert_eq!(
+            rlm_live_manifest_string_field(&updated, "active_turn_id").as_deref(),
+            Some(active_turn_id.as_str())
+        );
+        assert_eq!(
+            rlm_live_manifest_u64_field(&updated, "daemon_pid"),
+            Some(owner_pid)
+        );
+        assert_eq!(
+            store.load_task(&non_active_turn_id).unwrap().status,
+            "cancelled"
+        );
+
+        let events = RlmLiveEventsTool {
+            config: config.clone(),
+        }
+        .execute(ToolInput::new().with_arg("session_id", "cancel.force.guard"))
+        .unwrap();
+        assert!(!events.summary.contains(r#""kind":"worker_interrupted""#));
+        let _ = owner.kill();
+        let _ = owner.wait();
         let _ = fs::remove_dir_all(root);
     }
 

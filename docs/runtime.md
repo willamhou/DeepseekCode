@@ -1430,7 +1430,11 @@ or active running live turn, marks the payload cancelled when present, appends
 pending or active running turn in that live session. Active worker cancellation
 is cooperative: the running `rlm_process_run_next` worker observes the runtime
 task cancellation through the agent cancel path, then clears the live manifest
-owner and returns `status=cancelled`.
+owner and returns `status=cancelled`. `force=true` is an explicit Unix-only
+operator override for active turns: after marking the runtime task cancelled, it
+sends SIGTERM to an external `daemon_pid`, appends `worker_interrupted`, and
+clears the active owner when the signal is accepted. It refuses to interrupt the
+current process or unsafe pids.
 `rlm_process_recover session_id=<id>` scans the live manifest, active turn,
 runtime tasks, and persisted payloads for interrupted `running` turns. The
 default `mode=requeue` makes recoverable interrupted turns pending/queued again,
@@ -1463,7 +1467,8 @@ non-mutating batch preview. The existing `deepseek agents daemon` service loop
 now first runs safe all-session live RLM recovery, which requeues/fails stale
 running turns while preserving live-owned turns unless forced, then runs one
 queued live RLM turn per tick through the same worker path. Forced
-cross-process worker interruption and broader RLM daemon lifecycle commands
+cross-process worker interruption now exists as an explicit `force=true`
+operator action on `rlm_process_cancel`; broader RLM daemon lifecycle commands
 remain future work.
 `rlm_process_events session_id=<id> cursor=<seq>` replays parsed
 `.dscode/rlm-daemon/<session_id>/events.jsonl` records with `seq` greater than

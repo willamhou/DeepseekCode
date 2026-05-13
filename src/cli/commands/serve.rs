@@ -843,6 +843,11 @@ fn execute_mcp_tool(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
             {
+                Some(task_id) if input.get("force").is_some_and(truthy_str) => {
+                    format!(
+                        "force-cancel active live RLM turn and interrupt daemon owner: {task_id}"
+                    )
+                }
                 Some(task_id) => format!("cancel queued or active live RLM turn: {task_id}"),
                 None => format!(
                     "cancel queued or active live RLM turns for session: {}",
@@ -4074,7 +4079,7 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
         ));
         tools.push(mcp_tool_definition(
             "rlm_process_cancel",
-            "Cancel queued pending or active running live RLM daemon turns for a session. Active worker cancellation is cooperative. Requires durable runtime approvals.",
+            "Cancel queued pending or active running live RLM daemon turns for a session. Active worker cancellation is cooperative by default; force=true interrupts an external daemon owner on Unix. Requires durable runtime approvals.",
             mcp_schema(
                 vec![
                     ("session_id", string_property("Live RLM session id.")),
@@ -4087,6 +4092,12 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
                     (
                         "all",
                         string_property("Set true to cancel all queued pending or active running turns."),
+                    ),
+                    (
+                        "force",
+                        string_property(
+                            "Set true to send SIGTERM to an external daemon_pid when an active turn is cancelled.",
+                        ),
                     ),
                     ("reason", string_property("Optional cancellation reason.")),
                 ],

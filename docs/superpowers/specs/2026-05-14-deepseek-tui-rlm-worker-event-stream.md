@@ -45,5 +45,4 @@ results while a live RLM turn was running.
 
 ## Remaining
 
-TUI/ACP subscription polish, forced cross-process worker interruption, and
-richer lifecycle commands remain open.
+TUI/ACP subscription polish and richer lifecycle commands remain open.

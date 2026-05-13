@@ -46,5 +46,5 @@ session.
 
 ## Remaining Gap
 
-DeepSeekCode still needs TUI/ACP subscription polish, forced cross-process
-worker interruption, and broader daemon lifecycle status commands.
+DeepSeekCode still needs TUI/ACP subscription polish and broader daemon
+lifecycle status commands.

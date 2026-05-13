@@ -60,5 +60,5 @@ payloads, and live event log.
 
 ## Remaining Gap
 
-DeepSeekCode still needs TUI/ACP subscription polish, forced cross-process
-worker interruption, and supervisor or CLI lifecycle commands.
+DeepSeekCode still needs TUI/ACP subscription polish and supervisor or CLI
+lifecycle commands.

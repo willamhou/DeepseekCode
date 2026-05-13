@@ -37,5 +37,4 @@ clobber a worker that is still running.
 
 Daemon-tick stale-owner recovery is implemented in
 `2026-05-13-deepseek-tui-rlm-live-daemon-auto-recover.md`. Broader lifecycle
-status commands, TUI/ACP subscription polish, and forced cross-process worker
-interruption remain separate gaps.
+status commands and TUI/ACP subscription polish remain separate gaps.

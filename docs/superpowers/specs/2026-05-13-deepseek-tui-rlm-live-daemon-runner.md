@@ -43,5 +43,5 @@ RLM manifests, payloads, or event logs.
 
 ## Remaining Gap
 
-DeepSeekCode still needs TUI/ACP subscription polish, forced cross-process
-worker interruption, and explicit RLM daemon lifecycle commands.
+DeepSeekCode still needs TUI/ACP subscription polish and explicit RLM daemon
+lifecycle commands.
