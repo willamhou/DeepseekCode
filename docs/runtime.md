@@ -332,6 +332,13 @@ Exposed tools:
 | `rlm_python` | Run restricted pure-compute Python helper code with imports/files/network/subprocess blocked |
 | `rlm_python_sessions` | List or inspect persisted `rlm_python_session` JSON state without running Python |
 | `rlm_python_session` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and writes `.dscode/rlm-python` helper state |
+| `rlm` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and runs bounded model-backed RLM child analysis |
+| `rlm_query` | Alias for `rlm` |
+| `llm_query` | Alias for `rlm` |
+| `rlm_process` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and runs bounded model-backed long-input RLM analysis |
+| `rlm_batch` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and runs batched bounded model-backed RLM child analyses |
+| `rlm_query_batched` | Alias for `rlm_batch` |
+| `llm_query_batched` | Alias for `rlm_batch` |
 | `apply_patch` | Hidden by default; exposed only with durable runtime approvals and applies unified diffs through the existing patch validator |
 | `write_file` | Agent-visible write tool; hidden in MCP/ACP by default and exposed there only with durable runtime approvals; writes UTF-8 text to safe relative paths |
 | `edit_file` | Agent-visible write tool for exact search/replace in one UTF-8 file under the workspace |
@@ -391,17 +398,19 @@ Exposed MCP resource templates:
 
 `run_shell`, `run_tests`, `exec_shell`, `task_shell_start`,
 `exec_shell_interact`, `exec_interact`, `exec_shell_cancel`,
-`rlm_python_session`, `apply_patch`, `write_file`, `edit_file`, `delete_file`,
-`copy_file`, and `move_file` are hidden from `tools/list` and rejected by
-`tools/call` unless the MCP server process opts in.
+`rlm_python_session`, `rlm`, `rlm_query`, `llm_query`, `rlm_process`,
+`rlm_batch`, `rlm_query_batched`, `llm_query_batched`, `apply_patch`,
+`write_file`, `edit_file`, `delete_file`, `copy_file`, and `move_file` are
+hidden from `tools/list` and rejected by `tools/call` unless the MCP server
+process opts in.
 `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` keeps the trusted direct execution path for
 allowlisted shell/test/shell-session tools. `DSCODE_MCP_ENABLE_DURABLE_APPROVALS=1`
 creates a runtime approval thread for that server and routes shell-session
 starts/stdin/cancel calls through durable `permission_request kind=shell` /
 `permission_response` events alongside the existing `run_shell`, `run_tests`,
-patch, RLM session-state, and file-write approval paths, so the existing TUI
-approval modal or HTTP runtime can approve or deny the call. Operators can also
-bind an existing runtime thread with
+patch, RLM session-state, model-running RLM, and file-write approval paths, so
+the existing TUI approval modal or HTTP runtime can approve or deny the call.
+Operators can also bind an existing runtime thread with
 `DSCODE_MCP_APPROVAL_THREAD_ID=<thread-id>`. All modes reuse the existing
 safe-command allowlist, patch scope validation, and workspace path checks; they
 do not expose arbitrary shell, unrestricted file writes, task mutation, or MCP
@@ -1257,8 +1266,11 @@ Python helper state. MCP server mode exposes the local RLM planning helpers
 `rlm_python`, and read-only `rlm_python_sessions` by default. Stateful
 `rlm_python_session` is hidden by default and requires trusted side effects or
 durable runtime approvals because it writes `.dscode/rlm-python` state.
-Model-running child-agent RLM tools remain agent-only until their model/cost
-approval contract is explicit for MCP clients.
+Model-running child-agent RLM tools (`rlm`, `rlm_query`, `llm_query`,
+`rlm_process`, `rlm_batch`, `rlm_query_batched`, and `llm_query_batched`) are
+also hidden by default and require trusted side effects or durable
+`permission_request kind=mcp` approvals because they can spend model tokens and
+use networked model APIs.
 
 Parallel subagent dispatch writes markdown artifacts under
 `.dscode/agent-threads/<thread-id>.md` and stores the active thread marker in

@@ -39,8 +39,8 @@ use crate::tools::project_map::ProjectMapTool;
 use crate::tools::read_file::ReadFileTool;
 use crate::tools::revert_turn::RevertTurnTool;
 use crate::tools::rlm::{
-    RlmChunkPlanTool, RlmMapReducePlanTool, RlmPythonSessionTool, RlmPythonSessionsTool,
-    RlmPythonTool,
+    RlmBatchTool, RlmChunkPlanTool, RlmMapReducePlanTool, RlmPythonSessionTool,
+    RlmPythonSessionsTool, RlmPythonTool, RlmTool,
 };
 use crate::tools::run_shell::{is_safe_shell_command, RunShellTool};
 use crate::tools::run_tests::{render_run_tests_command, RunTestsTool};
@@ -762,6 +762,27 @@ fn execute_mcp_tool(
                 ));
             }
             return execute_mcp_rlm_python_session(input, state);
+        }
+        "rlm" => {
+            return execute_mcp_model_rlm_tool("rlm", input, state);
+        }
+        "rlm_query" => {
+            return execute_mcp_model_rlm_tool("rlm_query", input, state);
+        }
+        "llm_query" => {
+            return execute_mcp_model_rlm_tool("llm_query", input, state);
+        }
+        "rlm_process" => {
+            return execute_mcp_model_rlm_tool("rlm_process", input, state);
+        }
+        "rlm_batch" => {
+            return execute_mcp_model_rlm_tool("rlm_batch", input, state);
+        }
+        "rlm_query_batched" => {
+            return execute_mcp_model_rlm_tool("rlm_query_batched", input, state);
+        }
+        "llm_query_batched" => {
+            return execute_mcp_model_rlm_tool("llm_query_batched", input, state);
         }
         "github_comment" => {
             if !mcp_write_tools_enabled(state) {
@@ -2229,6 +2250,57 @@ fn execute_mcp_rlm_python_session(input: ToolInput, state: &McpStdioState) -> Ap
     .summary)
 }
 
+fn execute_mcp_model_rlm_tool(
+    name: &'static str,
+    input: ToolInput,
+    state: &McpStdioState,
+) -> AppResult<String> {
+    if !mcp_side_effect_tools_enabled(state) {
+        return Err(app_error(format!(
+            "MCP model-running RLM tool `{name}` is disabled; set DSCODE_MCP_ENABLE_SIDE_EFFECTS=1 for trusted direct execution or DSCODE_MCP_ENABLE_DURABLE_APPROVALS=1 to route through runtime approvals"
+        )));
+    }
+    if let Some(thread_id) = state.approval_thread_id.as_deref() {
+        if state.approval.require_mcp_confirmation && !env_flag("DSCODE_AUTO_APPROVE_MCP") {
+            let approval = state.store.append_permission_request(
+                thread_id,
+                state.approval_turn_id.as_deref(),
+                name.to_string(),
+                "mcp".to_string(),
+                mcp_model_rlm_target(name, &input),
+                input.args.clone(),
+            )?;
+            wait_for_mcp_permission_response(state, thread_id, &approval, name)?;
+        }
+    }
+
+    let output = match name {
+        "rlm" | "rlm_query" | "llm_query" | "rlm_process" => RlmTool {
+            tool_name: name,
+            config: state.config.clone(),
+            parent_depth: 0,
+        }
+        .execute(input)?,
+        "rlm_batch" | "rlm_query_batched" | "llm_query_batched" => RlmBatchTool {
+            tool_name: name,
+            config: state.config.clone(),
+            parent_depth: 0,
+        }
+        .execute(input)?,
+        _ => return Err(app_error(format!("unknown MCP RLM tool: {name}"))),
+    };
+    Ok(output.summary)
+}
+
+fn mcp_model_rlm_target(name: &str, input: &ToolInput) -> String {
+    input
+        .get("task")
+        .or_else(|| input.get("question"))
+        .or_else(|| input.get("context"))
+        .map(|target| format!("{name}: {}", mcp_compact_target(target, 160)))
+        .unwrap_or_else(|| name.to_string())
+}
+
 fn mcp_rlm_python_session_target(input: &ToolInput) -> String {
     input
         .get("session_id")
@@ -2991,6 +3063,40 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
                 &["session_id", "code"],
             ),
         ));
+        for name in ["rlm", "rlm_query", "llm_query", "rlm_process"] {
+            tools.push(mcp_tool_definition(
+                name,
+                "Run a bounded model-backed RLM child analysis. Requires trusted side effects or durable MCP approval because it can spend model tokens and use networked model APIs.",
+                mcp_schema(
+                    vec![
+                        ("context", string_property("Context for lightweight RLM analysis.")),
+                        ("question", string_property("Question for context mode.")),
+                        ("task", string_property("Long-input RLM objective.")),
+                        ("file_path", string_property("Workspace-relative long-input file.")),
+                        ("content", string_property("Inline long input.")),
+                        ("strategy", string_property("Optional strategy label.")),
+                        ("steps", string_property("Child step budget.")),
+                        ("max_depth", string_property("Alias for steps.")),
+                    ],
+                    &[],
+                ),
+            ));
+        }
+        for name in ["rlm_batch", "rlm_query_batched", "llm_query_batched"] {
+            tools.push(mcp_tool_definition(
+                name,
+                "Run batched bounded model-backed RLM child analyses. Requires trusted side effects or durable MCP approval because it can spend model tokens and use networked model APIs.",
+                mcp_schema(
+                    vec![
+                        ("context", string_property("Shared context for all questions.")),
+                        ("questions", string_property("JSON array of questions.")),
+                        ("strategy", string_property("Optional strategy label.")),
+                        ("steps", string_property("Child step budget.")),
+                    ],
+                    &["context", "questions"],
+                ),
+            ));
+        }
         tools.push(mcp_tool_definition(
             "run_tests",
             "Run a supported test command in the workspace. Requires trusted DSCODE_MCP_ENABLE_SIDE_EFFECTS=1 or durable runtime approvals.",
@@ -6910,6 +7016,13 @@ mod tests {
         assert!(!rendered.contains(r#""name":"exec_interact""#));
         assert!(!rendered.contains(r#""name":"exec_shell_cancel""#));
         assert!(!rendered.contains(r#""name":"rlm_python_session""#));
+        assert!(!rendered.contains(r#""name":"rlm""#));
+        assert!(!rendered.contains(r#""name":"rlm_query""#));
+        assert!(!rendered.contains(r#""name":"llm_query""#));
+        assert!(!rendered.contains(r#""name":"rlm_process""#));
+        assert!(!rendered.contains(r#""name":"rlm_batch""#));
+        assert!(!rendered.contains(r#""name":"rlm_query_batched""#));
+        assert!(!rendered.contains(r#""name":"llm_query_batched""#));
         assert!(!rendered.contains(r#""name":"run_shell""#));
         assert!(!rendered.contains(r#""name":"run_tests""#));
     }
@@ -6932,6 +7045,13 @@ mod tests {
         assert!(rendered.contains(r#""name":"exec_interact""#));
         assert!(rendered.contains(r#""name":"exec_shell_cancel""#));
         assert!(rendered.contains(r#""name":"rlm_python_session""#));
+        assert!(rendered.contains(r#""name":"rlm""#));
+        assert!(rendered.contains(r#""name":"rlm_query""#));
+        assert!(rendered.contains(r#""name":"llm_query""#));
+        assert!(rendered.contains(r#""name":"rlm_process""#));
+        assert!(rendered.contains(r#""name":"rlm_batch""#));
+        assert!(rendered.contains(r#""name":"rlm_query_batched""#));
+        assert!(rendered.contains(r#""name":"llm_query_batched""#));
     }
 
     #[test]
@@ -7048,6 +7168,46 @@ mod tests {
     }
 
     #[test]
+    fn mcp_tools_call_rejects_model_rlm_until_side_effects_enabled() {
+        let state = mcp_state("mcp-model-rlm-disabled");
+        let response = mcp_response_for_message(
+            r#"{"jsonrpc":"2.0","id":37,"method":"tools/call","params":{"name":"rlm","arguments":{"context":"alpha","question":"summarize"}}}"#,
+            &state,
+        )
+        .unwrap();
+        let rendered = json_value_to_string(&response);
+
+        assert!(rendered.contains("MCP model-running RLM tool `rlm` is disabled"));
+        assert!(rendered.contains(r#""isError":true"#));
+    }
+
+    #[test]
+    fn mcp_tools_call_rejects_model_rlm_after_runtime_denial() {
+        let state = mcp_state_with_durable_approvals("mcp-model-rlm-denied");
+        let thread_id = state.approval_thread_id.clone().unwrap();
+        let responder =
+            spawn_mcp_permission_responder(state.store.clone(), thread_id.clone(), "denied");
+        let response = mcp_response_for_message(
+            r#"{"jsonrpc":"2.0","id":38,"method":"tools/call","params":{"name":"rlm","arguments":{"context":"alpha","question":"summarize"}}}"#,
+            &state,
+        )
+        .unwrap();
+        responder.join().unwrap();
+        let rendered = json_value_to_string(&response);
+
+        assert!(rendered.contains("MCP rlm denied by runtime approval"));
+        assert!(rendered.contains(r#""isError":true"#));
+        let events = state.store.read_events(&thread_id, 0).unwrap();
+        assert!(events.iter().any(|event| {
+            event.kind == "permission_request"
+                && json_as_object(&event.payload).is_some_and(|payload| {
+                    payload.get("tool").and_then(json_as_string) == Some("rlm")
+                        && payload.get("kind").and_then(json_as_string) == Some("mcp")
+                })
+        }));
+    }
+
+    #[test]
     fn mcp_tools_call_rejects_run_shell_until_side_effects_enabled() {
         let state = mcp_state("mcp-run-shell-disabled");
         let response = mcp_response_for_message(
@@ -7144,6 +7304,13 @@ mod tests {
         assert!(!rendered.contains(r#""name":"exec_interact""#));
         assert!(!rendered.contains(r#""name":"exec_shell_cancel""#));
         assert!(!rendered.contains(r#""name":"rlm_python_session""#));
+        assert!(!rendered.contains(r#""name":"rlm""#));
+        assert!(!rendered.contains(r#""name":"rlm_query""#));
+        assert!(!rendered.contains(r#""name":"llm_query""#));
+        assert!(!rendered.contains(r#""name":"rlm_process""#));
+        assert!(!rendered.contains(r#""name":"rlm_batch""#));
+        assert!(!rendered.contains(r#""name":"rlm_query_batched""#));
+        assert!(!rendered.contains(r#""name":"llm_query_batched""#));
 
         let state = mcp_state_with_side_effects("mcp-apply-patch-side-effects", true);
         let response = mcp_response_for_message(
@@ -7159,6 +7326,13 @@ mod tests {
         assert!(rendered.contains(r#""name":"exec_interact""#));
         assert!(rendered.contains(r#""name":"exec_shell_cancel""#));
         assert!(rendered.contains(r#""name":"rlm_python_session""#));
+        assert!(rendered.contains(r#""name":"rlm""#));
+        assert!(rendered.contains(r#""name":"rlm_query""#));
+        assert!(rendered.contains(r#""name":"llm_query""#));
+        assert!(rendered.contains(r#""name":"rlm_process""#));
+        assert!(rendered.contains(r#""name":"rlm_batch""#));
+        assert!(rendered.contains(r#""name":"rlm_query_batched""#));
+        assert!(rendered.contains(r#""name":"llm_query_batched""#));
         assert!(!rendered.contains(r#""name":"apply_patch""#));
         assert!(!rendered.contains(r#""name":"write_file""#));
         assert!(!rendered.contains(r#""name":"edit_file""#));
@@ -7217,6 +7391,13 @@ mod tests {
         assert!(rendered.contains(r#""name":"exec_interact""#));
         assert!(rendered.contains(r#""name":"exec_shell_cancel""#));
         assert!(rendered.contains(r#""name":"rlm_python_session""#));
+        assert!(rendered.contains(r#""name":"rlm""#));
+        assert!(rendered.contains(r#""name":"rlm_query""#));
+        assert!(rendered.contains(r#""name":"llm_query""#));
+        assert!(rendered.contains(r#""name":"rlm_process""#));
+        assert!(rendered.contains(r#""name":"rlm_batch""#));
+        assert!(rendered.contains(r#""name":"rlm_query_batched""#));
+        assert!(rendered.contains(r#""name":"llm_query_batched""#));
         assert!(rendered.contains("durable runtime approvals"));
     }
 

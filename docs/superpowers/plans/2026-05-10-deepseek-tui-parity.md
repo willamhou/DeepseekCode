@@ -469,6 +469,11 @@ Landed first slice:
   `rlm_python_sessions`; stateful `rlm_python_session` is hidden by default and
   exposed only with trusted side effects or durable
   `permission_request kind=write` approvals
+- model-running RLM MCP tools (`rlm`, `rlm_query`, `llm_query`, `rlm_process`,
+  `rlm_batch`, `rlm_query_batched`, and `llm_query_batched`) are hidden by
+  default and exposed only with trusted side effects or durable
+  `permission_request kind=mcp` approvals because they can spend model tokens
+  and use networked model APIs
 - read-only runtime tools exposed through MCP: `runtime_health`,
   `runtime_list_sessions`, `runtime_list_threads`, `runtime_read_thread`,
   `runtime_list_tasks`, `runtime_read_task`
@@ -584,12 +589,8 @@ Landed first slice:
 
 Remaining:
 
-- broader long-tail side-effect MCP server surface beyond the current
-  `run_tests`/`run_shell`, file write/patch/edit/delete/copy/move,
-  shell-session, `revert_turn`, GitHub write, runtime task, and runtime
-  automation tools; remaining candidates include model-running child-agent RLM
-  tools that still need explicit MCP model/cost/network approval contracts
-  before exposure
+- audit the remaining DeepSeek-TUI MCP long tail after the shell-session and
+  RLM exposure slices
 - full ACP standard tool streaming beyond started/result notifications
 
 ### Phase H: Packaging
