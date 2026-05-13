@@ -218,7 +218,9 @@ Landed first slice:
   polling, stdin, and cancellation; shell jobs now also persist metadata plus
   stdout/stderr logs under `<cwd>/.dscode/shell-jobs/<task_id>/`, so detached
   `exec_shell_list` / `exec_shell_show` / `exec_shell_wait` calls can inspect
-  prior records while stdin/cancel control remains attached-process scoped
+  prior records while stdin/cancel control remains attached-process scoped;
+  detached stdin/cancel attempts now report that explicit boundary instead of
+  looking like unknown task ids
 - richer structured data validation
 
 ### Phase D: TUI

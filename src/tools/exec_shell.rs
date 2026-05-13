@@ -5,6 +5,7 @@ use crate::util::json::{
     json_as_string, json_as_u64, json_value_to_string, parse_root_object, JsonValue,
 };
 use std::collections::BTreeMap;
+use std::error::Error;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -222,6 +223,7 @@ impl Tool for ExecShellInteractTool {
 
     fn execute(&self, input: ToolInput) -> AppResult<ToolOutput> {
         let task_id = required_task_id(&input)?;
+        let cwd = input.get("cwd").unwrap_or(".");
         let data = input
             .get("input")
             .or_else(|| input.get("stdin"))
@@ -231,6 +233,10 @@ impl Tool for ExecShellInteractTool {
         let timeout_ms = input_u64(&input, "timeout_ms", 1_000).min(MAX_TIMEOUT_MS);
         {
             let mut manager = shell_manager().lock().unwrap();
+            if !manager.contains(task_id) {
+                drop(manager);
+                return Err(detached_or_unknown_shell_task_error(cwd, task_id, "stdin"));
+            }
             manager.write_stdin(task_id, data, close_stdin)?;
         }
         ExecShellWaitTool {
@@ -239,6 +245,7 @@ impl Tool for ExecShellInteractTool {
         .execute(
             ToolInput::new()
                 .with_arg("task_id", task_id.to_string())
+                .with_arg("cwd", cwd.to_string())
                 .with_arg("timeout_ms", timeout_ms.to_string()),
         )
     }
@@ -266,7 +273,13 @@ impl Tool for ExecShellCancelTool {
             });
         }
         let task_id = required_task_id(&input)?;
-        shell_manager().lock().unwrap().cancel(task_id)?;
+        let cwd = input.get("cwd").unwrap_or(".");
+        let mut manager = shell_manager().lock().unwrap();
+        if !manager.contains(task_id) {
+            drop(manager);
+            return Err(detached_or_unknown_shell_task_error(cwd, task_id, "cancel"));
+        }
+        manager.cancel(task_id)?;
         Ok(ToolOutput {
             summary: format!("Canceled background shell job: {task_id}"),
         })
@@ -706,6 +719,20 @@ fn shell_job_manifest_path(cwd: &str, task_id: &str) -> PathBuf {
     shell_job_record_dir(cwd, task_id).join("manifest.json")
 }
 
+fn durable_shell_job_exists(cwd: &str, task_id: &str) -> bool {
+    shell_job_manifest_path(cwd, task_id).is_file()
+}
+
+fn detached_or_unknown_shell_task_error(cwd: &str, task_id: &str, action: &str) -> Box<dyn Error> {
+    if durable_shell_job_exists(cwd, task_id) {
+        app_error(format!(
+            "background shell task {task_id} is detached; durable metadata and logs are available with exec_shell_show cwd={cwd}, but {action} control requires the original attached DeepSeekCode process"
+        ))
+    } else {
+        app_error(format!("unknown background shell task: {task_id}"))
+    }
+}
+
 fn persist_job_snapshot(job: &BackgroundShellJob) -> AppResult<()> {
     fs::create_dir_all(&job.record_dir)?;
     let stdout_total = job.stdout.lock().unwrap().len();
@@ -1118,8 +1145,8 @@ mod tests {
         }
         .execute(
             ToolInput::new()
-                .with_arg("task_id", task_id)
-                .with_arg("cwd", cwd)
+                .with_arg("task_id", task_id.clone())
+                .with_arg("cwd", cwd.clone())
                 .with_arg("timeout_ms", "1000"),
         )
         .unwrap();
@@ -1127,6 +1154,37 @@ mod tests {
             waited.summary.contains("managed: false"),
             "{}",
             waited.summary
+        );
+
+        let stdin_error = ExecShellInteractTool {
+            tool_name: "exec_shell_interact",
+        }
+        .execute(
+            ToolInput::new()
+                .with_arg("task_id", task_id.clone())
+                .with_arg("cwd", cwd.clone())
+                .with_arg("input", "late input\n"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(stdin_error.contains("detached"), "{stdin_error}");
+        assert!(
+            stdin_error.contains("stdin control requires"),
+            "{stdin_error}"
+        );
+
+        let cancel_error = ExecShellCancelTool
+            .execute(
+                ToolInput::new()
+                    .with_arg("task_id", task_id)
+                    .with_arg("cwd", cwd),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(cancel_error.contains("detached"), "{cancel_error}");
+        assert!(
+            cancel_error.contains("cancel control requires"),
+            "{cancel_error}"
         );
         let _ = fs::remove_dir_all(root);
     }
