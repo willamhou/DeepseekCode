@@ -570,6 +570,7 @@ pub enum TuiMcpDetailKind {
     Note,
     Hooks,
     Goal,
+    Anchor,
     Mode,
     Help,
     Settings,
@@ -607,6 +608,7 @@ impl TuiMcpDetailKind {
             Self::Note => "note",
             Self::Hooks => "hooks",
             Self::Goal => "goal",
+            Self::Anchor => "anchor",
             Self::Mode => "mode",
             Self::Help => "help",
             Self::Settings => "settings",
@@ -644,6 +646,7 @@ impl TuiMcpDetailKind {
             Self::Note => "Note",
             Self::Hooks => "Hooks",
             Self::Goal => "Goal",
+            Self::Anchor => "Anchor",
             Self::Mode => "Mode",
             Self::Help => "Help",
             Self::Settings => "Settings",
@@ -681,6 +684,7 @@ impl TuiMcpDetailKind {
             Self::Note => Self::Manager,
             Self::Hooks => Self::Manager,
             Self::Goal => Self::Manager,
+            Self::Anchor => Self::Manager,
             Self::Mode => Self::Manager,
             Self::Help => Self::Manager,
             Self::Settings => Self::Manager,
@@ -718,6 +722,7 @@ impl TuiMcpDetailKind {
             Self::Note => Self::Manager,
             Self::Hooks => Self::Manager,
             Self::Goal => Self::Manager,
+            Self::Anchor => Self::Manager,
             Self::Mode => Self::Manager,
             Self::Help => Self::Manager,
             Self::Settings => Self::Manager,
@@ -913,6 +918,15 @@ pub enum TuiGoalCommand {
         token_budget: Option<u64>,
     },
     Clear,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TuiAnchorCommand {
+    Add { content: String },
+    List,
+    Remove { index: usize },
+    Path,
+    Help,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1399,6 +1413,40 @@ fn format_tui_goal_elapsed(duration: Duration) -> String {
     }
 }
 
+fn parse_tui_anchor_command(line: &str) -> Option<Result<TuiAnchorCommand, String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/anchor")
+        .or_else(|| strip_tui_command_prefix(trimmed, "anchor"))?;
+    let args = rest.split_whitespace().collect::<Vec<_>>();
+    match args.as_slice() {
+        [] | ["help" | "--help" | "-h"] => Some(Ok(TuiAnchorCommand::Help)),
+        ["list" | "ls"] => Some(Ok(TuiAnchorCommand::List)),
+        ["path"] => Some(Ok(TuiAnchorCommand::Path)),
+        ["remove" | "rm" | "delete", index] => parse_note_index_arg(index)
+            .map(|index| TuiAnchorCommand::Remove { index })
+            .map_or_else(
+                || {
+                    Some(Err(
+                        "usage: anchor remove <n> or /anchor remove <n>".to_string()
+                    ))
+                },
+                |command| Some(Ok(command)),
+            ),
+        ["remove" | "rm" | "delete"] => Some(Err(
+            "usage: anchor remove <n> or /anchor remove <n>".to_string()
+        )),
+        ["add", content @ ..] if !content.is_empty() => Some(Ok(TuiAnchorCommand::Add {
+            content: content.join(" "),
+        })),
+        ["add"] => Some(Err(
+            "usage: anchor add <text> or /anchor add <text>".to_string()
+        )),
+        content @ [_, ..] => Some(Ok(TuiAnchorCommand::Add {
+            content: content.join(" "),
+        })),
+    }
+}
+
 fn parse_note_index_arg(value: &str) -> Option<usize> {
     value.parse::<usize>().ok().filter(|index| *index > 0)
 }
@@ -1537,6 +1585,10 @@ pub enum TuiAction {
     },
     Note {
         command: TuiNoteCommand,
+    },
+    Anchor {
+        workspace: String,
+        command: TuiAnchorCommand,
     },
     Hooks {
         command: TuiHooksCommand,
@@ -1736,6 +1788,13 @@ const TUI_HELP_COMMANDS: &[TuiHelpCommandInfo] = &[
         aliases: &[],
         usage: "/note [add|list|show|edit|remove|clear|path]",
         description: "Manage persistent workspace notes.",
+    },
+    TuiHelpCommandInfo {
+        category: "Interaction",
+        name: "anchor",
+        aliases: &[],
+        usage: "/anchor [add|list|remove|path]",
+        description: "Pin workspace facts in .dscode/anchors.md.",
     },
     TuiHelpCommandInfo {
         category: "Config",
@@ -2021,6 +2080,11 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "note remove ",
     "note clear",
     "note path",
+    "anchor ",
+    "anchor add ",
+    "anchor list",
+    "anchor remove ",
+    "anchor path",
     "hooks",
     "hooks list",
     "hooks events",
@@ -2168,6 +2232,11 @@ const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
     "/note remove ",
     "/note clear",
     "/note path",
+    "/anchor ",
+    "/anchor add ",
+    "/anchor list",
+    "/anchor remove ",
+    "/anchor path",
     "/hooks",
     "/hooks list",
     "/hooks events",
@@ -4463,6 +4532,19 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(command) = parse_tui_anchor_command(&content) {
+                    match command {
+                        Ok(command) => {
+                            self.request_anchor_command(command);
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some(command) = parse_tui_hooks_command(&content) {
                     match command {
                         Ok(command) => {
@@ -5009,6 +5091,15 @@ impl TuiApp {
         if let Some(command) = parse_tui_note_command(command) {
             match command {
                 Ok(command) => self.request_note_command(command),
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_anchor_command(command) {
+            match command {
+                Ok(command) => self.request_anchor_command(command),
                 Err(message) => {
                     self.status = message;
                 }
@@ -5918,7 +6009,7 @@ impl TuiApp {
             }
             ["cancel"] | ["stop"] => self.request_cancel_run(),
             ["help"] => {
-                self.status = "commands: mode plan|agent|yolo, goal [objective|clear], sessions [filter], threads [filter], task <summary>|select all|select clear|pause [id]|resume [id]|cancel [id]|bulk pause|bulk resume|bulk cancel, shell <cmd>|list|show|wait|poll|stdin|close-stdin|cancel, stash [list|pop|clear], memory [show|path|clear|edit|help], mcp manager|list|tools|prompts|resources|resource-templates|close|init|add|enable|disable|remove|user add|user enable|user disable|user remove|validate, diagnostics [--changed|paths...], restore snapshot|list|show, revert turn <id> [--apply], compact, approval, cancel".to_string();
+                self.status = "commands: mode plan|agent|yolo, goal [objective|clear], sessions [filter], threads [filter], task <summary>|select all|select clear|pause [id]|resume [id]|cancel [id]|bulk pause|bulk resume|bulk cancel, shell <cmd>|list|show|wait|poll|stdin|close-stdin|cancel, stash [list|pop|clear], memory [show|path|clear|edit|help], anchor [text|list|remove], mcp manager|list|tools|prompts|resources|resource-templates|close|init|add|enable|disable|remove|user add|user enable|user disable|user remove|validate, diagnostics [--changed|paths...], restore snapshot|list|show, revert turn <id> [--apply], compact, approval, cancel".to_string();
             }
             _ => {
                 self.status = format!("unknown command: {command}");
@@ -6529,6 +6620,16 @@ impl TuiApp {
         self.status = "note command queued".to_string();
     }
 
+    fn request_anchor_command(&mut self, command: TuiAnchorCommand) {
+        let workspace = self
+            .selected_session()
+            .map(|session| session.workspace.clone())
+            .unwrap_or_else(|| ".".to_string());
+        self.pending_actions
+            .push(TuiAction::Anchor { workspace, command });
+        self.status = "anchor command queued".to_string();
+    }
+
     fn request_hooks_command(&mut self, command: TuiHooksCommand) {
         self.pending_actions.push(TuiAction::Hooks { command });
         self.status = "hooks command queued".to_string();
@@ -6715,6 +6816,7 @@ impl TuiApp {
         let _ = writeln!(detail, "- /provider [name [model]|list]");
         let _ = writeln!(detail, "- /network [list|allow|deny|remove|default]");
         let _ = writeln!(detail, "- /memory [show|path|clear|edit|help]");
+        let _ = writeln!(detail, "- /anchor [add|list|remove|path]");
         let _ = writeln!(detail, "- /hooks [list|events]");
         let _ = writeln!(
             detail,
@@ -13095,6 +13197,64 @@ mod tests {
             app.drain_actions(),
             vec![TuiAction::Note {
                 command: TuiNoteCommand::Path,
+            }]
+        );
+        assert_eq!(app.composer, "");
+    }
+
+    #[test]
+    fn command_palette_requests_anchor_actions() {
+        let mut app = TuiApp::with_runtime(
+            vec![TuiSession {
+                id: "session-one".to_string(),
+                title: "One".to_string(),
+                workspace: "/workspace/project".to_string(),
+                status: "active".to_string(),
+                active_thread_id: None,
+                thread_count: 0,
+            }],
+            Vec::new(),
+            Vec::new(),
+        );
+
+        run_palette_command(&mut app, "anchor Never touch .ssh");
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::Anchor {
+                workspace: "/workspace/project".to_string(),
+                command: TuiAnchorCommand::Add {
+                    content: "Never touch .ssh".to_string(),
+                },
+            }]
+        );
+
+        run_palette_command(&mut app, "anchor list");
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::Anchor {
+                workspace: "/workspace/project".to_string(),
+                command: TuiAnchorCommand::List,
+            }]
+        );
+
+        run_palette_command(&mut app, "anchor remove 2");
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::Anchor {
+                workspace: "/workspace/project".to_string(),
+                command: TuiAnchorCommand::Remove { index: 2 },
+            }]
+        );
+
+        app.composer_focused = true;
+        app.composer = "/anchor path".to_string();
+        app.composer_cursor = app.composer.len();
+        assert!(app.handle_key(KeyCode::Enter));
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::Anchor {
+                workspace: "/workspace/project".to_string(),
+                command: TuiAnchorCommand::Path,
             }]
         );
         assert_eq!(app.composer, "");

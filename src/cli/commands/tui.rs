@@ -57,11 +57,11 @@ use crate::tools::exec_shell::{
 use crate::tools::types::{Tool, ToolInput};
 use crate::tui::{
     discover_custom_slash_commands_dir, render_once, run_interactive,
-    run_interactive_with_refresh_actions_and_live, TuiAction, TuiApp, TuiApprovalRequest,
-    TuiAutomationRecord, TuiHooksCommand, TuiItem, TuiLiveEvent, TuiMcpConfigScope,
-    TuiMcpDetailKind, TuiMemoryCommand, TuiModelCommand, TuiNetworkCommand, TuiNoteCommand,
-    TuiProviderCommand, TuiSession, TuiSkillsCommand, TuiTaskRecord, TuiThread, TuiUsageSummary,
-    TuiUserInputRequest,
+    run_interactive_with_refresh_actions_and_live, TuiAction, TuiAnchorCommand, TuiApp,
+    TuiApprovalRequest, TuiAutomationRecord, TuiHooksCommand, TuiItem, TuiLiveEvent,
+    TuiMcpConfigScope, TuiMcpDetailKind, TuiMemoryCommand, TuiModelCommand, TuiNetworkCommand,
+    TuiNoteCommand, TuiProviderCommand, TuiSession, TuiSkillsCommand, TuiTaskRecord, TuiThread,
+    TuiUsageSummary, TuiUserInputRequest,
 };
 use crate::ui::stream::StreamEvents;
 use crate::util::json::{
@@ -767,6 +767,9 @@ fn handle_tui_http_action(
         TuiAction::Note { .. } => {
             app.set_status("note commands require local file-backed TUI".to_string());
         }
+        TuiAction::Anchor { .. } => {
+            app.set_status("anchor commands require local file-backed TUI".to_string());
+        }
         TuiAction::Hooks { .. } => {
             app.set_status("hooks commands require local file-backed TUI".to_string());
         }
@@ -1204,6 +1207,7 @@ fn mcp_detail_summary(
         TuiMcpDetailKind::Links => Err(app_error("link details are not MCP details")),
         TuiMcpDetailKind::Home => Err(app_error("home details are not MCP details")),
         TuiMcpDetailKind::Note => Err(app_error("note details are not MCP details")),
+        TuiMcpDetailKind::Anchor => Err(app_error("anchor details are not MCP details")),
         TuiMcpDetailKind::Hooks => Err(app_error("hooks details are not MCP details")),
         TuiMcpDetailKind::Goal => Err(app_error("goal details are not MCP details")),
         TuiMcpDetailKind::Mode => Err(app_error("mode details are not MCP details")),
@@ -1822,6 +1826,9 @@ fn handle_tui_action_with_live(
         }
         TuiAction::Note { command } => {
             run_tui_note_command(app, config, command);
+        }
+        TuiAction::Anchor { workspace, command } => {
+            run_tui_anchor_command(app, Path::new(&workspace), command);
         }
         TuiAction::Hooks { command } => {
             run_tui_hooks_command(app, config, command);
@@ -2495,6 +2502,149 @@ fn render_tui_notes_list(path: &Path, notes: &[String]) -> String {
             detail.push_str(&format!("{}. {}\n", index + 1, runtime_summary(note)));
         }
         detail.push_str("\nUse /note show <n>, /note edit <n> <text>, or /note remove <n>.\n");
+    }
+    detail
+}
+
+fn run_tui_anchor_command(app: &mut TuiApp, workspace: &Path, command: TuiAnchorCommand) {
+    let path = tui_anchors_path(workspace);
+    match command {
+        TuiAnchorCommand::Add { content } => match append_tui_anchor(&path, &content) {
+            Ok(()) => {
+                app.set_status(format!("anchor pinned: {}", path.display()));
+                app.set_mcp_detail(
+                    TuiMcpDetailKind::Anchor,
+                    format!(
+                        "Anchor pinned\nPath: {}\n\n{}",
+                        path.display(),
+                        content.trim()
+                    ),
+                );
+            }
+            Err(error) => app.set_status(format!("anchor pin failed: {error}")),
+        },
+        TuiAnchorCommand::List => match read_tui_anchors(&path) {
+            Ok(anchors) => {
+                app.set_status(format!("anchors listed: {} anchor(s)", anchors.len()));
+                app.set_mcp_detail(
+                    TuiMcpDetailKind::Anchor,
+                    render_tui_anchors_list(&path, &anchors),
+                );
+            }
+            Err(error) => app.set_status(format!("anchor list failed: {error}")),
+        },
+        TuiAnchorCommand::Remove { index } => match read_tui_anchors(&path) {
+            Ok(mut anchors) => {
+                if index > anchors.len() {
+                    app.set_status(format!("anchor {index} not found"));
+                    return;
+                }
+                let removed = anchors.remove(index - 1);
+                match write_tui_anchors(&path, &anchors) {
+                    Ok(()) => {
+                        app.set_status(format!("anchor {index} removed"));
+                        app.set_mcp_detail(
+                            TuiMcpDetailKind::Anchor,
+                            format!(
+                                "Anchor {index} removed\nPath: {}\n\nRemoved:\n{}",
+                                path.display(),
+                                removed
+                            ),
+                        );
+                    }
+                    Err(error) => app.set_status(format!("anchor remove failed: {error}")),
+                }
+            }
+            Err(error) => app.set_status(format!("anchor remove failed: {error}")),
+        },
+        TuiAnchorCommand::Path => {
+            app.set_status(format!("anchors path: {}", path.display()));
+            app.set_mcp_detail(
+                TuiMcpDetailKind::Anchor,
+                format!("Anchors path\n\n{}", path.display()),
+            );
+        }
+        TuiAnchorCommand::Help => {
+            app.set_status("anchor commands: add|list|remove|path".to_string());
+            app.set_mcp_detail(
+                TuiMcpDetailKind::Anchor,
+                format!(
+                    "Anchor commands:\n- /anchor <text> pins a workspace fact.\n- /anchor add <text> pins a workspace fact.\n- /anchor list lists pinned anchors.\n- /anchor remove <n> removes one anchor.\n- /anchor path prints the workspace anchor path.\n\nPath: {}\n\nAnchors are stored as durable workspace context for compaction-aware workflows.",
+                    path.display()
+                ),
+            );
+        }
+    }
+}
+
+fn tui_anchors_path(workspace: &Path) -> PathBuf {
+    workspace.join(".dscode").join("anchors.md")
+}
+
+fn append_tui_anchor(path: &Path, content: &str) -> AppResult<()> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return Err(app_error("anchor content must not be empty"));
+    }
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    writeln!(file, "\n---\n{trimmed}")?;
+    Ok(())
+}
+
+fn read_tui_anchors(path: &Path) -> AppResult<Vec<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => Ok(parse_tui_anchors(&content)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn write_tui_anchors(path: &Path, anchors: &[String]) -> AppResult<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    let body = anchors
+        .iter()
+        .map(|anchor| anchor.trim())
+        .filter(|anchor| !anchor.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n---\n");
+    std::fs::write(path, body)?;
+    Ok(())
+}
+
+fn parse_tui_anchors(content: &str) -> Vec<String> {
+    content
+        .split("\n---\n")
+        .map(str::trim)
+        .filter(|anchor| !anchor.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn render_tui_anchors_list(path: &Path, anchors: &[String]) -> String {
+    let mut detail = String::new();
+    detail.push_str("Anchors\n");
+    detail.push_str(&format!("Path: {}\n", path.display()));
+    detail.push_str(&format!("Count: {}\n", anchors.len()));
+    detail.push('\n');
+    if anchors.is_empty() {
+        detail.push_str("No anchors pinned. Use /anchor <text> to pin a fact.\n");
+    } else {
+        for (index, anchor) in anchors.iter().enumerate() {
+            detail.push_str(&format!("{}. {}\n", index + 1, runtime_summary(anchor)));
+        }
+        detail.push_str("\nUse /anchor remove <n> to remove an anchor.\n");
     }
     detail
 }
@@ -4746,6 +4896,26 @@ description = "Review pull requests."
     }
 
     #[test]
+    fn handle_tui_http_action_rejects_anchor_commands_as_local_only() {
+        let client = RuntimeHttpClient::from_url("http://127.0.0.1:9").unwrap();
+        let mut app = TuiApp::new(Vec::new());
+
+        handle_tui_http_action(
+            &client,
+            &mut app,
+            TuiAction::Anchor {
+                workspace: ".".to_string(),
+                command: TuiAnchorCommand::List,
+            },
+        )
+        .unwrap();
+
+        assert!(render_once(&app, 120, 36)
+            .unwrap()
+            .contains("anchor commands require local file-backed TUI"));
+    }
+
+    #[test]
     fn handle_tui_http_action_rejects_session_rename_as_local_only() {
         let client = RuntimeHttpClient::from_url("http://127.0.0.1:9").unwrap();
         let mut app = TuiApp::new(Vec::new());
@@ -6296,6 +6466,72 @@ shell_allowlist = ["git diff"]
         )
         .unwrap();
         assert_eq!(fs::read_to_string(&notes_path).unwrap().trim(), "");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn handle_tui_action_manages_anchor_file() {
+        let root = temp_root("anchor-action");
+        fs::create_dir_all(&root).unwrap();
+        let store = RuntimeStore::new(root.join(".dscode/runtime"));
+        let mut app = TuiApp::new(Vec::new());
+        let anchors_path = root.join(".dscode/anchors.md");
+
+        handle_tui_action(
+            &store,
+            None,
+            &mut app,
+            TuiAction::Anchor {
+                workspace: root.display().to_string(),
+                command: TuiAnchorCommand::Add {
+                    content: "Never touch .ssh".to_string(),
+                },
+            },
+        )
+        .unwrap();
+        assert!(fs::read_to_string(&anchors_path)
+            .unwrap()
+            .contains("Never touch .ssh"));
+
+        handle_tui_action(
+            &store,
+            None,
+            &mut app,
+            TuiAction::Anchor {
+                workspace: root.display().to_string(),
+                command: TuiAnchorCommand::List,
+            },
+        )
+        .unwrap();
+        let output = render_once(&app, 160, 48).unwrap();
+        assert!(output.contains("Anchors"));
+        assert!(output.contains("Never touch .ssh"));
+
+        handle_tui_action(
+            &store,
+            None,
+            &mut app,
+            TuiAction::Anchor {
+                workspace: root.display().to_string(),
+                command: TuiAnchorCommand::Remove { index: 1 },
+            },
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(&anchors_path).unwrap().trim(), "");
+
+        handle_tui_action(
+            &store,
+            None,
+            &mut app,
+            TuiAction::Anchor {
+                workspace: root.display().to_string(),
+                command: TuiAnchorCommand::Path,
+            },
+        )
+        .unwrap();
+        let output = render_once(&app, 160, 48).unwrap();
+        assert!(output.contains(".dscode/anchors.md"));
 
         let _ = fs::remove_dir_all(root);
     }
