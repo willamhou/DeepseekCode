@@ -344,9 +344,10 @@ Remaining:
 - post-shell review found no open first-order TUI interaction gaps; remaining
   work is now in harder cross-process/platform/external buckets: dedicated
   shell supervisor ownership after owner-process exit, live PTY resize and
-  attachable terminal replay beyond durable log slices, side-git/platform restore
-  fidelity beyond the Unix special files already captured, true live
-  model-backed RLM daemon semantics, and external live PR/release fixtures
+  attachable terminal replay beyond durable log slices now have an explicit
+  shell-supervisor/PTY design spec; side-git/platform restore fidelity beyond
+  the Unix special files already captured, true live model-backed RLM daemon
+  semantics, and external live PR/release fixtures remain open
 
 ### Phase E: DeepSeek-Native Product UX
 

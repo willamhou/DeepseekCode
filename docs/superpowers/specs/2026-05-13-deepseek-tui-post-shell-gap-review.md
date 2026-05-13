@@ -66,8 +66,10 @@ remain open.
 
 ## Next Candidate Specs
 
-- Shell supervisor/PTY design for supervised PTY sessions, resize/replay, and
-  stronger cross-process ownership guarantees.
+- Shell supervisor/PTY implementation now has a design spec:
+  `2026-05-13-deepseek-tui-shell-supervisor-pty-design.md`. The next executable
+  slice should be either the supervisor protocol skeleton or native Unix PTY
+  backend.
 - True live model-backed RLM REPL/daemon design, likely backed by durable
   runtime threads rather than persisted child-agent summaries.
 - Platform restore strategy for device nodes and Windows symlink semantics.
