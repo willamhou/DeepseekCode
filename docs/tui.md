@@ -29,6 +29,7 @@ Current surfaces:
 - settings overview with `settings` / `/settings` and `config` / `/config`
 - local TUI theme switching with `theme` / `/theme` and
   `theme dark|light|grayscale|system`
+- statusline overview with `statusline` / `/statusline`
 - composer draft stash: `Ctrl+S` parks the current draft, and
   `stash list|pop|clear` / `/stash list|pop|clear` manage parked drafts
 - session rename from the command palette or slash-style composer command with
@@ -257,6 +258,7 @@ Command palette commands currently implemented:
 | `theme`, `/theme` | Cycle the local TUI theme and show the theme detail panel |
 | `theme show`, `/theme show` | Show current theme and available theme commands |
 | `theme dark|light|grayscale|system`, `/theme dark|light|grayscale|system` | Switch the local TUI theme |
+| `statusline`, `/statusline` | Show command bar items, shortcuts, and related status/config commands |
 | `mode`, `/mode` | Show current mode and mode-switching commands in the right-side detail panel |
 | `mode agent|plan|yolo|1|2|3`, `/mode agent|plan|yolo|1|2|3` | Switch Plan / Agent / YOLO mode |
 | `mode plan`, `plan` | Switch to Plan mode |

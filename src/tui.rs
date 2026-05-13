@@ -571,6 +571,7 @@ pub enum TuiMcpDetailKind {
     Help,
     Settings,
     Theme,
+    StatusLine,
     Rollback,
     Reasoning,
     ComposerStash,
@@ -602,6 +603,7 @@ impl TuiMcpDetailKind {
             Self::Help => "help",
             Self::Settings => "settings",
             Self::Theme => "theme",
+            Self::StatusLine => "statusline",
             Self::Rollback => "rollback",
             Self::Reasoning => "reasoning",
             Self::ComposerStash => "stash",
@@ -633,6 +635,7 @@ impl TuiMcpDetailKind {
             Self::Help => "Help",
             Self::Settings => "Settings",
             Self::Theme => "Theme",
+            Self::StatusLine => "Statusline",
             Self::Rollback => "Rollback",
             Self::Reasoning => "Reasoning",
             Self::ComposerStash => "Composer Stash",
@@ -664,6 +667,7 @@ impl TuiMcpDetailKind {
             Self::Help => Self::Manager,
             Self::Settings => Self::Manager,
             Self::Theme => Self::Manager,
+            Self::StatusLine => Self::Manager,
             Self::Rollback => Self::Manager,
             Self::Reasoning => Self::Manager,
             Self::ComposerStash => Self::Manager,
@@ -695,6 +699,7 @@ impl TuiMcpDetailKind {
             Self::Help => Self::Manager,
             Self::Settings => Self::Manager,
             Self::Theme => Self::Manager,
+            Self::StatusLine => Self::Manager,
             Self::Rollback => Self::Manager,
             Self::Reasoning => Self::Manager,
             Self::ComposerStash => Self::Manager,
@@ -957,6 +962,21 @@ fn parse_tui_status_command(line: &str) -> Option<Result<(), String>> {
         Some(Ok(()))
     } else {
         Some(Err("usage: status or /status".to_string()))
+    }
+}
+
+fn parse_tui_statusline_command(line: &str) -> Option<Result<(), String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/statusline")
+        .or_else(|| strip_tui_command_prefix(trimmed, "statusline"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "/status-line"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "status-line"))?;
+    let args = rest.split_whitespace().collect::<Vec<_>>();
+    match args.as_slice() {
+        [] | ["show" | "help" | "--help" | "-h"] => Some(Ok(())),
+        _ => Some(Err(
+            "usage: statusline, statusline show, /statusline, or /statusline show".to_string(),
+        )),
     }
 }
 
@@ -1487,6 +1507,13 @@ const TUI_HELP_COMMANDS: &[TuiHelpCommandInfo] = &[
         description: "Show, cycle, or switch the local TUI theme.",
     },
     TuiHelpCommandInfo {
+        category: "Workbench",
+        name: "statusline",
+        aliases: &["status-line"],
+        usage: "/statusline",
+        description: "Show command bar items and status-line shortcuts.",
+    },
+    TuiHelpCommandInfo {
         category: "Runtime",
         name: "status",
         aliases: &[],
@@ -1709,6 +1736,8 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "network remove ",
     "network default ",
     "status",
+    "statusline",
+    "statusline show",
     "tokens",
     "cost",
     "cache",
@@ -1838,6 +1867,8 @@ const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
     "/network remove ",
     "/network default ",
     "/status",
+    "/statusline",
+    "/statusline show",
     "/tokens",
     "/cost",
     "/cache",
@@ -4119,6 +4150,19 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(command) = parse_tui_statusline_command(&content) {
+                    match command {
+                        Ok(()) => {
+                            self.show_statusline_detail();
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some(command) = parse_tui_tokens_command(&content) {
                     match command {
                         Ok(()) => {
@@ -4568,6 +4612,17 @@ impl TuiApp {
             match command {
                 Ok(()) => {
                     self.show_status_detail();
+                }
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_statusline_command(command) {
+            match command {
+                Ok(()) => {
+                    self.show_statusline_detail();
                 }
                 Err(message) => {
                     self.status = message;
@@ -6222,6 +6277,57 @@ impl TuiApp {
         let detail = self.render_status_detail();
         self.set_mcp_detail(TuiMcpDetailKind::Status, detail);
         self.status = "status detail refreshed".to_string();
+    }
+
+    fn show_statusline_detail(&mut self) {
+        let detail = self.render_statusline_detail();
+        self.set_mcp_detail(TuiMcpDetailKind::StatusLine, detail);
+        self.status = "statusline shown".to_string();
+    }
+
+    fn render_statusline_detail(&self) -> String {
+        let mut detail = String::new();
+        let _ = writeln!(detail, "DeepSeekCode Statusline");
+        let _ = writeln!(detail, "=======================");
+        let _ = writeln!(detail);
+        push_status_row(&mut detail, "Current status:", &self.status);
+        push_status_row(&mut detail, "Mode:", self.mode.title());
+        push_status_row(&mut detail, "Theme:", self.theme.title());
+        push_status_row(
+            &mut detail,
+            "Detail panel:",
+            self.mcp_detail
+                .as_ref()
+                .map(|(kind, _)| kind.title())
+                .unwrap_or("none"),
+        );
+        let _ = writeln!(detail);
+        let _ = writeln!(detail, "Command Bar Items");
+        let _ = writeln!(detail, "-----------------");
+        let _ = writeln!(detail, "- Status text: current TUI action/result message");
+        let _ = writeln!(detail, "- Palette: `:` opens command palette");
+        let _ = writeln!(detail, "- Sessions: `s` opens session picker");
+        let _ = writeln!(detail, "- Threads: `t` opens thread navigator");
+        let _ = writeln!(detail, "- Approval: `!` opens pending approval modal");
+        let _ = writeln!(
+            detail,
+            "- Cancel: `c` requests active turn/task cancellation"
+        );
+        let _ = writeln!(detail);
+        let _ = writeln!(detail, "Related Commands");
+        let _ = writeln!(detail, "----------------");
+        let _ = writeln!(
+            detail,
+            "- /status      Full runtime/session/task/usage detail"
+        );
+        let _ = writeln!(detail, "- /settings    Configuration entry points");
+        let _ = writeln!(detail, "- /theme       Statusline color accents");
+        let _ = writeln!(detail);
+        let _ = writeln!(
+            detail,
+            "DeepSeekCode currently exposes the statusline as a fixed command bar; interactive item persistence remains a separate config task."
+        );
+        detail
     }
 
     fn render_home_detail(&self) -> String {
@@ -10101,6 +10207,32 @@ mod tests {
         assert_eq!(app.theme, TuiTheme::Grayscale);
         assert_eq!(app.status, "theme switched: Grayscale");
         assert_eq!(app.composer, "");
+    }
+
+    #[test]
+    fn statusline_command_renders_command_bar_detail() {
+        let mut app = TuiApp::new(Vec::new());
+        app.status = "working".to_string();
+
+        run_palette_command(&mut app, "/statusline");
+
+        assert_eq!(app.status, "statusline shown");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("statusline detail");
+        assert_eq!(*kind, TuiMcpDetailKind::StatusLine);
+        assert!(detail.contains("DeepSeekCode Statusline"));
+        assert!(detail.contains("Palette: `:`"));
+        assert!(detail.contains("/settings"));
+
+        app.composer_focused = true;
+        app.composer = "/statusline show".to_string();
+        app.composer_cursor = app.composer.len();
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert_eq!(app.status, "statusline shown");
+        assert_eq!(app.composer, "");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("composer statusline detail");
+        assert_eq!(*kind, TuiMcpDetailKind::StatusLine);
+        assert!(detail.contains("fixed command bar"));
     }
 
     #[test]

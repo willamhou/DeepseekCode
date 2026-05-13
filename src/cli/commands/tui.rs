@@ -1199,6 +1199,7 @@ fn mcp_detail_summary(
         TuiMcpDetailKind::Help => Err(app_error("help details are not MCP details")),
         TuiMcpDetailKind::Settings => Err(app_error("settings details are not MCP details")),
         TuiMcpDetailKind::Theme => Err(app_error("theme details are not MCP details")),
+        TuiMcpDetailKind::StatusLine => Err(app_error("statusline details are not MCP details")),
         TuiMcpDetailKind::Rollback => Err(app_error("rollback details are not MCP details")),
         TuiMcpDetailKind::Reasoning => Err(app_error("reasoning details are not MCP details")),
         TuiMcpDetailKind::ComposerStash => {
