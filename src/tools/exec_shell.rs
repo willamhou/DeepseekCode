@@ -19,6 +19,8 @@ const DEFAULT_WAIT_MS: u64 = 5_000;
 const MAX_TIMEOUT_MS: u64 = 600_000;
 const DEFAULT_REPLAY_LIMIT_BYTES: u64 = 20_000;
 const MAX_REPLAY_LIMIT_BYTES: u64 = 100_000;
+const PTY_BACKEND_SCRIPT: &str = "script";
+const PTY_BACKEND_NONE: &str = "none";
 
 static JOB_COUNTER: AtomicU64 = AtomicU64::new(0);
 static SHELL_JOBS: OnceLock<Mutex<BackgroundShellManager>> = OnceLock::new();
@@ -102,7 +104,7 @@ impl Tool for ExecShellTool {
             .spawn(command, cwd, stdin, tty_options)?;
         Ok(ToolOutput {
             summary: format!(
-                "task_id: {task_id}\nstatus: running\ncommand: {command}\ncwd: {cwd}\ntty: {}\npty_backend: {}\ntty_rows: {}\ntty_cols: {}\nPoll with exec_shell_wait task_id={task_id} or cancel with exec_shell_cancel task_id={task_id}.",
+                "task_id: {task_id}\nstatus: running\ncommand: {command}\ncwd: {cwd}\ntty: {}\npty_backend: {}\nattachable: false\nresizable: false\ntty_rows: {}\ntty_cols: {}\nPoll with exec_shell_wait task_id={task_id} or cancel with exec_shell_cancel task_id={task_id}.",
                 tty_options.enabled,
                 pty_backend_label(tty_options),
                 tty_rows_label(tty_options.size),
@@ -599,7 +601,7 @@ impl BackgroundShellManager {
             let stdout_total = durable_log_bytes(&job.record_dir, "stdout.log", 0);
             let stderr_total = durable_log_bytes(&job.record_dir, "stderr.log", 0);
             lines.push(format!(
-                "- {} [{}] exit={} stdout={} stderr={} tty={} tty_size={} cwd={}",
+                "- {} [{}] exit={} stdout={} stderr={} tty={} pty_backend={} attachable=false resizable=false tty_size={} cwd={}",
                 job.id,
                 job.status.as_str(),
                 job.exit_code
@@ -608,6 +610,7 @@ impl BackgroundShellManager {
                 stdout_total,
                 stderr_total,
                 job.tty_options.enabled,
+                pty_backend_label(job.tty_options),
                 tty_size_label(job.tty_options.size),
                 job.cwd
             ));
@@ -618,7 +621,7 @@ impl BackgroundShellManager {
                 continue;
             }
             lines.push(format!(
-                "- {} [{} detached] exit={} stdout={} stderr={} tty={} tty_size={} cwd={}",
+                "- {} [{} detached] exit={} stdout={} stderr={} tty={} pty_backend={} attachable={} resizable={} tty_size={} cwd={}",
                 record.id,
                 record.status,
                 record
@@ -628,6 +631,9 @@ impl BackgroundShellManager {
                 record.stdout_total_bytes,
                 record.stderr_total_bytes,
                 record.tty,
+                durable_pty_backend_label(&record),
+                record.attachable,
+                record.resizable,
                 tty_size_label(record.tty_size),
                 record.cwd
             ));
@@ -650,7 +656,7 @@ impl BackgroundShellManager {
         let stdout_total = durable_log_bytes(&job.record_dir, "stdout.log", 0);
         let stderr_total = durable_log_bytes(&job.record_dir, "stderr.log", 0);
         let mut out = format!(
-            "task_id: {}\nstatus: {}\nexit_code: {}\ncommand: {}\ncwd: {}\nowner_pid: {}\nowner_alive: {}\npid: {}\nprocess_group: {}\ntty: {}\npty_backend: {}\ntty_rows: {}\ntty_cols: {}\nstdout_total_bytes: {stdout_total}\nstderr_total_bytes: {stderr_total}\n",
+            "task_id: {}\nstatus: {}\nexit_code: {}\ncommand: {}\ncwd: {}\nowner_pid: {}\nowner_alive: {}\npid: {}\nprocess_group: {}\ntty: {}\npty_backend: {}\nattachable: false\nresizable: false\nsupervisor_pid: null\nsupervisor_alive: unknown\nsupervisor_socket: null\nsupervisor_epoch: null\nterminal_event_log: null\nterminal_event_seq: null\ntty_rows: {}\ntty_cols: {}\nstdout_total_bytes: {stdout_total}\nstderr_total_bytes: {stderr_total}\n",
             job.id,
             job.status.as_str(),
             job.exit_code
@@ -692,7 +698,7 @@ impl BackgroundShellManager {
         let stdout_total = stdout.len();
         let stderr_total = stderr.len();
         let mut out = format!(
-            "task_id: {}\nstatus: {}\nexit_code: {}\ncommand: {}\ncwd: {}\nowner_pid: {}\nowner_alive: {}\npid: {}\nprocess_group: {}\ntty: {}\npty_backend: {}\ntty_rows: {}\ntty_cols: {}\nstdout_total_bytes: {stdout_total}\nstderr_total_bytes: {stderr_total}\n",
+            "task_id: {}\nstatus: {}\nexit_code: {}\ncommand: {}\ncwd: {}\nowner_pid: {}\nowner_alive: {}\npid: {}\nprocess_group: {}\ntty: {}\npty_backend: {}\nattachable: false\nresizable: false\nsupervisor_pid: null\nsupervisor_alive: unknown\nsupervisor_socket: null\nsupervisor_epoch: null\nterminal_event_log: null\nterminal_event_seq: null\ntty_rows: {}\ntty_cols: {}\nstdout_total_bytes: {stdout_total}\nstderr_total_bytes: {stderr_total}\n",
             job.id,
             job.status.as_str(),
             job.exit_code
@@ -955,10 +961,14 @@ fn resize_stty_command(size: ShellTtySize) -> String {
 
 fn pty_backend_label(tty_options: ShellTtyOptions) -> &'static str {
     if tty_options.enabled {
-        "script"
+        PTY_BACKEND_SCRIPT
     } else {
-        "none"
+        PTY_BACKEND_NONE
     }
+}
+
+fn durable_pty_backend_label(record: &DurableShellJobRecord) -> &str {
+    record.pty_backend.as_deref().unwrap_or(PTY_BACKEND_NONE)
 }
 
 fn tty_size_label(size: Option<ShellTtySize>) -> String {
@@ -985,6 +995,18 @@ fn owner_alive_label(pid: Option<u32>) -> String {
     pid.map(process_is_alive)
         .map(|alive| alive.to_string())
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn shell_optional_u64_label(value: Option<u64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "null".to_string())
+}
+
+fn shell_optional_string_label(value: Option<&str>) -> String {
+    value
+        .map(str::to_string)
+        .unwrap_or_else(|| "null".to_string())
 }
 
 fn script_pty_backend_available() -> bool {
@@ -1158,12 +1180,21 @@ struct DurableShellJobRecord {
     command: String,
     cwd: String,
     tty: bool,
+    pty_backend: Option<String>,
     tty_size: Option<ShellTtySize>,
     status: String,
     exit_code: Option<i32>,
     pid: u32,
     owner_pid: Option<u32>,
     process_group: Option<u32>,
+    supervisor_pid: Option<u32>,
+    supervisor_socket: Option<String>,
+    supervisor_epoch: Option<String>,
+    terminal_event_log: Option<String>,
+    terminal_event_seq: Option<u64>,
+    control_token_hash: Option<String>,
+    attachable: bool,
+    resizable: bool,
     stdin_path: Option<String>,
     stdin_keeper_pid: Option<u32>,
     stdin_closed: bool,
@@ -1354,11 +1385,19 @@ fn persist_job_snapshot(job: &BackgroundShellJob) -> AppResult<()> {
         (
             "pty_backend".to_string(),
             if job.tty_options.enabled {
-                JsonValue::String("script".to_string())
+                JsonValue::String(PTY_BACKEND_SCRIPT.to_string())
             } else {
                 JsonValue::Null
             },
         ),
+        ("attachable".to_string(), JsonValue::Bool(false)),
+        ("resizable".to_string(), JsonValue::Bool(false)),
+        ("supervisor_pid".to_string(), JsonValue::Null),
+        ("supervisor_socket".to_string(), JsonValue::Null),
+        ("supervisor_epoch".to_string(), JsonValue::Null),
+        ("terminal_event_log".to_string(), JsonValue::Null),
+        ("terminal_event_seq".to_string(), JsonValue::Null),
+        ("control_token_hash".to_string(), JsonValue::Null),
         (
             "tty_rows".to_string(),
             job.tty_options
@@ -1449,11 +1488,59 @@ fn write_durable_shell_job_manifest(cwd: &str, record: &DurableShellJobRecord) -
         ("tty".to_string(), JsonValue::Bool(record.tty)),
         (
             "pty_backend".to_string(),
-            if record.tty {
-                JsonValue::String("script".to_string())
-            } else {
-                JsonValue::Null
-            },
+            record
+                .pty_backend
+                .as_ref()
+                .map(|backend| JsonValue::String(backend.clone()))
+                .unwrap_or(JsonValue::Null),
+        ),
+        ("attachable".to_string(), JsonValue::Bool(record.attachable)),
+        ("resizable".to_string(), JsonValue::Bool(record.resizable)),
+        (
+            "supervisor_pid".to_string(),
+            record
+                .supervisor_pid
+                .map(|pid| JsonValue::Number(pid.to_string()))
+                .unwrap_or(JsonValue::Null),
+        ),
+        (
+            "supervisor_socket".to_string(),
+            record
+                .supervisor_socket
+                .as_ref()
+                .map(|value| JsonValue::String(value.clone()))
+                .unwrap_or(JsonValue::Null),
+        ),
+        (
+            "supervisor_epoch".to_string(),
+            record
+                .supervisor_epoch
+                .as_ref()
+                .map(|value| JsonValue::String(value.clone()))
+                .unwrap_or(JsonValue::Null),
+        ),
+        (
+            "terminal_event_log".to_string(),
+            record
+                .terminal_event_log
+                .as_ref()
+                .map(|value| JsonValue::String(value.clone()))
+                .unwrap_or(JsonValue::Null),
+        ),
+        (
+            "terminal_event_seq".to_string(),
+            record
+                .terminal_event_seq
+                .map(|seq| JsonValue::Number(seq.to_string()))
+                .unwrap_or(JsonValue::Null),
+        ),
+        (
+            "control_token_hash".to_string(),
+            record
+                .control_token_hash
+                .as_ref()
+                .map(|value| JsonValue::String(value.clone()))
+                .unwrap_or(JsonValue::Null),
         ),
         (
             "tty_rows".to_string(),
@@ -1562,7 +1649,7 @@ fn render_durable_snapshot(cwd: &str, task_id: &str) -> AppResult<String> {
         "unavailable"
     };
     let mut out = format!(
-        "task_id: {}\nstatus: {}\nmanaged: false\nexit_code: {}\npid: {}\nowner_pid: {}\nowner_alive: {}\nprocess_group: {}\ncommand: {}\ncwd: {}\ntty: {}\npty_backend: {}\ntty_rows: {}\ntty_cols: {}\nstarted_at: {}\nupdated_at: {}\nstdout_total_bytes: {}\nstderr_total_bytes: {}\nstdin_control: {}\nnote: durable metadata and logs are available; detached cancel is best-effort and detached stdin is available only when stdin_control=detached_fifo.\n",
+        "task_id: {}\nstatus: {}\nmanaged: false\nexit_code: {}\npid: {}\nowner_pid: {}\nowner_alive: {}\nprocess_group: {}\ncommand: {}\ncwd: {}\ntty: {}\npty_backend: {}\nattachable: {}\nresizable: {}\nsupervisor_pid: {}\nsupervisor_alive: {}\nsupervisor_socket: {}\nsupervisor_epoch: {}\nterminal_event_log: {}\nterminal_event_seq: {}\ntty_rows: {}\ntty_cols: {}\nstarted_at: {}\nupdated_at: {}\nstdout_total_bytes: {}\nstderr_total_bytes: {}\nstdin_control: {}\nnote: durable metadata and logs are available; detached cancel is best-effort and detached stdin is available only when stdin_control=detached_fifo. attachable/resizable are true only for future native supervisor-owned PTY sessions.\n",
         record.id,
         record.status,
         record
@@ -1576,10 +1663,15 @@ fn render_durable_snapshot(cwd: &str, task_id: &str) -> AppResult<String> {
         record.command,
         record.cwd,
         record.tty,
-        pty_backend_label(ShellTtyOptions {
-            enabled: record.tty,
-            size: record.tty_size,
-        }),
+        durable_pty_backend_label(&record),
+        record.attachable,
+        record.resizable,
+        shell_optional_pid_label(record.supervisor_pid),
+        owner_alive_label(record.supervisor_pid),
+        shell_optional_string_label(record.supervisor_socket.as_deref()),
+        shell_optional_string_label(record.supervisor_epoch.as_deref()),
+        shell_optional_string_label(record.terminal_event_log.as_deref()),
+        shell_optional_u64_label(record.terminal_event_seq),
         tty_rows_label(record.tty_size),
         tty_cols_label(record.tty_size),
         record.started_at,
@@ -1724,16 +1816,21 @@ fn render_shell_attach_snapshot(
     let end = start.saturating_add(limit_bytes).min(total);
     let data = String::from_utf8_lossy(&bytes[start..end]);
     let mut out = format!(
-        "task_id: {}\nstatus: {}\nmode: terminal_attach_replay\ncommand: {}\ncwd: {}\ntty: {}\npty_backend: {}\ntty_rows: {}\ntty_cols: {}\nterminal_stream: stdout\noffset: {start}\nnext_offset: {end}\ntotal_bytes: {total}\ntail: {tail}\nwait_ms: {wait_ms}\ntimed_out: {timed_out}\nnote: attach replay is backed by durable stdout PTY/log bytes, not a resident PTY takeover; use exec_shell_replay stream=stderr for stderr-only logs.\n",
+        "task_id: {}\nstatus: {}\nmode: terminal_attach_replay\ncommand: {}\ncwd: {}\ntty: {}\npty_backend: {}\nattachable: {}\nresizable: {}\nsupervisor_pid: {}\nsupervisor_alive: {}\nsupervisor_socket: {}\nsupervisor_epoch: {}\nterminal_event_log: {}\nterminal_event_seq: {}\ntty_rows: {}\ntty_cols: {}\nterminal_stream: stdout\noffset: {start}\nnext_offset: {end}\ntotal_bytes: {total}\ntail: {tail}\nwait_ms: {wait_ms}\ntimed_out: {timed_out}\nnote: attach replay is backed by durable stdout PTY/log bytes, not a resident PTY takeover; attachable=true is reserved for future native supervisor-owned PTY sessions; use exec_shell_replay stream=stderr for stderr-only logs.\n",
         record.id,
         record.status,
         record.command,
         record.cwd,
         record.tty,
-        pty_backend_label(ShellTtyOptions {
-            enabled: record.tty,
-            size: record.tty_size,
-        }),
+        durable_pty_backend_label(record),
+        record.attachable,
+        record.resizable,
+        shell_optional_pid_label(record.supervisor_pid),
+        owner_alive_label(record.supervisor_pid),
+        shell_optional_string_label(record.supervisor_socket.as_deref()),
+        shell_optional_string_label(record.supervisor_epoch.as_deref()),
+        shell_optional_string_label(record.terminal_event_log.as_deref()),
+        shell_optional_u64_label(record.terminal_event_seq),
         tty_rows_label(record.tty_size),
         tty_cols_label(record.tty_size)
     );
@@ -1787,11 +1884,18 @@ fn read_durable_shell_job_manifest(path: &Path) -> AppResult<DurableShellJobReco
         .get("stderr_total_bytes")
         .and_then(json_as_u64)
         .unwrap_or(0) as usize;
+    let tty = matches!(root.get("tty"), Some(JsonValue::Bool(true)));
+    let pty_backend = root
+        .get("pty_backend")
+        .and_then(json_as_string)
+        .map(str::to_string)
+        .or_else(|| tty.then(|| PTY_BACKEND_SCRIPT.to_string()));
     Ok(DurableShellJobRecord {
         id: required_manifest_string(&root, "id")?,
         command: required_manifest_string(&root, "command")?,
         cwd: required_manifest_string(&root, "cwd")?,
-        tty: matches!(root.get("tty"), Some(JsonValue::Bool(true))),
+        tty,
+        pty_backend,
         tty_size: manifest_tty_size(&root)?,
         status: required_manifest_string(&root, "status")?,
         exit_code: match root.get("exit_code") {
@@ -1807,6 +1911,29 @@ fn read_durable_shell_job_manifest(path: &Path) -> AppResult<DurableShellJobReco
             .get("process_group")
             .and_then(json_as_u64)
             .map(|pid| pid as u32),
+        supervisor_pid: root
+            .get("supervisor_pid")
+            .and_then(json_as_u64)
+            .map(|pid| pid as u32),
+        supervisor_socket: root
+            .get("supervisor_socket")
+            .and_then(json_as_string)
+            .map(str::to_string),
+        supervisor_epoch: root
+            .get("supervisor_epoch")
+            .and_then(json_as_string)
+            .map(str::to_string),
+        terminal_event_log: root
+            .get("terminal_event_log")
+            .and_then(json_as_string)
+            .map(str::to_string),
+        terminal_event_seq: root.get("terminal_event_seq").and_then(json_as_u64),
+        control_token_hash: root
+            .get("control_token_hash")
+            .and_then(json_as_string)
+            .map(str::to_string),
+        attachable: matches!(root.get("attachable"), Some(JsonValue::Bool(true))),
+        resizable: matches!(root.get("resizable"), Some(JsonValue::Bool(true))),
         stdin_path: root
             .get("stdin_path")
             .and_then(json_as_string)
@@ -2499,6 +2626,16 @@ mod tests {
             "{}",
             first.summary
         );
+        assert!(
+            first.summary.contains("attachable: false"),
+            "{}",
+            first.summary
+        );
+        assert!(
+            first.summary.contains("resizable: false"),
+            "{}",
+            first.summary
+        );
 
         let second = ExecShellAttachTool
             .execute(
@@ -2517,6 +2654,133 @@ mod tests {
             .unwrap_or_default();
         assert!(second_terminal.contains("beta"), "{}", second.summary);
         assert!(!second_terminal.contains("warn"), "{}", second.summary);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn exec_shell_show_preserves_supervisor_manifest_capabilities() {
+        let root = temp_root("supervisor-manifest");
+        fs::create_dir_all(&root).unwrap();
+        let cwd = root.display().to_string();
+        let task_id = generated_job_id();
+        let record_dir = shell_job_record_dir(&cwd, &task_id);
+        fs::create_dir_all(&record_dir).unwrap();
+        fs::write(record_dir.join("stdout.log"), b"supervised output\n").unwrap();
+        fs::write(record_dir.join("stderr.log"), b"").unwrap();
+        let record = DurableShellJobRecord {
+            id: task_id.clone(),
+            command: "bash".to_string(),
+            cwd: cwd.clone(),
+            tty: true,
+            pty_backend: Some("native-supervisor".to_string()),
+            tty_size: Some(ShellTtySize {
+                rows: 44,
+                cols: 132,
+            }),
+            status: "running".to_string(),
+            exit_code: None,
+            pid: 9_999_999,
+            owner_pid: Some(std::process::id()),
+            process_group: Some(9_999_999),
+            supervisor_pid: Some(std::process::id()),
+            supervisor_socket: Some(".dscode/shell-supervisor/supervisor.sock".to_string()),
+            supervisor_epoch: Some("epoch+42".to_string()),
+            terminal_event_log: Some("terminal-events.jsonl".to_string()),
+            terminal_event_seq: Some(7),
+            control_token_hash: Some("sha256:secret-token-hash".to_string()),
+            attachable: true,
+            resizable: true,
+            stdin_path: None,
+            stdin_keeper_pid: None,
+            stdin_closed: true,
+            started_at: epoch_label(),
+            updated_at: epoch_label(),
+            stdout_total_bytes: 0,
+            stderr_total_bytes: 0,
+        };
+        write_durable_shell_job_manifest(&cwd, &record).unwrap();
+
+        let shown = ExecShellShowTool
+            .execute(
+                ToolInput::new()
+                    .with_arg("task_id", task_id.clone())
+                    .with_arg("cwd", cwd.clone()),
+            )
+            .unwrap();
+        assert!(
+            shown.summary.contains("pty_backend: native-supervisor"),
+            "{}",
+            shown.summary
+        );
+        assert!(
+            shown.summary.contains("status: exited"),
+            "{}",
+            shown.summary
+        );
+        assert!(
+            shown.summary.contains("attachable: true"),
+            "{}",
+            shown.summary
+        );
+        assert!(
+            shown.summary.contains("resizable: true"),
+            "{}",
+            shown.summary
+        );
+        assert!(
+            shown.summary.contains("supervisor_alive: true"),
+            "{}",
+            shown.summary
+        );
+        assert!(
+            shown
+                .summary
+                .contains("supervisor_socket: .dscode/shell-supervisor/supervisor.sock"),
+            "{}",
+            shown.summary
+        );
+        assert!(
+            shown.summary.contains("terminal_event_seq: 7"),
+            "{}",
+            shown.summary
+        );
+        assert!(!shown.summary.contains("control_token_hash"));
+        assert!(!shown.summary.contains("secret-token-hash"));
+        assert!(
+            shown.summary.contains("supervised output"),
+            "{}",
+            shown.summary
+        );
+
+        let listed = ExecShellListTool
+            .execute(ToolInput::new().with_arg("cwd", cwd.clone()))
+            .unwrap();
+        assert!(
+            listed.summary.contains("pty_backend=native-supervisor"),
+            "{}",
+            listed.summary
+        );
+        assert!(
+            listed.summary.contains("attachable=true"),
+            "{}",
+            listed.summary
+        );
+        assert!(
+            listed.summary.contains("resizable=true"),
+            "{}",
+            listed.summary
+        );
+
+        let loaded =
+            read_durable_shell_job_manifest(&shell_job_manifest_path(&cwd, &task_id)).unwrap();
+        assert_eq!(loaded.pty_backend.as_deref(), Some("native-supervisor"));
+        assert_eq!(
+            loaded.control_token_hash.as_deref(),
+            Some("sha256:secret-token-hash")
+        );
+        assert!(loaded.attachable);
+        assert!(loaded.resizable);
 
         let _ = fs::remove_dir_all(root);
     }
@@ -2607,12 +2871,21 @@ mod tests {
             command: "sleep 30".to_string(),
             cwd: cwd.clone(),
             tty: false,
+            pty_backend: None,
             tty_size: None,
             status: "running".to_string(),
             exit_code: None,
             pid: child.id(),
             owner_pid: Some(999_998),
             process_group: Some(child.id()),
+            supervisor_pid: None,
+            supervisor_socket: None,
+            supervisor_epoch: None,
+            terminal_event_log: None,
+            terminal_event_seq: None,
+            control_token_hash: None,
+            attachable: false,
+            resizable: false,
             stdin_path: None,
             stdin_keeper_pid: None,
             stdin_closed: true,
@@ -2673,12 +2946,21 @@ mod tests {
             command: "sleep 30".to_string(),
             cwd: cwd.clone(),
             tty: false,
+            pty_backend: None,
             tty_size: None,
             status: "running".to_string(),
             exit_code: None,
             pid: 9_999_999,
             owner_pid: Some(999_998),
             process_group: Some(9_999_999),
+            supervisor_pid: None,
+            supervisor_socket: None,
+            supervisor_epoch: None,
+            terminal_event_log: None,
+            terminal_event_seq: None,
+            control_token_hash: None,
+            attachable: false,
+            resizable: false,
             stdin_path: None,
             stdin_keeper_pid: None,
             stdin_closed: true,

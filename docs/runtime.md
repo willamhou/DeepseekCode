@@ -1327,9 +1327,15 @@ jobs also get a durable FIFO stdin path plus a keeper process, so
 record and `close_stdin=true` closes that FIFO by killing the keeper.
 `exec_shell background=true tty=true` and `task_shell_start tty=true` request a
 Unix `script` PTY backend for new background jobs; manifests record `tty` and
-`pty_backend`, and wait/show snapshots surface the same fields. Optional
-`tty_rows` plus `tty_cols` set the initial PTY geometry and are persisted in
-the same manifest. `exec_shell_resize cwd=<path> task_id=<id> tty_rows=<n>
+`pty_backend`, and wait/show snapshots surface the same fields. Shell manifests
+also carry the supervisor capability skeleton for a later native PTY supervisor:
+`attachable`, `resizable`, `supervisor_pid`, `supervisor_socket`,
+`supervisor_epoch`, `terminal_event_log`, and `terminal_event_seq`. Current
+plain-pipe and `script` jobs render `attachable: false` and `resizable: false`;
+those flags are reserved for future supervisor-owned PTY sessions and should not
+be confused with the best-effort `script` resize path. Optional `tty_rows` plus
+`tty_cols` set the initial PTY geometry and are persisted in the same manifest.
+`exec_shell_resize cwd=<path> task_id=<id> tty_rows=<n>
 tty_cols=<n>` updates the durable PTY geometry and, for running TTY jobs with
 stdin control, sends a best-effort `stty rows <n> cols <n>` control command
 through the attached pipe or detached FIFO. This is PTY-backed command execution
