@@ -46,7 +46,7 @@ use crate::tools::revert_turn::RevertTurnTool;
 use crate::tools::review::ReviewTool;
 use crate::tools::rlm::{
     RlmBatchTool, RlmChunkPlanTool, RlmMapReducePlanTool, RlmPythonSessionTool,
-    RlmPythonSessionsTool, RlmPythonTool, RlmTool,
+    RlmPythonSessionsTool, RlmPythonTool, RlmRecursivePlanTool, RlmTool,
 };
 use crate::tools::run_shell::{is_safe_shell_command, RunShellTool};
 use crate::tools::run_tests::{render_run_tests_command, RunTestsTool};
@@ -803,6 +803,7 @@ fn execute_mcp_tool(
         "task_shell_wait" => TaskShellWaitTool.execute(input)?,
         "rlm_chunk_plan" => RlmChunkPlanTool.execute(input)?,
         "rlm_map_reduce_plan" => RlmMapReducePlanTool.execute(input)?,
+        "rlm_recursive_plan" => RlmRecursivePlanTool.execute(input)?,
         "rlm_python" => RlmPythonTool.execute(input)?,
         "rlm_python_sessions" => RlmPythonSessionsTool {
             config: state.config.clone(),
@@ -3234,6 +3235,25 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
             ),
         ),
         mcp_tool_definition(
+            "rlm_recursive_plan",
+            "Plan a multi-round DeepSeek-TUI-style RLM recursive map/reduce workflow without running child agents.",
+            mcp_schema(
+                vec![
+                    ("task", string_property("Overall recursive reduce objective.")),
+                    ("question", string_property("Alias for task.")),
+                    ("file_path", string_property("Workspace-relative file to chunk.")),
+                    ("content", string_property("Inline content to chunk.")),
+                    ("max_chars", number_property("Maximum chars per chunk.")),
+                    ("overlap", number_property("Overlapping chars between chunks.")),
+                    ("include_text", string_property("Set false for offset-only chunks.")),
+                    ("map_limit", number_property("Maximum map tasks to render.")),
+                    ("fan_in", number_property("Maximum inputs per recursive reduce group.")),
+                    ("steps", string_property("Suggested child step budget.")),
+                ],
+                &[],
+            ),
+        ),
+        mcp_tool_definition(
             "rlm_python",
             "Run a short restricted Python helper for pure RLM computation. Imports, files, network, subprocess, and OS access are blocked.",
             mcp_schema(
@@ -5506,6 +5526,7 @@ fn acp_tool_kind(name: &str) -> &'static str {
         | "llm_query_batched"
         | "rlm_chunk_plan"
         | "rlm_map_reduce_plan"
+        | "rlm_recursive_plan"
         | "image_analyze" => "think",
         _ => "other",
     }
@@ -7926,6 +7947,7 @@ mod tests {
         assert!(rendered.contains(r#""name":"task_shell_wait""#));
         assert!(rendered.contains(r#""name":"rlm_chunk_plan""#));
         assert!(rendered.contains(r#""name":"rlm_map_reduce_plan""#));
+        assert!(rendered.contains(r#""name":"rlm_recursive_plan""#));
         assert!(rendered.contains(r#""name":"rlm_python""#));
         assert!(rendered.contains(r#""name":"rlm_python_sessions""#));
         assert!(rendered.contains(r#""name":"diagnostics""#));
@@ -8063,6 +8085,21 @@ mod tests {
         assert!(text.contains(r#""chunks""#));
         assert!(text.contains(r#""coverage":{"chunks":2"#));
         assert!(text.contains(r#""include_text":false"#));
+    }
+
+    #[test]
+    fn mcp_tools_call_executes_rlm_recursive_plan() {
+        let state = mcp_state("mcp-rlm-recursive-plan");
+        let response = mcp_response_for_message(
+            r#"{"jsonrpc":"2.0","id":38,"method":"tools/call","params":{"name":"rlm_recursive_plan","arguments":{"task":"summarize","content":"abcdefghij","max_chars":2,"fan_in":2,"include_text":"false"}}}"#,
+            &state,
+        )
+        .unwrap();
+        let text = mcp_response_text(&response);
+
+        assert!(text.contains(r#""rounds":["#));
+        assert!(text.contains(r#""input_refs":["map:0","map:1"]"#));
+        assert!(text.contains(r#""final_output_ref":"round3:group0""#));
     }
 
     #[test]
@@ -9806,6 +9843,7 @@ shell_allowlist = ["cargo test"]
         assert!(rendered.contains(r#""name":"tool_search_tool_bm25""#));
         assert!(rendered.contains(r#""name":"rlm_chunk_plan""#));
         assert!(rendered.contains(r#""name":"rlm_map_reduce_plan""#));
+        assert!(rendered.contains(r#""name":"rlm_recursive_plan""#));
         assert!(rendered.contains(r#""name":"rlm_python""#));
         assert!(rendered.contains(r#""name":"rlm_python_sessions""#));
         assert!(!rendered.contains(r#""name":"run_shell""#));

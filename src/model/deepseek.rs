@@ -3134,6 +3134,12 @@ const TOOL_SPECS: &[StaticToolSpec] = &[
         required_json: r#"["task"]"#,
     },
     StaticToolSpec {
+        name: "rlm_recursive_plan",
+        description: "Plan a DeepSeek-TUI-style recursive RLM map/reduce workflow for long input without running child agents. Returns chunks, initial map tasks, and multi-round fan-in reduce groups with stable input/output refs.",
+        properties_json: r#"{"task":{"type":"string","description":"Overall objective or question for the recursive workflow."},"question":{"type":"string","description":"Alias for task."},"file_path":{"type":"string","description":"Workspace-relative file to chunk. Mutually exclusive with content."},"content":{"type":"string","description":"Inline long input to chunk, capped at 200k chars. Mutually exclusive with file_path."},"max_chars":{"type":"string","description":"Maximum characters per chunk. Defaults to 20000 and clamps to 1-50000."},"overlap":{"type":"string","description":"Characters to overlap between adjacent chunks. Must be smaller than max_chars."},"include_text":{"type":"string","description":"Set false/0/no/off to omit chunk text from chunks and map tasks. Defaults to true."},"map_limit":{"type":"string","description":"Maximum initial map tasks to emit in this plan, clamped to 1-16. Defaults to 16."},"fan_in":{"type":"string","description":"Maximum input summaries per recursive reduce group, clamped to 2-16. Defaults to 8."},"steps":{"type":"string","description":"Suggested child-agent step budget for each map or reduce task. Defaults to 4."}}"#,
+        required_json: r#"["task"]"#,
+    },
+    StaticToolSpec {
         name: "rlm_python",
         description: "Run a short restricted Python helper script for RLM-style pure computation, text splitting, counting, classification setup, or aggregation. Includes chunk_context, chunk_coverage, SHOW_VARS, repl_get/repl_set, FINAL, and FINAL_VAR helpers. No imports, file, network, subprocess, or OS access.",
         properties_json: r#"{"code":{"type":"string","description":"Short Python code to execute in the restricted helper. It can read context (alias ctx) and question variables, print, and assign JSON-serializable variables."},"context":{"type":"string","description":"Optional text or extracted data exposed to Python as context and ctx."},"question":{"type":"string","description":"Optional question exposed to Python as question."},"timeout_ms":{"type":"string","description":"Optional timeout in milliseconds, clamped to 100-5000."}}"#,
@@ -4795,6 +4801,7 @@ mod tests {
             "rlm_process".to_string(),
             "rlm_chunk_plan".to_string(),
             "rlm_map_reduce_plan".to_string(),
+            "rlm_recursive_plan".to_string(),
             "rlm_python".to_string(),
             "rlm_python_session".to_string(),
             "rlm_python_sessions".to_string(),
@@ -4808,6 +4815,7 @@ mod tests {
         assert!(openai.contains("\"name\":\"rlm_process\""));
         assert!(openai.contains("\"name\":\"rlm_chunk_plan\""));
         assert!(openai.contains("\"name\":\"rlm_map_reduce_plan\""));
+        assert!(openai.contains("\"name\":\"rlm_recursive_plan\""));
         assert!(openai.contains("\"name\":\"rlm_python\""));
         assert!(openai.contains("\"name\":\"rlm_python_session\""));
         assert!(openai.contains("\"name\":\"rlm_python_sessions\""));
@@ -4823,6 +4831,7 @@ mod tests {
         assert!(openai.contains("\"overlap\""));
         assert!(openai.contains("\"include_text\""));
         assert!(openai.contains("\"map_limit\""));
+        assert!(openai.contains("\"fan_in\""));
         assert!(openai.contains("\"questions\""));
 
         let anthropic = build_anthropic_tools(&[
@@ -4832,6 +4841,7 @@ mod tests {
             "rlm_process".to_string(),
             "rlm_chunk_plan".to_string(),
             "rlm_map_reduce_plan".to_string(),
+            "rlm_recursive_plan".to_string(),
             "rlm_python".to_string(),
             "rlm_python_session".to_string(),
             "rlm_python_sessions".to_string(),
@@ -4845,6 +4855,7 @@ mod tests {
         assert!(anthropic.contains("\"name\":\"rlm_process\""));
         assert!(anthropic.contains("\"name\":\"rlm_chunk_plan\""));
         assert!(anthropic.contains("\"name\":\"rlm_map_reduce_plan\""));
+        assert!(anthropic.contains("\"name\":\"rlm_recursive_plan\""));
         assert!(anthropic.contains("\"name\":\"rlm_python\""));
         assert!(anthropic.contains("\"name\":\"rlm_python_session\""));
         assert!(anthropic.contains("\"name\":\"rlm_python_sessions\""));

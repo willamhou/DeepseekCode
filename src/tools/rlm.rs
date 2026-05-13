@@ -22,6 +22,8 @@ const MIN_RLM_CHUNK_CHARS: usize = 1;
 const MAX_RLM_CHUNK_CHARS: usize = 50_000;
 const MAX_RLM_CHUNKS: usize = 256;
 const DEFAULT_RLM_MAP_REDUCE_STEPS: &str = "4";
+const DEFAULT_RLM_RECURSIVE_FAN_IN: usize = 8;
+const MAX_RLM_RECURSIVE_FAN_IN: usize = 16;
 const MAX_RLM_PYTHON_CODE_BYTES: usize = 4_000;
 const DEFAULT_RLM_PYTHON_TIMEOUT_MS: u64 = 2_000;
 const MAX_RLM_PYTHON_TIMEOUT_MS: u64 = 5_000;
@@ -777,6 +779,46 @@ impl Tool for RlmMapReducePlanTool {
     }
 }
 
+pub struct RlmRecursivePlanTool;
+
+impl Tool for RlmRecursivePlanTool {
+    fn name(&self) -> &str {
+        "rlm_recursive_plan"
+    }
+
+    fn execute(&self, input: ToolInput) -> AppResult<ToolOutput> {
+        let task = input
+            .get("task")
+            .or_else(|| input.get("question"))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| tool_failure("rlm_recursive_plan requires non-empty `task`"))?;
+        let process_input = load_rlm_process_input(&input)?;
+        let max_chars = parse_rlm_chunk_chars(input.get("max_chars"))?;
+        let overlap = parse_rlm_chunk_overlap(input.get("overlap"), max_chars)?;
+        let include_text = parse_rlm_chunk_include_text(input.get("include_text"));
+        let map_limit = parse_rlm_map_limit(input.get("map_limit"))?;
+        let fan_in = parse_rlm_recursive_fan_in(input.get("fan_in"))?;
+        let steps = input
+            .get("steps")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(DEFAULT_RLM_MAP_REDUCE_STEPS);
+        Ok(ToolOutput {
+            summary: render_rlm_recursive_plan(
+                &process_input,
+                task,
+                max_chars,
+                overlap,
+                include_text,
+                map_limit,
+                fan_in,
+                steps,
+            )?,
+        })
+    }
+}
+
 pub struct RlmPythonTool;
 
 impl Tool for RlmPythonTool {
@@ -1129,6 +1171,16 @@ fn parse_rlm_map_limit(raw: Option<&str>) -> AppResult<usize> {
     Ok(limit.clamp(1, MAX_RLM_BATCH_QUESTIONS))
 }
 
+fn parse_rlm_recursive_fan_in(raw: Option<&str>) -> AppResult<usize> {
+    let fan_in = match raw.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => value
+            .parse::<usize>()
+            .map_err(|_| tool_failure("rlm_recursive_plan fan_in must be a positive integer"))?,
+        None => DEFAULT_RLM_RECURSIVE_FAN_IN,
+    };
+    Ok(fan_in.clamp(2, MAX_RLM_RECURSIVE_FAN_IN))
+}
+
 fn render_rlm_chunk_plan(
     input: &RlmProcessInput,
     max_chars: usize,
@@ -1144,6 +1196,110 @@ fn render_rlm_chunk_plan(
         include_text,
         render_rlm_coverage_json(input.char_count, chunks.len()),
         render_rlm_chunks_json(&chunks, include_text)
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_rlm_recursive_plan(
+    input: &RlmProcessInput,
+    task: &str,
+    max_chars: usize,
+    overlap: usize,
+    include_text: bool,
+    map_limit: usize,
+    fan_in: usize,
+    steps: &str,
+) -> AppResult<String> {
+    let chunks = build_rlm_chunks(input, max_chars, overlap)?;
+    let selected = chunks.len().min(map_limit);
+    let omitted = chunks.len().saturating_sub(selected);
+    let mut map_tasks = String::new();
+    for (offset, chunk) in chunks.iter().take(map_limit).enumerate() {
+        if offset > 0 {
+            map_tasks.push(',');
+        }
+        map_tasks.push_str(&format!(
+            "{{\"ref\":\"map:{}\",\"chunk_index\":{},\"start\":{},\"end\":{},\"steps\":\"{}\",\"task\":\"{}\"}}",
+            chunk.index,
+            chunk.index,
+            chunk.start,
+            chunk.end,
+            json_escape(steps),
+            json_escape(&render_rlm_map_task(
+                task,
+                chunk,
+                chunks.len(),
+                include_text
+            ))
+        ));
+    }
+
+    let mut current_refs = chunks
+        .iter()
+        .map(|chunk| format!("map:{}", chunk.index))
+        .collect::<Vec<_>>();
+    let mut rounds_json = String::new();
+    let mut round_index = 1usize;
+    while current_refs.len() > 1 {
+        let input_count = current_refs.len();
+        let group_count = input_count.div_ceil(fan_in);
+        let mut groups_json = String::new();
+        let mut next_refs = Vec::with_capacity(group_count);
+        for group_index in 0..group_count {
+            let start = group_index * fan_in;
+            let end = input_count.min(start + fan_in);
+            let inputs = &current_refs[start..end];
+            let output_ref = format!("round{round_index}:group{group_index}");
+            let final_round = group_count == 1;
+            if group_index > 0 {
+                groups_json.push(',');
+            }
+            groups_json.push_str(&format!(
+                "{{\"group_index\":{},\"input_refs\":[{}],\"output_ref\":\"{}\",\"steps\":\"{}\",\"task\":\"{}\"}}",
+                group_index,
+                render_json_string_array(inputs),
+                json_escape(&output_ref),
+                json_escape(steps),
+                json_escape(&render_rlm_recursive_reduce_task(
+                    task,
+                    round_index,
+                    group_index,
+                    inputs,
+                    final_round
+                ))
+            ));
+            next_refs.push(output_ref);
+        }
+        if round_index > 1 {
+            rounds_json.push(',');
+        }
+        rounds_json.push_str(&format!(
+            "{{\"round\":{},\"input_count\":{},\"fan_in\":{},\"group_count\":{},\"groups\":[{}]}}",
+            round_index, input_count, fan_in, group_count, groups_json
+        ));
+        current_refs = next_refs;
+        round_index += 1;
+    }
+    let final_output_ref = current_refs
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "none".to_string());
+    Ok(format!(
+        "{{\"source\":{},\"task\":\"{}\",\"settings\":{{\"max_chars\":{},\"overlap\":{},\"include_text\":{},\"map_limit\":{},\"fan_in\":{},\"steps\":\"{}\"}},\"coverage\":{},\"chunks\":[{}],\"map_tasks\":[{}],\"map_tasks_omitted\":{},\"rounds\":[{}],\"final_output_ref\":\"{}\"}}",
+        render_rlm_source_json(input),
+        json_escape(task),
+        max_chars,
+        overlap,
+        include_text,
+        map_limit,
+        fan_in,
+        json_escape(steps),
+        render_rlm_coverage_json(input.char_count, chunks.len()),
+        render_rlm_chunks_json(&chunks, include_text),
+        map_tasks,
+        omitted,
+        rounds_json,
+        json_escape(&final_output_ref)
     ))
 }
 
@@ -1305,6 +1461,39 @@ Expected map outputs: {chunk_count}\n\
 {omitted_note}\n\n\
 Combine the chunk-level map outputs into one answer. Reconcile duplicate or conflicting facts, cite chunk indexes or offsets for key evidence, call out uncovered/omitted chunks, and state residual uncertainty."
     )
+}
+
+fn render_rlm_recursive_reduce_task(
+    task: &str,
+    round_index: usize,
+    group_index: usize,
+    inputs: &[String],
+    final_round: bool,
+) -> String {
+    let final_note = if final_round {
+        "This reduce group produces the final answer."
+    } else {
+        "This reduce group produces an intermediate summary for a later recursive reduce round."
+    };
+    format!(
+        "RLM recursive reduce step\n\
+Objective: {task}\n\
+Round: {round_index}\n\
+Group: {}\n\
+Inputs: {}\n\
+{final_note}\n\n\
+Combine only the referenced input summaries. Preserve concrete evidence, source offsets, contradictions, and unresolved questions. If an input is missing, mark it as uncovered instead of guessing.",
+        group_index + 1,
+        inputs.join(", ")
+    )
+}
+
+fn render_json_string_array(values: &[String]) -> String {
+    values
+        .iter()
+        .map(|value| format!("\"{}\"", json_escape(value)))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn char_byte_offsets(content: &str) -> Vec<usize> {
@@ -2046,6 +2235,54 @@ mod tests {
         assert!(output
             .summary
             .contains("Chunk text omitted by include_text=false"));
+    }
+
+    #[test]
+    fn rlm_recursive_plan_builds_multi_round_reduce_tree() {
+        let output = RlmRecursivePlanTool
+            .execute(
+                ToolInput::new()
+                    .with_arg("task", "Extract decisions")
+                    .with_arg("content", "abcdefghij")
+                    .with_arg("max_chars", "2")
+                    .with_arg("fan_in", "2")
+                    .with_arg("map_limit", "3")
+                    .with_arg("include_text", "false")
+                    .with_arg("steps", "5"),
+            )
+            .unwrap();
+
+        assert!(output.summary.contains(r#""task":"Extract decisions""#));
+        assert!(output.summary.contains(r#""chunks":5"#));
+        assert!(output.summary.contains(r#""fan_in":2"#));
+        assert!(output.summary.contains(r#""map_tasks_omitted":2"#));
+        assert!(output.summary.contains(r#""ref":"map:0""#));
+        assert!(output.summary.contains(r#""input_refs":["map:0","map:1"]"#));
+        assert!(output.summary.contains(r#""round":1"#));
+        assert!(output.summary.contains(r#""round":2"#));
+        assert!(output.summary.contains(r#""round":3"#));
+        assert!(output
+            .summary
+            .contains(r#""final_output_ref":"round3:group0""#));
+        assert!(output.summary.contains("RLM recursive reduce step"));
+        assert!(output
+            .summary
+            .contains("intermediate summary for a later recursive reduce round"));
+        assert!(output.summary.contains("produces the final answer"));
+        assert!(output.summary.contains(r#""steps":"5""#));
+    }
+
+    #[test]
+    fn rlm_recursive_plan_clamps_fan_in() {
+        assert_eq!(parse_rlm_recursive_fan_in(Some("1")).unwrap(), 2);
+        assert_eq!(
+            parse_rlm_recursive_fan_in(Some("99")).unwrap(),
+            MAX_RLM_RECURSIVE_FAN_IN
+        );
+        assert!(parse_rlm_recursive_fan_in(Some("nope"))
+            .unwrap_err()
+            .to_string()
+            .contains("fan_in"));
     }
 
     #[test]

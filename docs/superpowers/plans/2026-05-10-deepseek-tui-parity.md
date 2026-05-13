@@ -444,6 +444,10 @@ Remaining:
   plus `file_path` or `content`, returns chunks, ready-to-dispatch map task JSON,
   omitted-map metadata, and a reduce prompt without directly running child
   agents
+- RLM recursive planning now exists: `rlm_recursive_plan` accepts the same
+  long-input shape and returns initial map tasks plus multi-round fan-in reduce
+  groups with stable `map:<index>` / `roundN:groupM` refs for recursive helper
+  workflows that exceed one batch
 - DeepSeek-TUI-compatible RLM helper aliases now exist: `rlm_query` mirrors
   `rlm`, `llm_query` mirrors `rlm`, and `rlm_query_batched` /
   `llm_query_batched` mirror `rlm_batch`; all aliases use the same model
@@ -478,8 +482,8 @@ Remaining:
   review tasks through `github_pr_context include_diff=true` and then `review`
   over that gathered context, with a seeded benchmark fixture covering blocker
   metadata
-- Remaining: richer recursive helper API and stronger live end-to-end semantic
-  review fixtures / remote PR comment/retry loops
+- Remaining: stronger live end-to-end semantic review fixtures / remote PR
+  comment/retry loops
 
 ### Phase G2: MCP Server Mode
 

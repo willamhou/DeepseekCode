@@ -38,7 +38,7 @@ use crate::tools::revert_turn::RevertTurnTool;
 use crate::tools::review::ReviewTool;
 use crate::tools::rlm::{
     RlmBatchTool, RlmChunkPlanTool, RlmMapReducePlanTool, RlmPythonSessionTool,
-    RlmPythonSessionsTool, RlmPythonTool, RlmTool,
+    RlmPythonSessionsTool, RlmPythonTool, RlmRecursivePlanTool, RlmTool,
 };
 use crate::tools::run_shell::{is_safe_shell_command, RunShellTool};
 use crate::tools::run_tests::{render_run_tests_command, RunTestsTool};
@@ -972,6 +972,7 @@ pub fn default_registry_with_context(
         }));
         tools.push(Box::new(RlmChunkPlanTool));
         tools.push(Box::new(RlmMapReducePlanTool));
+        tools.push(Box::new(RlmRecursivePlanTool));
         tools.push(Box::new(RlmPythonTool));
         tools.push(Box::new(RlmPythonSessionTool {
             config: config.clone(),
@@ -1692,6 +1693,9 @@ done
             .contains(&"rlm_map_reduce_plan"));
         assert!(root
             .names_for_policy(&ExecutionPolicy::new(&approval, None))
+            .contains(&"rlm_recursive_plan"));
+        assert!(root
+            .names_for_policy(&ExecutionPolicy::new(&approval, None))
             .contains(&"rlm_python"));
         assert!(root
             .names_for_policy(&ExecutionPolicy::new(&approval, None))
@@ -1740,6 +1744,9 @@ done
             .contains(&"rlm_map_reduce_plan"));
         assert!(nested
             .names_for_policy(&ExecutionPolicy::new(&approval, None))
+            .contains(&"rlm_recursive_plan"));
+        assert!(nested
+            .names_for_policy(&ExecutionPolicy::new(&approval, None))
             .contains(&"rlm_python"));
         assert!(nested
             .names_for_policy(&ExecutionPolicy::new(&approval, None))
@@ -1786,6 +1793,9 @@ done
         assert!(!at_limit
             .names_for_policy(&ExecutionPolicy::new(&approval, None))
             .contains(&"rlm_map_reduce_plan"));
+        assert!(!at_limit
+            .names_for_policy(&ExecutionPolicy::new(&approval, None))
+            .contains(&"rlm_recursive_plan"));
         assert!(!at_limit
             .names_for_policy(&ExecutionPolicy::new(&approval, None))
             .contains(&"rlm_python"));

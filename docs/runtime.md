@@ -334,6 +334,7 @@ Exposed tools:
 | `exec_shell_cancel` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and cancels one or all background shell jobs |
 | `rlm_chunk_plan` | Plan DeepSeek-TUI-style RLM chunks for a workspace file or inline content without running child agents |
 | `rlm_map_reduce_plan` | Plan a local RLM map-reduce workflow without running child agents |
+| `rlm_recursive_plan` | Plan a multi-round recursive RLM map/reduce workflow without running child agents |
 | `rlm_python` | Run restricted pure-compute Python helper code with imports/files/network/subprocess blocked |
 | `rlm_python_sessions` | List or inspect persisted `rlm_python_session` JSON state without running Python |
 | `rlm_python_session` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and writes `.dscode/rlm-python` helper state |
@@ -1281,6 +1282,10 @@ planning. `max_chars` defaults to 20000, `overlap` must be smaller than
 plus `file_path` or `content`, it returns the same chunks, ready-to-dispatch map
 task JSON for the first `map_limit` chunks, an omitted-map count, and a reduce
 prompt for combining map outputs. It does not run child agents by itself.
+`rlm_recursive_plan` extends that into a multi-round fan-in reduce tree for
+larger inputs: it returns stable `map:<index>` and `roundN:groupM` refs,
+initial map tasks, recursive reduce groups, omitted map-task metadata, and a
+final output ref without running child agents.
 The `rlm_python` helper adds a restricted Python execution slice for pure
 calculation, text splitting, counting, and aggregation over optional `context`
 (`ctx` alias) and `question` variables; it rejects import/file/network/subprocess-style
@@ -1306,7 +1311,7 @@ DeepSeekCode process.
 This gives the model DeepSeek-TUI-style Recursive Language Model entrypoints for
 synthesis/classification tasks with both file-backed and optional process-backed
 Python helper state. MCP server mode exposes the local RLM planning helpers
-(`rlm_chunk_plan`, `rlm_map_reduce_plan`), restricted pure-compute
+(`rlm_chunk_plan`, `rlm_map_reduce_plan`, `rlm_recursive_plan`), restricted pure-compute
 `rlm_python`, and read-only `rlm_python_sessions` by default. Stateful
 `rlm_python_session` is hidden by default and requires trusted side effects or
 durable runtime approvals because it writes `.dscode/rlm-python` state.
