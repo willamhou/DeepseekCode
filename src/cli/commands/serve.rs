@@ -43,7 +43,7 @@ use crate::tools::project_map::ProjectMapTool;
 use crate::tools::read_file::ReadFileTool;
 use crate::tools::recall_archive::RecallArchiveTool;
 use crate::tools::revert_turn::RevertTurnTool;
-use crate::tools::review::ReviewTool;
+use crate::tools::review::{PrReviewCommentPlanTool, ReviewTool};
 use crate::tools::rlm::{
     RlmBatchTool, RlmChunkPlanTool, RlmMapReducePlanTool, RlmPythonSessionTool,
     RlmPythonSessionsTool, RlmPythonTool, RlmRecursivePlanTool, RlmTool,
@@ -760,6 +760,7 @@ fn execute_mcp_tool(
         "github_issue_context" => GithubIssueContextTool.execute(input)?,
         "github_pr_context" => GithubPrContextTool.execute(input)?,
         "review" => ReviewTool::default().execute(input)?,
+        "pr_review_comment_plan" => PrReviewCommentPlanTool.execute(input)?,
         "recall_archive" => RecallArchiveTool::new(&state.config).execute(input)?,
         "tool_search_tool_regex" => ToolSearchTool {
             tool_name: "tool_search_tool_regex",
@@ -3079,6 +3080,29 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
                     ("max_chars", number_property("Maximum source characters.")),
                 ],
                 &["target"],
+            ),
+        ),
+        mcp_tool_definition(
+            "pr_review_comment_plan",
+            "Create a read-only GitHub PR review comment plan from review JSON and optional github_pr_context output.",
+            mcp_schema(
+                vec![
+                    ("review_output", string_property("JSON output from the review tool.")),
+                    ("review_json", string_property("Alias for review_output.")),
+                    ("review", string_property("Alias for review_output.")),
+                    (
+                        "github_context",
+                        string_property("Optional github_pr_context output."),
+                    ),
+                    ("pr_context", string_property("Alias for github_context.")),
+                    ("context", string_property("Alias for github_context.")),
+                    ("number", string_property("Optional PR number.")),
+                    ("pr", string_property("Alias for number.")),
+                    ("repo", string_property("Optional owner/repo for GitHub.")),
+                    ("repository", string_property("Alias for repo.")),
+                    ("max_issues", number_property("Maximum findings to render.")),
+                ],
+                &["review_output"],
             ),
         ),
         mcp_tool_definition(
@@ -5490,6 +5514,7 @@ fn acp_tool_kind(name: &str) -> &'static str {
         | "runtime_list_agents"
         | "runtime_agent_result"
         | "review"
+        | "pr_review_comment_plan"
         | "recall_archive"
         | "load_skill"
         | "image_ocr" => "read",
@@ -7934,6 +7959,7 @@ mod tests {
         assert!(rendered.contains(r#""name":"github_issue_context""#));
         assert!(rendered.contains(r#""name":"github_pr_context""#));
         assert!(rendered.contains(r#""name":"review""#));
+        assert!(rendered.contains(r#""name":"pr_review_comment_plan""#));
         assert!(rendered.contains(r#""name":"recall_archive""#));
         assert!(rendered.contains(r#""name":"tool_search_tool_regex""#));
         assert!(rendered.contains(r#""name":"tool_search_tool_bm25""#));
@@ -8159,6 +8185,17 @@ mod tests {
         let review_text = mcp_response_text(&review_response);
         assert!(review_text.contains("Reviewed file target `src.rs`"));
         assert!(review_text.contains("panic-prone error handling"));
+
+        let comment_plan_request = format!(
+            r#"{{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{{"name":"pr_review_comment_plan","arguments":{{"review_output":"{}","number":"7","repo":"owner/repo"}}}}}}"#,
+            crate::util::json::json_escape(&review_text)
+        );
+        let comment_plan_response =
+            mcp_response_for_message(&comment_plan_request, &state).unwrap();
+        let comment_plan_text = mcp_response_text(&comment_plan_response);
+        assert!(comment_plan_text.contains("## Automated PR Review"));
+        assert!(comment_plan_text.contains(r#""github_comment_input""#));
+        assert!(comment_plan_text.contains(r#""dry_run":"true""#));
 
         let recall_response = mcp_response_for_message(
             r#"{"jsonrpc":"2.0","id":39,"method":"tools/call","params":{"name":"recall_archive","arguments":{"query":"needle","max_results":1}}}"#,
@@ -9838,6 +9875,7 @@ shell_allowlist = ["cargo test"]
         assert!(rendered.contains(r#""name":"github_issue_context""#));
         assert!(rendered.contains(r#""name":"github_pr_context""#));
         assert!(rendered.contains(r#""name":"review""#));
+        assert!(rendered.contains(r#""name":"pr_review_comment_plan""#));
         assert!(rendered.contains(r#""name":"recall_archive""#));
         assert!(rendered.contains(r#""name":"tool_search_tool_regex""#));
         assert!(rendered.contains(r#""name":"tool_search_tool_bm25""#));

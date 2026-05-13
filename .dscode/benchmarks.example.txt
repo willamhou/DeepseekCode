@@ -167,6 +167,19 @@ expect_tool_output_contains = "review:GitHub PR has requested changes"
 max_failed_tools = 0
 max_tool_calls = 1
 
+name = "seeded-pr-context-review-comment-plan"
+task = "Review pull request #42 'Route benchmark command' on owner/repo and draft a PR comment with the findings."
+category = "pr_workflow"
+workdir = "fixtures/rust-cli-mini"
+notes = "Seeded remote PR review should turn structured review JSON into a dry-run comment plan"
+seed_observations = "github_pr_context:ok:meta.kind=pr\nmeta.number=42\nmeta.state=OPEN\nPR #42: Route benchmark command\njson:\n{\"number\":42,\"title\":\"Route benchmark command\",\"url\":\"https://github.com/owner/repo/pull/42\",\"reviewDecision\":\"CHANGES_REQUESTED\",\"statusCheckRollup\":[{\"name\":\"unit-tests\",\"conclusion\":\"FAILURE\"}]}\ndiff:\ndiff --git a/src/cli/app.rs b/src/cli/app.rs\n--- a/src/cli/app.rs\n+++ b/src/cli/app.rs\n@@ -1,2 +1,4 @@\n+pub fn route_benchmark_subcommand() {}\n || review:ok:{\"summary\":\"Reviewed github_pr_diff target `github_pr_context` with 2 deterministic issue(s).\",\"issues\":[{\"severity\":\"warning\",\"title\":\"GitHub PR status checks failing\",\"description\":\"1 status check(s) are failing or cancelled: unit-tests\",\"path\":null,\"line\":null},{\"severity\":\"info\",\"title\":\"public API change\",\"description\":\"Public declarations changed; verify compatibility, documentation, and caller/test coverage.\",\"path\":\"src/cli/app.rs\",\"line\":1}],\"suggestions\":[{\"path\":null,\"line\":null,\"suggestion\":\"Review each reported marker and add or update tests for changed behavior.\"}],\"source\":{\"kind\":\"github_pr_diff\",\"target\":\"github_pr_context\",\"path\":null,\"truncated\":false}}"
+budget = 2
+expect_tool = "pr_review_comment_plan"
+expect_tool_sequence = ["pr_review_comment_plan"]
+expect_tool_output_contains = "pr_review_comment_plan:github_comment_input"
+max_failed_tools = 0
+max_tool_calls = 1
+
 name = "seeded-pr-ci-lint"
 task = "CI job `lint-rust` (run #556) on PR #42 failed at step `cargo clippy`. Reproduce locally, fix the root cause, and rerun the failing check. Failed log tail follows."
 category = "pr_workflow"

@@ -289,8 +289,13 @@ impl DeepSeekClient {
         let child_search_query = child_followup_query(&input.observations);
         let edit_request = derive_edit_request(&task);
         let github_pr_context_request = derive_github_pr_context_request(&task);
+        let remote_pr_review_requested = task_requests_remote_pr_review(&task_lower)
+            || (task_requests_remote_pr_comment_plan(&task_lower)
+                && task_looks_like_pr_workflow(&task_lower)
+                && github_pr_context_request.is_some());
         let latest_github_pr_context =
             latest_successful_tool_summary(&input.observations, "github_pr_context");
+        let latest_review_output = latest_successful_tool_summary(&input.observations, "review");
         let successful_apply_patch_count =
             successful_tool_call_count(&input.observations, "apply_patch");
         let git_diff_call_count = tool_call_count(&input.observations, "git_diff");
@@ -400,7 +405,7 @@ impl DeepSeekClient {
             };
         }
 
-        if edit_request.is_none() && task_requests_remote_pr_review(&task_lower) {
+        if edit_request.is_none() && remote_pr_review_requested {
             if let Some(pr_request) = github_pr_context_request.as_ref() {
                 if tool_available("github_pr_context")
                     && !used_tools.contains("github_pr_context")
@@ -439,6 +444,44 @@ impl DeepSeekClient {
                         },
                     };
                 }
+            }
+            if succeeded_tools.contains("review")
+                && task_requests_remote_pr_comment_plan(&task_lower)
+                && tool_available("pr_review_comment_plan")
+                && !used_tools.contains("pr_review_comment_plan")
+            {
+                if let Some(review_output) = latest_review_output {
+                    let mut tool_input =
+                        ToolInput::new().with_arg("review_output", review_output.to_string());
+                    if let Some(context) = latest_github_pr_context {
+                        tool_input = tool_input.with_arg("pr_context", context.to_string());
+                    }
+                    if let Some(pr_request) = github_pr_context_request.as_ref() {
+                        tool_input = tool_input.with_arg("number", pr_request.number.clone());
+                        if let Some(repo) = pr_request.repo.as_ref() {
+                            tool_input = tool_input.with_arg("repo", repo.clone());
+                        }
+                    }
+                    return ModelResponse {
+                        message: format!(
+                            "{} planner is drafting an evidence-backed PR review comment plan.",
+                            model_name
+                        ),
+                        action: ModelAction::CallTool {
+                            tool_name: "pr_review_comment_plan".to_string(),
+                            input: tool_input,
+                        },
+                    };
+                }
+            }
+            if succeeded_tools.contains("pr_review_comment_plan") {
+                return ModelResponse {
+                    message: format!(
+                        "{} offline planner completed the structured PR review comment plan.",
+                        model_name
+                    ),
+                    action: ModelAction::Finish,
+                };
             }
             if succeeded_tools.contains("review") {
                 return ModelResponse {
@@ -2296,6 +2339,14 @@ fn task_requests_remote_pr_review(task_lower: &str) -> bool {
         && !task_lower.contains("address review")
 }
 
+fn task_requests_remote_pr_comment_plan(task_lower: &str) -> bool {
+    task_lower.contains("comment")
+        || task_lower.contains("draft")
+        || task_lower.contains("post a review")
+        || task_lower.contains("review reply")
+        || task_lower.contains("review response")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GithubPrContextRequest {
     number: String,
@@ -2694,6 +2745,12 @@ const TOOL_SPECS: &[StaticToolSpec] = &[
         description: "Run a structured local code review over a safe relative file, git diff, or github_pr_context output and return issue/suggestion JSON, including marker checks, PR review/status signals, missing tests, public API changes, and dependency/configuration changes. Set semantic=true to run a read-only child-agent semantic review over the same evidence.",
         properties_json: r#"{"target":{"type":"string","description":"File path, literal diff/staged for git diff review, or github_pr_context when passing GitHub PR context."},"kind":{"type":"string","description":"Optional target type: file or diff."},"base":{"type":"string","description":"Optional git base ref when reviewing a diff."},"staged":{"type":"string","description":"Set true to review staged changes."},"cwd":{"type":"string","description":"Workspace or git working directory. Defaults to current directory."},"github_context":{"type":"string","description":"Output from github_pr_context, preferably with include_diff=true, for remote PR review without fetching inside review."},"pr_context":{"type":"string","description":"Alias for github_context."},"max_chars":{"type":"string","description":"Maximum source characters to review, default 200000 and max 1000000."},"semantic":{"type":"string","description":"Set true/1/yes/on to run an additional child-agent semantic review. Default false."},"steps":{"type":"string","description":"Optional semantic child-agent step budget. Default 6 and maximum follows subagent limits."},"agent":{"type":"string","description":"Optional configured agent name for semantic review."},"skill":{"type":"string","description":"Optional skill name for semantic review."}}"#,
         required_json: r#"["target"]"#,
+    },
+    StaticToolSpec {
+        name: "pr_review_comment_plan",
+        description: "Turn structured review JSON plus optional github_pr_context output into a read-only GitHub PR comment plan containing Markdown body text, evidence JSON, and a dry-run github_comment input.",
+        properties_json: r#"{"review_output":{"type":"string","description":"JSON output from the review tool."},"review_json":{"type":"string","description":"Alias for review_output."},"review":{"type":"string","description":"Alias for review_output."},"github_context":{"type":"string","description":"Optional github_pr_context output used to infer PR number and repository."},"pr_context":{"type":"string","description":"Alias for github_context."},"context":{"type":"string","description":"Alias for github_context."},"number":{"type":"string","description":"Optional PR number when not present in context."},"pr":{"type":"string","description":"Alias for number."},"repo":{"type":"string","description":"Optional owner/repo for the suggested github_comment input."},"repository":{"type":"string","description":"Alias for repo."},"max_issues":{"type":"string","description":"Maximum findings to render in the comment, default 8 and max 20."}}"#,
+        required_json: r#"["review_output"]"#,
     },
     StaticToolSpec {
         name: "request_user_input",
@@ -4503,6 +4560,19 @@ mod tests {
     }
 
     #[test]
+    fn build_tool_specs_include_pr_review_comment_plan() {
+        let openai = build_openai_tools(&["pr_review_comment_plan".to_string()]);
+        assert!(openai.contains("\"name\":\"pr_review_comment_plan\""));
+        assert!(openai.contains("\"review_output\""));
+        assert!(openai.contains("\"github_context\""));
+        assert!(openai.contains("\"max_issues\""));
+
+        let anthropic = build_anthropic_tools(&["pr_review_comment_plan".to_string()]);
+        assert!(anthropic.contains("\"name\":\"pr_review_comment_plan\""));
+        assert!(anthropic.contains("\"input_schema\""));
+    }
+
+    #[test]
     fn build_tool_specs_include_request_user_input() {
         let openai = build_openai_tools(&["request_user_input".to_string()]);
         assert!(openai.contains("\"name\":\"request_user_input\""));
@@ -5913,6 +5983,42 @@ mod tests {
     }
 
     #[test]
+    fn offline_planner_fetches_remote_pr_context_for_comment_draft_task() {
+        let request = ModelRequest {
+            system_prompt: String::new(),
+            task: "Draft a PR review comment for PR #42 on owner/repo.".to_string(),
+            image_inputs: Vec::new(),
+            profile_name: "rust".to_string(),
+            profile_hints: Vec::new(),
+            primary_file: None,
+            suggested_test_command: None,
+            available_tools: vec![
+                "github_pr_context".to_string(),
+                "review".to_string(),
+                "pr_review_comment_plan".to_string(),
+            ],
+            observations: Vec::new(),
+            todos: Vec::new(),
+            planning_mode: false,
+            recent_steps: Vec::new(),
+        };
+
+        let response = planner()
+            .respond(request, &mut crate::ui::stream::NoopStreamEvents)
+            .unwrap()
+            .0;
+        match response.action {
+            ModelAction::CallTool { tool_name, input } => {
+                assert_eq!(tool_name, "github_pr_context");
+                assert_eq!(input.get("number"), Some("42"));
+                assert_eq!(input.get("repo"), Some("owner/repo"));
+                assert_eq!(input.get("include_diff"), Some("true"));
+            }
+            ModelAction::Finish => panic!("expected github_pr_context tool call"),
+        }
+    }
+
+    #[test]
     fn offline_planner_reviews_gathered_remote_pr_context() {
         let context = "meta.kind=pr\n\
 meta.number=42\n\
@@ -5990,6 +6096,55 @@ diff --git a/src/cli/app.rs b/src/cli/app.rs\n\
             .unwrap()
             .0;
         assert!(matches!(response.action, ModelAction::Finish));
+    }
+
+    #[test]
+    fn offline_planner_drafts_remote_pr_review_comment_plan() {
+        let context = "meta.kind=pr\n\
+meta.number=42\n\
+PR #42: Route benchmark command\n\
+json:\n\
+{\"number\":42,\"title\":\"Route benchmark command\",\"url\":\"https://github.com/owner/repo/pull/42\"}\n\
+diff:\n\
+diff --git a/src/cli/app.rs b/src/cli/app.rs\n";
+        let review_output =
+            "{\"issues\":[{\"severity\":\"warning\",\"title\":\"source change without test change\"}],\"source\":{\"kind\":\"github_pr_diff\",\"target\":\"github_pr_context\",\"truncated\":false}}";
+        let request = ModelRequest {
+            system_prompt: String::new(),
+            task: "Review pull request #42 'Route benchmark command' on owner/repo and draft a PR comment with the findings.".to_string(),
+            image_inputs: Vec::new(),
+            profile_name: "rust".to_string(),
+            profile_hints: Vec::new(),
+            primary_file: None,
+            suggested_test_command: None,
+            available_tools: vec![
+                "github_pr_context".to_string(),
+                "review".to_string(),
+                "pr_review_comment_plan".to_string(),
+            ],
+            observations: vec![
+                Observation::ok("github_pr_context", context),
+                Observation::ok("review", review_output),
+            ],
+            todos: Vec::new(),
+            planning_mode: false,
+            recent_steps: Vec::new(),
+        };
+
+        let response = planner()
+            .respond(request, &mut crate::ui::stream::NoopStreamEvents)
+            .unwrap()
+            .0;
+        match response.action {
+            ModelAction::CallTool { tool_name, input } => {
+                assert_eq!(tool_name, "pr_review_comment_plan");
+                assert_eq!(input.get("review_output"), Some(review_output));
+                assert_eq!(input.get("pr_context"), Some(context));
+                assert_eq!(input.get("number"), Some("42"));
+                assert_eq!(input.get("repo"), Some("owner/repo"));
+            }
+            ModelAction::Finish => panic!("expected pr_review_comment_plan tool call"),
+        }
     }
 
     #[test]

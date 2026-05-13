@@ -35,7 +35,7 @@ use crate::tools::project_map::ProjectMapTool;
 use crate::tools::read_file::ReadFileTool;
 use crate::tools::recall_archive::RecallArchiveTool;
 use crate::tools::revert_turn::RevertTurnTool;
-use crate::tools::review::ReviewTool;
+use crate::tools::review::{PrReviewCommentPlanTool, ReviewTool};
 use crate::tools::rlm::{
     RlmBatchTool, RlmChunkPlanTool, RlmMapReducePlanTool, RlmPythonSessionTool,
     RlmPythonSessionsTool, RlmPythonTool, RlmRecursivePlanTool, RlmTool,
@@ -779,6 +779,7 @@ pub fn default_registry_with_context(
         Box::new(ImageOcrTool),
         Box::new(ImageAnalyzeTool::new(&config)),
         Box::new(ReviewTool::new(config.clone(), subagent_depth)),
+        Box::new(PrReviewCommentPlanTool),
         Box::new(ToolSearchTool {
             tool_name: "tool_search_tool_regex",
             mode: ToolSearchMode::Regex,

@@ -36,7 +36,9 @@ available through `serve --mcp` or ACP's inherited `session/tools/list` bridge:
 ## Implementation
 
 - MCP `tools/list` now advertises `review`, `recall_archive`,
-  `tool_search_tool_regex`, and `tool_search_tool_bm25`.
+  `tool_search_tool_regex`, and `tool_search_tool_bm25`. Follow-up PR review
+  work also exposes the read-only `pr_review_comment_plan` helper through the
+  same bridge.
 - MCP `tools/call` dispatches those names to the existing local tool
   implementations.
 - ACP inherits the same read-only tools through the session-scoped MCP adapter,

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 
@@ -7,8 +8,8 @@ use crate::error::{app_error, AppResult};
 use crate::tools::dispatch_subagent::DispatchSubagentTool;
 use crate::tools::types::{Tool, ToolInput, ToolOutput};
 use crate::util::json::{
-    json_as_array, json_as_object, json_as_string, json_value_to_string, parse_root_object,
-    JsonValue,
+    json_as_array, json_as_object, json_as_string, json_as_u64, json_value_to_string,
+    parse_root_object, JsonValue,
 };
 
 const DEFAULT_MAX_CHARS: usize = 200_000;
@@ -20,6 +21,8 @@ pub struct ReviewTool {
     config: Option<AppConfig>,
     parent_depth: usize,
 }
+
+pub struct PrReviewCommentPlanTool;
 
 impl ReviewTool {
     pub fn new(config: AppConfig, parent_depth: usize) -> Self {
@@ -66,6 +69,63 @@ impl Tool for ReviewTool {
         };
         Ok(ToolOutput {
             summary: json_value_to_string(&output),
+        })
+    }
+}
+
+impl Tool for PrReviewCommentPlanTool {
+    fn name(&self) -> &str {
+        "pr_review_comment_plan"
+    }
+
+    fn execute(&self, input: ToolInput) -> AppResult<ToolOutput> {
+        let review_output = review_output_arg(&input)?;
+        let root = parse_root_object(review_output)?;
+        let issues = comment_issues_from_review(&root);
+        let suggestions = comment_suggestions_from_review(&root);
+        let source = comment_source_from_review(&root);
+        let max_issues = parse_comment_max_issues(&input);
+        let pr_context = input
+            .get("github_context")
+            .or_else(|| input.get("pr_context"))
+            .or_else(|| input.get("context"))
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let pr_number = comment_pr_number(&input, pr_context);
+        let repo = comment_repo(&input, pr_context);
+        let body =
+            render_pr_review_comment_body(&issues, &suggestions, source.as_ref(), max_issues);
+        let evidence = pr_review_comment_evidence(&root, &issues, source.as_ref(), max_issues);
+        let github_input =
+            pr_review_comment_github_input(pr_number.as_deref(), repo.as_deref(), &body, &evidence);
+
+        let mut fields = vec![
+            (
+                "summary",
+                JsonValue::String(format!(
+                    "Prepared PR review comment plan with {} finding(s).",
+                    issues.len()
+                )),
+            ),
+            ("comment_body", JsonValue::String(body)),
+            ("evidence", evidence),
+            (
+                "ready_to_comment",
+                JsonValue::Bool(pr_number.as_deref().is_some_and(|value| !value.is_empty())),
+            ),
+        ];
+        if let Some(number) = pr_number {
+            fields.push(("number", JsonValue::String(number)));
+        }
+        if let Some(repo) = repo {
+            fields.push(("repo", JsonValue::String(repo)));
+        }
+        if let Some(input) = github_input {
+            fields.push(("github_comment_input", input));
+        }
+
+        Ok(ToolOutput {
+            summary: json_value_to_string(&comment_json_object(fields)),
         })
     }
 }
@@ -721,6 +781,331 @@ fn review_output_with_semantic(mut deterministic: JsonValue, semantic: JsonValue
     deterministic
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommentIssue {
+    severity: String,
+    title: String,
+    description: String,
+    path: Option<String>,
+    line: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommentSource {
+    kind: String,
+    target: String,
+    truncated: bool,
+}
+
+fn review_output_arg(input: &ToolInput) -> AppResult<&str> {
+    input
+        .get("review_output")
+        .or_else(|| input.get("review_json"))
+        .or_else(|| input.get("review"))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| app_error("pr_review_comment_plan requires `review_output`"))
+}
+
+fn parse_comment_max_issues(input: &ToolInput) -> usize {
+    input
+        .get("max_issues")
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(8)
+        .clamp(1, 20)
+}
+
+fn comment_issues_from_review(root: &BTreeMap<String, JsonValue>) -> Vec<CommentIssue> {
+    let Some(items) = root.get("issues").and_then(json_as_array) else {
+        return Vec::new();
+    };
+    let mut issues = Vec::new();
+    for item in items {
+        let Some(object) = json_as_object(item) else {
+            continue;
+        };
+        let title = json_string_field(object, "title")
+            .unwrap_or("untitled finding")
+            .to_string();
+        let description = json_string_field(object, "description")
+            .unwrap_or("")
+            .to_string();
+        let severity = json_string_field(object, "severity")
+            .unwrap_or("info")
+            .to_ascii_lowercase();
+        let path = json_string_field(object, "path").map(str::to_string);
+        let line = object.get("line").and_then(json_as_u64);
+        issues.push(CommentIssue {
+            severity,
+            title,
+            description,
+            path,
+            line,
+        });
+    }
+    issues.sort_by_key(|issue| severity_rank(&issue.severity));
+    issues
+}
+
+fn comment_suggestions_from_review(root: &BTreeMap<String, JsonValue>) -> Vec<String> {
+    let Some(items) = root.get("suggestions").and_then(json_as_array) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(json_as_object)
+        .filter_map(|object| json_string_field(object, "suggestion"))
+        .map(|value| compact_text(value, 240))
+        .collect()
+}
+
+fn comment_source_from_review(root: &BTreeMap<String, JsonValue>) -> Option<CommentSource> {
+    let object = root.get("source").and_then(json_as_object)?;
+    let kind = json_string_field(object, "kind").unwrap_or("unknown");
+    let target = json_string_field(object, "target").unwrap_or("unknown");
+    let truncated = matches!(object.get("truncated"), Some(JsonValue::Bool(true)));
+    Some(CommentSource {
+        kind: kind.to_string(),
+        target: target.to_string(),
+        truncated,
+    })
+}
+
+fn render_pr_review_comment_body(
+    issues: &[CommentIssue],
+    suggestions: &[String],
+    source: Option<&CommentSource>,
+    max_issues: usize,
+) -> String {
+    let mut body = String::new();
+    body.push_str("## Automated PR Review\n\n");
+    if let Some(source) = source {
+        body.push_str(&format!(
+            "Reviewed `{}` target `{}`.",
+            source.kind, source.target
+        ));
+        if source.truncated {
+            body.push_str(" The reviewed source was truncated.");
+        }
+        body.push_str("\n\n");
+    }
+    if issues.is_empty() {
+        body.push_str(
+            "No deterministic issues were found. This is not a substitute for semantic review.\n",
+        );
+    } else {
+        body.push_str(&format!(
+            "Found {} deterministic issue(s). Findings are ordered by severity.\n\n",
+            issues.len()
+        ));
+        for issue in issues.iter().take(max_issues) {
+            body.push_str("- ");
+            body.push_str(&issue.severity);
+            body.push_str(": ");
+            if let Some(location) = comment_issue_location(issue) {
+                body.push_str(&location);
+                body.push_str(" - ");
+            }
+            body.push_str(&compact_text(&issue.title, 120));
+            if !issue.description.trim().is_empty() {
+                body.push_str(" - ");
+                body.push_str(&compact_text(&issue.description, 220));
+            }
+            body.push('\n');
+        }
+        if issues.len() > max_issues {
+            body.push_str(&format!(
+                "- {} additional finding(s) omitted from this comment plan.\n",
+                issues.len() - max_issues
+            ));
+        }
+    }
+    if !suggestions.is_empty() {
+        body.push_str("\nNext steps:\n");
+        for suggestion in suggestions.iter().take(3) {
+            body.push_str("- ");
+            body.push_str(suggestion);
+            body.push('\n');
+        }
+    }
+    body
+}
+
+fn pr_review_comment_evidence(
+    root: &BTreeMap<String, JsonValue>,
+    issues: &[CommentIssue],
+    source: Option<&CommentSource>,
+    max_issues: usize,
+) -> JsonValue {
+    let mut error_count = 0usize;
+    let mut warning_count = 0usize;
+    let mut info_count = 0usize;
+    for issue in issues {
+        match issue.severity.as_str() {
+            "error" => error_count += 1,
+            "warning" => warning_count += 1,
+            _ => info_count += 1,
+        }
+    }
+    let mut fields = vec![
+        ("tool", JsonValue::String("review".to_string())),
+        (
+            "review_summary",
+            JsonValue::String(
+                root.get("summary")
+                    .and_then(json_as_string)
+                    .unwrap_or("review output")
+                    .to_string(),
+            ),
+        ),
+        ("issue_count", JsonValue::Number(issues.len().to_string())),
+        (
+            "rendered_issue_count",
+            JsonValue::Number(issues.len().min(max_issues).to_string()),
+        ),
+        (
+            "severity_counts",
+            json_object([
+                ("error", JsonValue::Number(error_count.to_string())),
+                ("warning", JsonValue::Number(warning_count.to_string())),
+                ("info", JsonValue::Number(info_count.to_string())),
+            ]),
+        ),
+    ];
+    if let Some(source) = source {
+        fields.push(("source_kind", JsonValue::String(source.kind.clone())));
+        fields.push(("source_target", JsonValue::String(source.target.clone())));
+        fields.push(("source_truncated", JsonValue::Bool(source.truncated)));
+    }
+    comment_json_object(fields)
+}
+
+fn pr_review_comment_github_input(
+    number: Option<&str>,
+    repo: Option<&str>,
+    body: &str,
+    evidence: &JsonValue,
+) -> Option<JsonValue> {
+    let number = number?;
+    let mut fields = vec![
+        ("target", JsonValue::String("pr".to_string())),
+        ("number", JsonValue::String(number.to_string())),
+        ("body", JsonValue::String(body.to_string())),
+        (
+            "evidence",
+            JsonValue::String(json_value_to_string(evidence)),
+        ),
+        ("dry_run", JsonValue::String("true".to_string())),
+    ];
+    if let Some(repo) = repo {
+        fields.push(("repo", JsonValue::String(repo.to_string())));
+    }
+    Some(comment_json_object(fields))
+}
+
+fn comment_pr_number(input: &ToolInput, pr_context: Option<&str>) -> Option<String> {
+    input
+        .get("number")
+        .or_else(|| input.get("pr"))
+        .or_else(|| input.get("ref"))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| pr_context.and_then(pr_context_number))
+}
+
+fn comment_repo(input: &ToolInput, pr_context: Option<&str>) -> Option<String> {
+    input
+        .get("repo")
+        .or_else(|| input.get("repository"))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| pr_context.and_then(pr_context_repo))
+}
+
+fn pr_context_number(context: &str) -> Option<String> {
+    for line in context.lines() {
+        if let Some(value) = line.strip_prefix("meta.number=") {
+            let number = value.trim();
+            if number.chars().all(|ch| ch.is_ascii_digit()) {
+                return Some(number.to_string());
+            }
+        }
+        if let Some(rest) = line.trim_start().strip_prefix("PR #") {
+            let number: String = rest.chars().take_while(|ch| ch.is_ascii_digit()).collect();
+            if !number.is_empty() {
+                return Some(number);
+            }
+        }
+    }
+    let json = github_pr_context_json(context)?;
+    let root = parse_root_object(json).ok()?;
+    root.get("number")
+        .and_then(json_as_u64)
+        .map(|value| value.to_string())
+}
+
+fn pr_context_repo(context: &str) -> Option<String> {
+    let json = github_pr_context_json(context)?;
+    let root = parse_root_object(json).ok()?;
+    let url = root.get("url").and_then(json_as_string)?;
+    github_repo_from_pr_url(url)
+}
+
+fn github_repo_from_pr_url(url: &str) -> Option<String> {
+    let tail = url.strip_prefix("https://github.com/")?;
+    let mut parts = tail.split('/');
+    let owner = parts.next()?;
+    let repo = parts.next()?;
+    let kind = parts.next()?;
+    if kind != "pull" || owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some(format!("{owner}/{repo}"))
+}
+
+fn comment_issue_location(issue: &CommentIssue) -> Option<String> {
+    let path = issue.path.as_deref()?.trim();
+    if path.is_empty() {
+        return None;
+    }
+    Some(match issue.line {
+        Some(line) => format!("`{path}:{line}`"),
+        None => format!("`{path}`"),
+    })
+}
+
+fn severity_rank(severity: &str) -> usize {
+    match severity {
+        "error" => 0,
+        "warning" => 1,
+        _ => 2,
+    }
+}
+
+fn compact_text(value: &str, max_chars: usize) -> String {
+    let single_line = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if single_line.chars().count() <= max_chars {
+        return single_line;
+    }
+    let mut out = String::new();
+    for ch in single_line.chars().take(max_chars.saturating_sub(3)) {
+        out.push(ch);
+    }
+    out.push_str("...");
+    out
+}
+
+fn comment_json_object(fields: Vec<(&str, JsonValue)>) -> JsonValue {
+    JsonValue::Object(
+        fields
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value))
+            .collect(),
+    )
+}
+
 fn render_semantic_review_task(
     source: &ReviewSource,
     issues: &[ReviewIssue],
@@ -1162,6 +1547,34 @@ json:\n\
             .contains(r#""title":"GitHub PR status checks failing""#));
         assert!(output.summary.contains("unit-tests"));
         assert!(output.summary.contains("deploy"));
+    }
+
+    #[test]
+    fn pr_review_comment_plan_renders_comment_and_github_input() {
+        let review_output = r#"{"summary":"Reviewed github_pr_diff target `github_pr_context` with 2 deterministic issue(s).","issues":[{"severity":"info","title":"public API change","description":"Public declarations changed; verify compatibility.","path":"src/lib.rs","line":7},{"severity":"warning","title":"GitHub PR status checks failing","description":"1 status check(s) are failing or cancelled: unit-tests","path":null,"line":null}],"suggestions":[{"path":null,"line":null,"suggestion":"Review each reported marker and add or update tests for changed behavior."}],"overall_assessment":"Deterministic review found markers that should be resolved or justified.","source":{"kind":"github_pr_diff","target":"github_pr_context","path":null,"truncated":false}}"#;
+        let pr_context = "meta.kind=pr\n\
+meta.number=42\n\
+PR #42: Add API\n\
+json:\n\
+{\"number\":42,\"url\":\"https://github.com/acme/widgets/pull/42\"}\n";
+
+        let output = PrReviewCommentPlanTool
+            .execute(
+                ToolInput::new()
+                    .with_arg("review_output", review_output)
+                    .with_arg("pr_context", pr_context),
+            )
+            .unwrap();
+
+        assert!(output.summary.contains(r#""ready_to_comment":true"#));
+        assert!(output.summary.contains(r#""number":"42""#));
+        assert!(output.summary.contains(r#""repo":"acme/widgets""#));
+        assert!(output.summary.contains("## Automated PR Review"));
+        assert!(output
+            .summary
+            .contains("warning: GitHub PR status checks failing"));
+        assert!(output.summary.contains(r#""github_comment_input""#));
+        assert!(output.summary.contains(r#""dry_run":"true""#));
     }
 
     #[test]

@@ -482,8 +482,12 @@ Remaining:
   review tasks through `github_pr_context include_diff=true` and then `review`
   over that gathered context, with a seeded benchmark fixture covering blocker
   metadata
-- Remaining: stronger live end-to-end semantic review fixtures / remote PR
-  comment/retry loops
+- Remote PR comment planning now exists: `pr_review_comment_plan` converts
+  structured `review` JSON plus optional `github_pr_context` into Markdown body
+  text, evidence JSON, and a dry-run `github_comment` input; the offline planner
+  invokes it for remote PR review tasks that ask to draft or prepare a comment
+- Remaining: stronger live end-to-end semantic review fixtures / actual remote
+  PR post/retry loops through the guarded GitHub mutation path
 
 ### Phase G2: MCP Server Mode
 
@@ -502,8 +506,9 @@ Landed first slice:
   `validate_data`, `git_log`, `git_show`, `git_blame`,
   `github_issue_context`, `github_pr_context`, and `diagnostics`; local
   read-only helpers exposed through MCP:
-  `review`, `recall_archive`, `tool_search_tool_regex`, and
-  `tool_search_tool_bm25`; interactive/local helpers exposed through MCP:
+  `review`, `pr_review_comment_plan`, `recall_archive`,
+  `tool_search_tool_regex`, and `tool_search_tool_bm25`; interactive/local
+  helpers exposed through MCP:
   `load_skill`, `request_user_input`, and `notify`
 - code-executing MCP side-effect tools exposed only with trusted side effects or
   durable approvals: `run_tests`, `run_shell`
@@ -602,8 +607,8 @@ Landed first slice:
   aggregate `web_run` wrapper in addition to the narrower `web_search`,
   `fetch_url`, and `finance` tools
 - MCP and ACP read-only tool bridges now expose agent-compatible local helper
-  tools `review`, `recall_archive`, `tool_search_tool_regex`, and
-  `tool_search_tool_bm25`
+  tools `review`, `pr_review_comment_plan`, `recall_archive`,
+  `tool_search_tool_regex`, and `tool_search_tool_bm25`
 - MCP and ACP tool bridges now expose `image_ocr` and `pandoc_convert`; inline
   `pandoc_convert` is available by default, while `output_path` conversion
   requires durable write approvals

@@ -316,6 +316,7 @@ Exposed tools:
 | `github_issue_context` | Read GitHub issue metadata, body, labels, assignees, and optional comments through `gh` |
 | `github_pr_context` | Read GitHub PR metadata, comments, reviews, checks, files, and optional patch diff through `gh` |
 | `review` | Run deterministic local code review over a workspace file, git diff, or supplied GitHub PR context |
+| `pr_review_comment_plan` | Convert structured review JSON plus optional PR context into a read-only GitHub PR comment body and evidence plan |
 | `recall_archive` | Search durable runtime threads, turns, and items for prior context |
 | `tool_search_tool_regex` | Search the static DeepSeekCode tool catalog with a lightweight regex-like pattern |
 | `tool_search_tool_bm25` | Rank static DeepSeekCode tools by local term matching over names, descriptions, and schemas |
@@ -1128,7 +1129,11 @@ such as requested changes, failing/cancelled status checks, and missing
 `include_diff=true` context. The offline planner has an explicit remote PR
 review route: when `github_pr_context` and `review` are both available, PR review
 tasks gather `github_pr_context include_diff=true` first and then run `review`
-over the gathered context.
+over the gathered context. If the task asks to draft or prepare a PR comment and
+`pr_review_comment_plan` is available, the planner turns the structured review
+JSON plus optional PR context into Markdown body text, evidence JSON, and a
+dry-run `github_comment` input. The planner still does not post comments without
+the guarded `github_comment` write tool and its approval path.
 Agent-visible skill tooling includes DeepSeek-TUI-compatible `load_skill`.
 DeepSeekCode maps that tool onto its existing TOML skill registry: repo skills
 and the configured `workspace.user_skills_dir` are searched with user skills
@@ -1219,6 +1224,10 @@ GitHub mutation tools `github_comment` and `github_close_issue` require write
 approval. Comments require a non-empty evidence JSON object; issue closure also
 requires acceptance criteria plus `files_changed`, `tests_run`, and
 `final_status` evidence, and refuses dirty worktrees unless `allow_dirty=true`.
+For PR review comments, `pr_review_comment_plan` can prepare the body and
+evidence without invoking `gh`; callers can then pass its dry-run
+`github_comment_input` through the normal approval-gated mutation path when they
+explicitly want to post.
 
 Agent runs also expose DeepSeek-TUI-compatible `revert_turn`. It restores
 workspace files from rollback snapshots by `snapshot_id`, `checkpoint_id`,
