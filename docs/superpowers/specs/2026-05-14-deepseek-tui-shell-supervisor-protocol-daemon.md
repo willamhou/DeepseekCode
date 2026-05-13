@@ -17,6 +17,8 @@ native supervisor-owned PTY support yet.
 - Supported methods are `health`, `status`, `show`, and `shutdown`.
 - Unsupported methods return `status="unsupported"` with `pty_backend="none"`
   and `native_pty=false`, preserving the boundary before native PTY sessions.
+- The supervisor manifest and status output distinguish supported protocol
+  methods from unsupported future PTY methods.
 - Malformed protocol requests return structured error responses without stopping
   the daemon.
 - `deepseek agents service` now renders systemd/launchd shell-supervisor service
@@ -26,8 +28,10 @@ native supervisor-owned PTY support yet.
 
 - `cargo test cli_from_argv_routes_agents_subcommands --lib`
 - `cargo test shell_supervisor --lib`
+- `cargo test exec_shell_supervisor_status --lib`
 - `cargo test service_templates_render_runtime_and_agent_supervisors --lib`
 - `cargo test create_release_package_copies_binary_and_writes_scripts --lib`
+- `cargo run -- agents shell-supervisor --once --json`
 - `cargo fmt --check`
 - `cargo check`
 - `git diff --check`

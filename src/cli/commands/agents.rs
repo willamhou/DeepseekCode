@@ -31,7 +31,10 @@ use crate::model::protocol::{ModelAction, ModelRequest, ObservationStatus};
 use crate::tools::dispatch_subagent::{
     active_agent_thread_path, agent_threads_dir, thread_file_path, validate_thread_id,
 };
-use crate::tools::exec_shell::ExecShellSupervisorStatusTool;
+use crate::tools::exec_shell::{
+    ExecShellSupervisorStatusTool, SHELL_SUPERVISOR_SUPPORTED_METHODS,
+    SHELL_SUPERVISOR_UNSUPPORTED_PTY_METHODS,
+};
 use crate::tools::rlm::{
     rlm_live_session_ids_by_runtime_thread, RlmLiveCancelTool, RlmLiveDrainTool, RlmLiveEventsTool,
     RlmLiveRecoverTool, RlmLiveRunNextTool, RlmLiveStatusTool, RlmLiveStopTool, RlmLiveWaitTool,
@@ -825,7 +828,7 @@ fn shell_supervisor_protocol_response(
     socket: &Path,
     epoch: &str,
 ) -> JsonValue {
-    let supported = matches!(method, "health" | "status" | "show" | "shutdown");
+    let supported = SHELL_SUPERVISOR_SUPPORTED_METHODS.contains(&method);
     let mut response = BTreeMap::from([
         (
             "kind".to_string(),
@@ -855,6 +858,14 @@ fn shell_supervisor_protocol_response(
         (
             "protocol".to_string(),
             JsonValue::String("newline-json-v1".to_string()),
+        ),
+        (
+            "methods".to_string(),
+            shell_supervisor_method_json(SHELL_SUPERVISOR_SUPPORTED_METHODS),
+        ),
+        (
+            "unsupported_methods".to_string(),
+            shell_supervisor_method_json(SHELL_SUPERVISOR_UNSUPPORTED_PTY_METHODS),
         ),
         (
             "pty_backend".to_string(),
@@ -914,6 +925,14 @@ fn shell_supervisor_protocol_error_response(
             JsonValue::String("newline-json-v1".to_string()),
         ),
         (
+            "methods".to_string(),
+            shell_supervisor_method_json(SHELL_SUPERVISOR_SUPPORTED_METHODS),
+        ),
+        (
+            "unsupported_methods".to_string(),
+            shell_supervisor_method_json(SHELL_SUPERVISOR_UNSUPPORTED_PTY_METHODS),
+        ),
+        (
             "pty_backend".to_string(),
             JsonValue::String("none".to_string()),
         ),
@@ -950,6 +969,14 @@ fn write_shell_supervisor_manifest(cwd: &Path, socket: &Path, epoch: &str) -> Ap
             JsonValue::String("newline-json-v1".to_string()),
         ),
         (
+            "methods".to_string(),
+            shell_supervisor_method_json(SHELL_SUPERVISOR_SUPPORTED_METHODS),
+        ),
+        (
+            "unsupported_methods".to_string(),
+            shell_supervisor_method_json(SHELL_SUPERVISOR_UNSUPPORTED_PTY_METHODS),
+        ),
+        (
             "active_jobs".to_string(),
             JsonValue::Number("0".to_string()),
         ),
@@ -968,6 +995,15 @@ fn write_shell_supervisor_manifest(cwd: &Path, socket: &Path, epoch: &str) -> Ap
         json_value_to_string(&manifest),
     )?;
     Ok(())
+}
+
+fn shell_supervisor_method_json(methods: &[&str]) -> JsonValue {
+    JsonValue::Array(
+        methods
+            .iter()
+            .map(|method| JsonValue::String((*method).to_string()))
+            .collect(),
+    )
 }
 
 fn shell_supervisor_event_json(
@@ -2654,6 +2690,10 @@ mod tests {
         let manifest = std::fs::read_to_string(state_dir.join("manifest.json")).unwrap();
         assert!(manifest.contains(r#""kind":"deepseek.exec_shell.supervisor.v1""#));
         assert!(manifest.contains(r#""protocol":"newline-json-v1""#));
+        assert!(manifest.contains(r#""methods":["health","status","show","shutdown"]"#));
+        assert!(manifest.contains(
+            r#""unsupported_methods":["start","wait","replay","attach","stdin","resize","cancel"]"#
+        ));
         assert!(manifest.contains(r#""control_token_hash":null"#));
         assert!(!manifest.contains("control_token\":\""));
     }

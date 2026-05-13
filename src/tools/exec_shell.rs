@@ -21,6 +21,10 @@ const DEFAULT_REPLAY_LIMIT_BYTES: u64 = 20_000;
 const MAX_REPLAY_LIMIT_BYTES: u64 = 100_000;
 const PTY_BACKEND_SCRIPT: &str = "script";
 const PTY_BACKEND_NONE: &str = "none";
+pub const SHELL_SUPERVISOR_SUPPORTED_METHODS: &[&str] = &["health", "status", "show", "shutdown"];
+pub const SHELL_SUPERVISOR_UNSUPPORTED_PTY_METHODS: &[&str] = &[
+    "start", "wait", "replay", "attach", "stdin", "resize", "cancel",
+];
 
 static JOB_COUNTER: AtomicU64 = AtomicU64::new(0);
 static SHELL_JOBS: OnceLock<Mutex<BackgroundShellManager>> = OnceLock::new();
@@ -1226,6 +1230,8 @@ struct ShellSupervisorManifest {
     supervisor_socket: Option<String>,
     supervisor_epoch: Option<String>,
     protocol: Option<String>,
+    methods: Vec<String>,
+    unsupported_methods: Vec<String>,
     started_at: Option<String>,
     updated_at: Option<String>,
     active_jobs: Option<u64>,
@@ -1695,7 +1701,7 @@ fn render_shell_supervisor_status(cwd: &str) -> AppResult<String> {
         supervisor_alive,
     );
     Ok(format!(
-        "kind: deepseek.exec_shell.supervisor_status.v1\nstatus: {status}\nplatform: {}\ncwd: {}\nstate_dir: {}\nmanifest: {}\nmanifest_exists: {}\nmanifest_kind: {}\nsocket: {}\nsocket_kind: {socket_kind}\nsupervisor_pid: {}\nsupervisor_alive: {}\nsupervisor_epoch: {}\nprotocol: {}\nmethods: start,show,wait,replay,attach,stdin,resize,cancel,shutdown\nactive_jobs: {}\nstarted_at: {}\nupdated_at: {}\nnote: this is the shell supervisor protocol/status skeleton; native PTY ownership, live attach, and TIOCSWINSZ resize are not implemented until a real supervisor process writes this state.\n",
+        "kind: deepseek.exec_shell.supervisor_status.v1\nstatus: {status}\nplatform: {}\ncwd: {}\nstate_dir: {}\nmanifest: {}\nmanifest_exists: {}\nmanifest_kind: {}\nsocket: {}\nsocket_kind: {socket_kind}\nsupervisor_pid: {}\nsupervisor_alive: {}\nsupervisor_epoch: {}\nprotocol: {}\nmethods: {}\nunsupported_methods: {}\nactive_jobs: {}\nstarted_at: {}\nupdated_at: {}\nnote: this is the shell supervisor protocol/status skeleton; native PTY ownership, live attach, and TIOCSWINSZ resize are not implemented until a real supervisor process writes this state.\n",
         shell_supervisor_platform_label(),
         cwd,
         state_dir.display(),
@@ -1716,6 +1722,16 @@ fn render_shell_supervisor_status(cwd: &str) -> AppResult<String> {
             manifest
                 .as_ref()
                 .and_then(|manifest| manifest.protocol.as_deref())
+        ),
+        shell_supervisor_method_label(
+            manifest.as_ref().map(|manifest| manifest.methods.as_slice()),
+            SHELL_SUPERVISOR_SUPPORTED_METHODS,
+        ),
+        shell_supervisor_method_label(
+            manifest
+                .as_ref()
+                .map(|manifest| manifest.unsupported_methods.as_slice()),
+            SHELL_SUPERVISOR_UNSUPPORTED_PTY_METHODS,
         ),
         shell_optional_u64_label(manifest.as_ref().and_then(|manifest| manifest.active_jobs)),
         shell_optional_string_label(
@@ -1746,6 +1762,13 @@ fn shell_supervisor_status_label(
         (true, false, Some(true)) => "socket_missing",
         (true, true, None) => "socket_without_pid",
         (true, false, None) => "manifest_only",
+    }
+}
+
+fn shell_supervisor_method_label(methods: Option<&[String]>, fallback: &[&str]) -> String {
+    match methods.filter(|methods| !methods.is_empty()) {
+        Some(methods) => methods.join(","),
+        None => fallback.join(","),
     }
 }
 
@@ -1784,6 +1807,8 @@ fn read_shell_supervisor_manifest(path: &Path) -> AppResult<ShellSupervisorManif
             .get("protocol")
             .and_then(json_as_string)
             .map(str::to_string),
+        methods: json_string_array(root.get("methods")),
+        unsupported_methods: json_string_array(root.get("unsupported_methods")),
         started_at: root
             .get("started_at")
             .and_then(json_as_string)
@@ -1794,6 +1819,17 @@ fn read_shell_supervisor_manifest(path: &Path) -> AppResult<ShellSupervisorManif
             .map(str::to_string),
         active_jobs: root.get("active_jobs").and_then(json_as_u64),
     })
+}
+
+fn json_string_array(value: Option<&JsonValue>) -> Vec<String> {
+    let Some(JsonValue::Array(items)) = value else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(json_as_string)
+        .map(str::to_string)
+        .collect()
 }
 
 fn render_durable_snapshot(cwd: &str, task_id: &str) -> AppResult<String> {
@@ -2993,13 +3029,19 @@ mod tests {
             "{}",
             absent.summary
         );
+        assert!(absent
+            .summary
+            .contains("methods: health,status,show,shutdown"));
+        assert!(absent
+            .summary
+            .contains("unsupported_methods: start,wait,replay,attach,stdin,resize,cancel"));
 
         let state_dir = shell_supervisor_state_dir(&cwd);
         fs::create_dir_all(&state_dir).unwrap();
         fs::write(
             state_dir.join("manifest.json"),
             format!(
-                "{{\"kind\":\"deepseek.exec_shell.supervisor.v1\",\"supervisor_pid\":{},\"supervisor_socket\":\"{}\",\"supervisor_epoch\":\"epoch+77\",\"protocol\":\"newline-json-v1\",\"active_jobs\":2,\"started_at\":\"epoch+70\",\"updated_at\":\"epoch+76\",\"control_token_hash\":\"sha256:do-not-print\"}}",
+                "{{\"kind\":\"deepseek.exec_shell.supervisor.v1\",\"supervisor_pid\":{},\"supervisor_socket\":\"{}\",\"supervisor_epoch\":\"epoch+77\",\"protocol\":\"newline-json-v1\",\"methods\":[\"health\",\"status\",\"show\",\"shutdown\"],\"unsupported_methods\":[\"start\",\"attach\"],\"active_jobs\":2,\"started_at\":\"epoch+70\",\"updated_at\":\"epoch+76\",\"control_token_hash\":\"sha256:do-not-print\"}}",
                 std::process::id(),
                 state_dir.join("supervisor.sock").display()
             ),
@@ -3026,6 +3068,18 @@ mod tests {
         );
         assert!(
             status.summary.contains("protocol: newline-json-v1"),
+            "{}",
+            status.summary
+        );
+        assert!(
+            status
+                .summary
+                .contains("methods: health,status,show,shutdown"),
+            "{}",
+            status.summary
+        );
+        assert!(
+            status.summary.contains("unsupported_methods: start,attach"),
             "{}",
             status.summary
         );
