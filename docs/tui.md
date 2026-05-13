@@ -25,6 +25,8 @@ Current surfaces:
   session, active thread, transcript items, tasks, automations, pending
   approvals/user input, token/cache telemetry, context policy, and estimated
   cost in the detail panel
+- token and cost inspection with `tokens` / `/tokens` and `cost` / `/cost`,
+  matching DeepSeek-TUI's runtime usage and approximate spend commands
 - composer and command-palette editing preserve terminal modifier keys, including
   Ctrl-based line, word, and cursor controls
 - task panel with active thread status, runtime item count, item state/type
@@ -270,6 +272,8 @@ Command palette commands currently implemented:
 | `network remove <host>`, `/network remove <host>` | Remove a host from allow and deny lists |
 | `network default <allow\|deny\|prompt>` | Set the default host policy |
 | `status`, `/status` | Show selected session, active thread, task/input, usage, cache, context, and cost status in the right-side detail panel |
+| `tokens`, `/tokens` | Show active-thread context, last input/output tokens, cache hit/miss, cumulative token usage, and approximate cost |
+| `cost`, `/cost` | Show active-thread approximate total, input, and output cost with telemetry caveats |
 | `automations`, `automation` | Show active-thread automation count in the status bar |
 | `automation trigger`, `automation run` | Trigger the first active automation in the current thread |
 | `automation trigger <id> [prompt]` | Trigger one current-thread automation with an optional prompt override |

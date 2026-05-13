@@ -1153,6 +1153,8 @@ fn mcp_detail_summary(
         TuiMcpDetailKind::Memory => Err(app_error("memory details are not MCP details")),
         TuiMcpDetailKind::Network => Err(app_error("network details are not MCP details")),
         TuiMcpDetailKind::Status => Err(app_error("status details are not MCP details")),
+        TuiMcpDetailKind::Tokens => Err(app_error("token details are not MCP details")),
+        TuiMcpDetailKind::Cost => Err(app_error("cost details are not MCP details")),
         TuiMcpDetailKind::Rollback => Err(app_error("rollback details are not MCP details")),
         TuiMcpDetailKind::Reasoning => Err(app_error("reasoning details are not MCP details")),
         TuiMcpDetailKind::ComposerStash => {

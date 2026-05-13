@@ -357,7 +357,11 @@ impl TuiUserInputOption {
 pub struct TuiUsageSummary {
     pub thread_id: String,
     pub record_count: usize,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
     pub total_tokens: u64,
+    pub latest_prompt_tokens: u64,
+    pub latest_completion_tokens: u64,
     pub latest_total_tokens: u64,
     pub prompt_cache_hit_tokens: u64,
     pub prompt_cache_miss_tokens: u64,
@@ -370,8 +374,8 @@ pub struct TuiUsageSummary {
 
 impl TuiUsageSummary {
     pub fn from_usage_records(thread_id: &str, records: &[UsageRecord]) -> Self {
-        const CONTEXT_WINDOW_TOKENS: u64 = 1_000_000;
-
+        let mut prompt_tokens = 0_u64;
+        let mut completion_tokens = 0_u64;
         let mut total_tokens = 0_u64;
         let mut prompt_cache_hit_tokens = 0_u64;
         let mut prompt_cache_miss_tokens = 0_u64;
@@ -379,6 +383,8 @@ impl TuiUsageSummary {
         let mut estimated_output_cost_microusd = Some(0_u64);
         let mut estimated_total_cost_microusd = Some(0_u64);
         for record in records {
+            prompt_tokens = prompt_tokens.saturating_add(record.prompt_tokens);
+            completion_tokens = completion_tokens.saturating_add(record.completion_tokens);
             total_tokens = total_tokens.saturating_add(record.total_tokens);
             prompt_cache_hit_tokens =
                 prompt_cache_hit_tokens.saturating_add(record.prompt_cache_hit_tokens);
@@ -412,15 +418,28 @@ impl TuiUsageSummary {
                 _ => estimated_total_cost_microusd = None,
             }
         }
+        let latest_prompt_tokens = records
+            .first()
+            .map(|record| record.prompt_tokens)
+            .unwrap_or(0);
+        let latest_completion_tokens = records
+            .first()
+            .map(|record| record.completion_tokens)
+            .unwrap_or(0);
         let latest_total_tokens = records
             .first()
             .map(|record| record.total_tokens)
             .unwrap_or(0);
-        let context_remaining_tokens = CONTEXT_WINDOW_TOKENS.saturating_sub(latest_total_tokens);
+        let context_remaining_tokens =
+            TUI_CONTEXT_WINDOW_TOKENS.saturating_sub(latest_total_tokens);
         Self {
             thread_id: thread_id.to_string(),
             record_count: records.len(),
+            prompt_tokens,
+            completion_tokens,
             total_tokens,
+            latest_prompt_tokens,
+            latest_completion_tokens,
             latest_total_tokens,
             prompt_cache_hit_tokens,
             prompt_cache_miss_tokens,
@@ -445,6 +464,8 @@ pub enum TuiMcpDetailKind {
     Memory,
     Network,
     Status,
+    Tokens,
+    Cost,
     Rollback,
     Reasoning,
     ComposerStash,
@@ -463,6 +484,8 @@ impl TuiMcpDetailKind {
             Self::Memory => "memory",
             Self::Network => "network",
             Self::Status => "status",
+            Self::Tokens => "tokens",
+            Self::Cost => "cost",
             Self::Rollback => "rollback",
             Self::Reasoning => "reasoning",
             Self::ComposerStash => "stash",
@@ -481,6 +504,8 @@ impl TuiMcpDetailKind {
             Self::Memory => "Memory",
             Self::Network => "Network",
             Self::Status => "Status",
+            Self::Tokens => "Tokens",
+            Self::Cost => "Cost",
             Self::Rollback => "Rollback",
             Self::Reasoning => "Reasoning",
             Self::ComposerStash => "Composer Stash",
@@ -499,6 +524,8 @@ impl TuiMcpDetailKind {
             Self::Memory => Self::Manager,
             Self::Network => Self::Manager,
             Self::Status => Self::Manager,
+            Self::Tokens => Self::Manager,
+            Self::Cost => Self::Manager,
             Self::Rollback => Self::Manager,
             Self::Reasoning => Self::Manager,
             Self::ComposerStash => Self::Manager,
@@ -517,6 +544,8 @@ impl TuiMcpDetailKind {
             Self::Memory => Self::Manager,
             Self::Network => Self::Manager,
             Self::Status => Self::Manager,
+            Self::Tokens => Self::Manager,
+            Self::Cost => Self::Manager,
             Self::Rollback => Self::Manager,
             Self::Reasoning => Self::Manager,
             Self::ComposerStash => Self::Manager,
@@ -704,6 +733,28 @@ fn parse_tui_status_command(line: &str) -> Option<Result<(), String>> {
         Some(Ok(()))
     } else {
         Some(Err("usage: status or /status".to_string()))
+    }
+}
+
+fn parse_tui_tokens_command(line: &str) -> Option<Result<(), String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/tokens")
+        .or_else(|| strip_tui_command_prefix(trimmed, "tokens"))?;
+    if rest.trim().is_empty() {
+        Some(Ok(()))
+    } else {
+        Some(Err("usage: tokens or /tokens".to_string()))
+    }
+}
+
+fn parse_tui_cost_command(line: &str) -> Option<Result<(), String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/cost")
+        .or_else(|| strip_tui_command_prefix(trimmed, "cost"))?;
+    if rest.trim().is_empty() {
+        Some(Ok(()))
+    } else {
+        Some(Err("usage: cost or /cost".to_string()))
     }
 }
 
@@ -924,6 +975,7 @@ const DEFAULT_TUI_COMPACTION_KEEP_TAIL_TURNS: usize = 8;
 const MAX_TUI_COMPACTION_KEEP_TAIL_TURNS: usize = 200;
 const DEFAULT_TUI_REASONING_REPLAY_LIMIT: usize = 3;
 const MAX_TUI_REASONING_REPLAY_LIMIT: usize = 20;
+const TUI_CONTEXT_WINDOW_TOKENS: u64 = 1_000_000;
 const TUI_REASONING_REPLAY_PREF_KIND: &str = "deepseek.tui.reasoning_replay.v1";
 const MAX_TUI_COMMAND_HISTORY: usize = 100;
 const MAX_TUI_COMPOSER_STASH_ENTRIES: usize = 100;
@@ -994,6 +1046,8 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "network remove ",
     "network default ",
     "status",
+    "tokens",
+    "cost",
     "automations",
     "automation trigger",
     "compact",
@@ -3254,6 +3308,32 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(command) = parse_tui_tokens_command(&content) {
+                    match command {
+                        Ok(()) => {
+                            self.show_tokens_detail();
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
+                if let Some(command) = parse_tui_cost_command(&content) {
+                    match command {
+                        Ok(()) => {
+                            self.show_cost_detail();
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some(title) = parse_tui_rename_command(&content) {
                     match title {
                         Ok(title) => {
@@ -3494,6 +3574,28 @@ impl TuiApp {
             match command {
                 Ok(()) => {
                     self.show_status_detail();
+                }
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_tokens_command(command) {
+            match command {
+                Ok(()) => {
+                    self.show_tokens_detail();
+                }
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_cost_command(command) {
+            match command {
+                Ok(()) => {
+                    self.show_cost_detail();
                 }
                 Err(message) => {
                     self.status = message;
@@ -4955,6 +5057,22 @@ impl TuiApp {
                 );
                 push_status_row(
                     &mut detail,
+                    "Prompt tokens:",
+                    &format!(
+                        "{} total, {} latest",
+                        summary.prompt_tokens, summary.latest_prompt_tokens
+                    ),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Output tokens:",
+                    &format!(
+                        "{} total, {} latest",
+                        summary.completion_tokens, summary.latest_completion_tokens
+                    ),
+                );
+                push_status_row(
+                    &mut detail,
                     "Cache hit/miss:",
                     &format!(
                         "{} / {} ({})",
@@ -4999,6 +5117,169 @@ impl TuiApp {
             }
         }
 
+        detail
+    }
+
+    fn show_tokens_detail(&mut self) {
+        let detail = self.render_tokens_detail();
+        self.set_mcp_detail(TuiMcpDetailKind::Tokens, detail);
+        self.status = "tokens detail refreshed".to_string();
+    }
+
+    fn render_tokens_detail(&self) -> String {
+        let mut detail = String::new();
+        let _ = writeln!(detail, "DeepSeekCode Token Usage");
+        let _ = writeln!(detail, "========================");
+        let _ = writeln!(detail);
+        push_status_row(&mut detail, "Mode:", self.mode.title());
+        push_status_row(
+            &mut detail,
+            "Thread:",
+            self.active_thread()
+                .map(|thread| thread.title.as_str())
+                .unwrap_or("none selected"),
+        );
+        match self.active_usage_summary() {
+            Some(summary) => {
+                push_status_row(
+                    &mut detail,
+                    "Active context:",
+                    &format_context_usage(summary),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Last API input:",
+                    &summary.latest_prompt_tokens.to_string(),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Last API output:",
+                    &summary.latest_completion_tokens.to_string(),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Cache hit/miss:",
+                    &format!(
+                        "{} hit / {} miss ({})",
+                        summary.prompt_cache_hit_tokens,
+                        summary.prompt_cache_miss_tokens,
+                        format_cache_hit_rate(
+                            summary.prompt_cache_hit_tokens,
+                            summary.prompt_cache_miss_tokens
+                        )
+                    ),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Prompt tokens:",
+                    &format!(
+                        "{} cumulative across {} record(s)",
+                        summary.prompt_tokens, summary.record_count
+                    ),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Output tokens:",
+                    &summary.completion_tokens.to_string(),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Total tokens:",
+                    &summary.total_tokens.to_string(),
+                );
+                let cost = summary
+                    .estimated_total_cost_microusd
+                    .map(format_microusd)
+                    .unwrap_or_else(|| "unpriced model".to_string());
+                push_status_row(&mut detail, "Approx cost:", &cost);
+                push_status_row(
+                    &mut detail,
+                    "Runtime items:",
+                    &self.active_thread_items().len().to_string(),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Transcript:",
+                    &format!("{} display line(s)", self.transcript.len()),
+                );
+            }
+            None => {
+                push_status_row(&mut detail, "Usage:", "no active-thread usage records");
+            }
+        }
+        detail
+    }
+
+    fn show_cost_detail(&mut self) {
+        let detail = self.render_cost_detail();
+        self.set_mcp_detail(TuiMcpDetailKind::Cost, detail);
+        self.status = "cost detail refreshed".to_string();
+    }
+
+    fn render_cost_detail(&self) -> String {
+        let mut detail = String::new();
+        let _ = writeln!(detail, "DeepSeekCode Session Cost");
+        let _ = writeln!(detail, "=========================");
+        let _ = writeln!(detail);
+        match self.active_usage_summary() {
+            Some(summary) => {
+                let total = summary
+                    .estimated_total_cost_microusd
+                    .map(format_microusd)
+                    .unwrap_or_else(|| "unpriced model".to_string());
+                push_status_row(&mut detail, "Approx total:", &total);
+                push_status_row(
+                    &mut detail,
+                    "Input cost:",
+                    &format_optional_microusd(summary.estimated_input_cost_microusd),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Output cost:",
+                    &format_optional_microusd(summary.estimated_output_cost_microusd),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Usage records:",
+                    &summary.record_count.to_string(),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Total tokens:",
+                    &summary.total_tokens.to_string(),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Cache hit/miss:",
+                    &format!(
+                        "{} / {} ({})",
+                        summary.prompt_cache_hit_tokens,
+                        summary.prompt_cache_miss_tokens,
+                        format_cache_hit_rate(
+                            summary.prompt_cache_hit_tokens,
+                            summary.prompt_cache_miss_tokens
+                        )
+                    ),
+                );
+                let _ = writeln!(detail);
+                let _ = writeln!(
+                    detail,
+                    "Cost estimates are approximate and use provider usage telemetry when available."
+                );
+                let _ = writeln!(
+                    detail,
+                    "Unrecognized models or missing usage prices are reported as unpriced."
+                );
+            }
+            None => {
+                push_status_row(&mut detail, "Usage:", "no active-thread usage records");
+                let _ = writeln!(detail);
+                let _ = writeln!(
+                    detail,
+                    "Run a model turn in this thread to collect cost telemetry."
+                );
+            }
+        }
         detail
     }
 
@@ -6849,6 +7130,18 @@ fn push_status_row(out: &mut String, label: &str, value: &str) {
     let _ = writeln!(out, "  {label:<16} {value}");
 }
 
+fn format_context_usage(summary: &TuiUsageSummary) -> String {
+    let used = summary.latest_total_tokens.min(TUI_CONTEXT_WINDOW_TOKENS);
+    let percent = (used as f64 / TUI_CONTEXT_WINDOW_TOKENS as f64 * 100.0).clamp(0.0, 100.0);
+    format!("~{} / {} ({percent:.1}%)", used, TUI_CONTEXT_WINDOW_TOKENS)
+}
+
+fn format_optional_microusd(value: Option<u64>) -> String {
+    value
+        .map(format_microusd)
+        .unwrap_or_else(|| "unpriced model".to_string())
+}
+
 fn summarize_status_counts<'a>(statuses: impl IntoIterator<Item = &'a str>) -> String {
     let mut counts = BTreeMap::<&str, usize>::new();
     for status in statuses {
@@ -8344,6 +8637,10 @@ mod tests {
         assert_eq!(summary.estimated_input_cost_microusd, Some(1));
         assert_eq!(summary.estimated_output_cost_microusd, Some(1));
         assert_eq!(summary.estimated_total_cost_microusd, Some(2));
+        assert_eq!(summary.prompt_tokens, 12);
+        assert_eq!(summary.completion_tokens, 3);
+        assert_eq!(summary.latest_prompt_tokens, 12);
+        assert_eq!(summary.latest_completion_tokens, 3);
         assert_eq!(summary.prompt_cache_hit_tokens, 7);
         assert_eq!(summary.prompt_cache_miss_tokens, 5);
     }
@@ -9904,6 +10201,28 @@ mod tests {
             Some(TuiMcpDetailKind::Status)
         );
 
+        for ch in "/tokens".chars() {
+            assert!(app.handle_key(KeyCode::Char(ch)));
+        }
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert!(app.drain_actions().is_empty());
+        assert_eq!(
+            app.mcp_detail.as_ref().map(|(kind, _)| *kind),
+            Some(TuiMcpDetailKind::Tokens)
+        );
+
+        for ch in "/cost".chars() {
+            assert!(app.handle_key(KeyCode::Char(ch)));
+        }
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert!(app.drain_actions().is_empty());
+        assert_eq!(
+            app.mcp_detail.as_ref().map(|(kind, _)| *kind),
+            Some(TuiMcpDetailKind::Cost)
+        );
+
         for ch in "/review src/lib.rs".chars() {
             assert!(app.handle_key(KeyCode::Char(ch)));
         }
@@ -9987,7 +10306,11 @@ mod tests {
             vec![TuiUsageSummary {
                 thread_id: "thread-one".to_string(),
                 record_count: 2,
+                prompt_tokens: 700,
+                completion_tokens: 534,
                 total_tokens: 1234,
+                latest_prompt_tokens: 500,
+                latest_completion_tokens: 300,
                 latest_total_tokens: 800,
                 prompt_cache_hit_tokens: 300,
                 prompt_cache_miss_tokens: 100,
@@ -10040,6 +10363,74 @@ mod tests {
         assert!(detail.contains("1234"));
         assert!(detail.contains("Est. cost:"));
         assert!(detail.contains("$0.000030"));
+    }
+
+    #[test]
+    fn tokens_and_cost_commands_render_usage_details() {
+        let mut app = TuiApp::with_runtime_usage_and_approvals(
+            vec![TuiSession {
+                id: "session-one".to_string(),
+                title: "One".to_string(),
+                workspace: "/workspace/project".to_string(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-one".to_string()),
+                thread_count: 1,
+            }],
+            vec![TuiThread {
+                id: "thread-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                title: "First thread".to_string(),
+                mode: "agent".to_string(),
+                status: "active".to_string(),
+                latest_turn_id: Some("turn-one".to_string()),
+                event_seq: 7,
+            }],
+            Vec::new(),
+            vec![TuiUsageSummary {
+                thread_id: "thread-one".to_string(),
+                record_count: 2,
+                prompt_tokens: 700,
+                completion_tokens: 534,
+                total_tokens: 1234,
+                latest_prompt_tokens: 500,
+                latest_completion_tokens: 300,
+                latest_total_tokens: 800,
+                prompt_cache_hit_tokens: 300,
+                prompt_cache_miss_tokens: 100,
+                estimated_input_cost_microusd: Some(10),
+                estimated_output_cost_microusd: Some(20),
+                estimated_total_cost_microusd: Some(30),
+                context_remaining_tokens: 999_200,
+                context_strategy: "normal".to_string(),
+            }],
+            Vec::new(),
+        );
+
+        app.execute_palette_command("tokens");
+
+        assert_eq!(app.status, "tokens detail refreshed");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("tokens detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Tokens);
+        assert!(detail.contains("DeepSeekCode Token Usage"));
+        assert!(detail.contains("Last API input:"));
+        assert!(detail.contains("500"));
+        assert!(detail.contains("Prompt tokens:"));
+        assert!(detail.contains("700 cumulative"));
+        assert!(detail.contains("Approx cost:"));
+        assert!(detail.contains("$0.000030"));
+
+        app.execute_palette_command("cost");
+
+        assert_eq!(app.status, "cost detail refreshed");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("cost detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Cost);
+        assert!(detail.contains("DeepSeekCode Session Cost"));
+        assert!(detail.contains("Approx total:"));
+        assert!(detail.contains("$0.000030"));
+        assert!(detail.contains("Input cost:"));
+        assert!(detail.contains("$0.000010"));
+        assert!(detail.contains("Output cost:"));
+        assert!(detail.contains("$0.000020"));
     }
 
     #[test]
