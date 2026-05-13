@@ -348,6 +348,7 @@ Exposed tools:
 | `rlm_process_wait` | Wait for live `rlm_process` daemon event logs after a cursor without running a child model |
 | `rlm_process_cancel` | Hidden by default; exposed with durable runtime approvals, and cancels queued pending live `rlm_process` daemon turns |
 | `rlm_process_run_next` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and claims/runs one queued live `rlm_process` daemon turn |
+| `rlm_process_drain` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and runs queued live `rlm_process` daemon turns in FIFO order |
 | `rlm_python_session` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and writes `.dscode/rlm-python` helper state |
 | `rlm` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and runs bounded model-backed RLM child analysis |
 | `rlm_query` | Alias for `rlm` |
@@ -1421,9 +1422,11 @@ that live session. It does not cancel a turn already claimed by a future worker.
 `rlm_process_run_next session_id=<id>` is the first non-daemon worker bridge: it
 claims the oldest queued payload, writes `turn_started`, runs the bounded child
 model flow, then records `turn_completed` or `turn_failed`; `dry_run=true`
-renders the selected payload without claiming it. Constant background service
-packaging, model delta streaming, active worker cancellation, and recovery
-remain future work.
+renders the selected payload without claiming it. `rlm_process_drain` repeats
+that single-step worker path for up to `max_turns` queued payloads in FIFO
+order, with `dry_run=true` for a non-mutating batch preview. Constant background
+service packaging, model delta streaming, active worker cancellation, and
+recovery remain future work.
 `rlm_process_events session_id=<id> cursor=<seq>` replays parsed
 `.dscode/rlm-daemon/<session_id>/events.jsonl` records with `seq` greater than
 the cursor and returns `next_cursor` for clients that want deterministic live
@@ -1443,7 +1446,7 @@ durable runtime approvals because it writes `.dscode/rlm-python` state.
 because it updates runtime task status and writes live RLM daemon event logs.
 `rlm_process_run_next` is hidden by default and requires trusted side effects or
 durable runtime approvals because it can spend model tokens and updates runtime
-state.
+state. `rlm_process_drain` has the same gating for the same reason.
 Model-running child-agent RLM tools (`rlm`, `rlm_query`, `llm_query`,
 `rlm_process`, `rlm_batch`, `rlm_query_batched`, and `llm_query_batched`) are
 also hidden by default and require trusted side effects or durable

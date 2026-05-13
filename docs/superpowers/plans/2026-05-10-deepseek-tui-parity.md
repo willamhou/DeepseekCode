@@ -524,7 +524,9 @@ Remaining:
   `rlm_process_run_next` now claims one queued payload, records `turn_started`,
   runs the bounded model-backed RLM child flow, and records `turn_completed` /
   `turn_failed`, giving live sessions a single-step worker bridge before a
-  resident daemon lands
+  resident daemon lands; `rlm_process_drain` repeats that worker path for a
+  bounded FIFO batch so queued sessions can be drained without service
+  packaging yet
 - Review remote PR context signals now exist: `review` parses
   `github_pr_context` JSON to report requested changes, failing/cancelled status
   checks, and missing `include_diff=true` context before optional semantic

@@ -1125,6 +1125,11 @@ pub struct RlmLiveRunNextTool {
     pub parent_depth: usize,
 }
 
+pub struct RlmLiveDrainTool {
+    pub config: AppConfig,
+    pub parent_depth: usize,
+}
+
 impl Tool for RlmPythonSessionsTool {
     fn name(&self) -> &str {
         "rlm_python_sessions"
@@ -1843,6 +1848,120 @@ impl Tool for RlmLiveRunNextTool {
                 )))
             }
         }
+    }
+}
+
+impl Tool for RlmLiveDrainTool {
+    fn name(&self) -> &str {
+        "rlm_process_drain"
+    }
+
+    fn execute(&self, input: ToolInput) -> AppResult<ToolOutput> {
+        let session_id = input
+            .get("session_id")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| tool_failure("rlm_process_drain requires non-empty `session_id`"))?;
+        validate_rlm_model_session_id(session_id)?;
+        let max_turns = parse_rlm_live_drain_max_turns(input.get("max_turns"))?;
+        let dry_run = parse_bool_arg(input.get("dry_run"));
+        let manifest_path = rlm_live_session_manifest_path(&self.config, session_id);
+        let manifest = read_rlm_live_session_manifest(&manifest_path, session_id)?;
+        let runtime_thread_id = rlm_live_manifest_string_field(&manifest, "runtime_thread_id")
+            .ok_or_else(|| {
+                tool_failure("rlm_process_drain live manifest is missing runtime_thread_id")
+            })?;
+        let store = rlm_runtime_store(&self.config);
+        let pending = pending_live_rlm_tasks(&store, &runtime_thread_id)?;
+        let selected = pending.into_iter().take(max_turns).collect::<Vec<_>>();
+        if dry_run {
+            return Ok(ToolOutput {
+                summary: json_value_to_string(&JsonValue::Object(BTreeMap::from([
+                    (
+                        "session_id".to_string(),
+                        JsonValue::String(session_id.to_string()),
+                    ),
+                    (
+                        "runtime_thread_id".to_string(),
+                        JsonValue::String(runtime_thread_id),
+                    ),
+                    ("dry_run".to_string(), JsonValue::Bool(true)),
+                    (
+                        "selected_count".to_string(),
+                        JsonValue::Number(selected.len().to_string()),
+                    ),
+                    (
+                        "max_turns".to_string(),
+                        JsonValue::Number(max_turns.to_string()),
+                    ),
+                    (
+                        "turns".to_string(),
+                        JsonValue::Array(
+                            selected
+                                .iter()
+                                .map(|task| {
+                                    JsonValue::Object(BTreeMap::from([
+                                        ("task_id".to_string(), JsonValue::String(task.id.clone())),
+                                        (
+                                            "status".to_string(),
+                                            JsonValue::String(task.status.clone()),
+                                        ),
+                                        (
+                                            "created_at".to_string(),
+                                            JsonValue::String(task.created_at.clone()),
+                                        ),
+                                        (
+                                            "summary".to_string(),
+                                            JsonValue::String(task.summary.clone()),
+                                        ),
+                                    ]))
+                                })
+                                .collect(),
+                        ),
+                    ),
+                ]))),
+            });
+        }
+
+        let mut results = Vec::new();
+        for task in selected {
+            let output = RlmLiveRunNextTool {
+                config: self.config.clone(),
+                parent_depth: self.parent_depth,
+            }
+            .execute(
+                ToolInput::new()
+                    .with_arg("session_id", session_id.to_string())
+                    .with_arg("task_id", task.id.clone()),
+            )?;
+            results.push(JsonValue::Object(BTreeMap::from([
+                ("task_id".to_string(), JsonValue::String(task.id)),
+                ("summary".to_string(), JsonValue::String(output.summary)),
+            ])));
+        }
+        let queued_turns = count_pending_live_rlm_tasks(&store, &runtime_thread_id)?;
+        Ok(ToolOutput {
+            summary: json_value_to_string(&JsonValue::Object(BTreeMap::from([
+                (
+                    "session_id".to_string(),
+                    JsonValue::String(session_id.to_string()),
+                ),
+                (
+                    "runtime_thread_id".to_string(),
+                    JsonValue::String(runtime_thread_id),
+                ),
+                ("dry_run".to_string(), JsonValue::Bool(false)),
+                (
+                    "ran_count".to_string(),
+                    JsonValue::Number(results.len().to_string()),
+                ),
+                (
+                    "queued_turns".to_string(),
+                    JsonValue::Number(queued_turns.to_string()),
+                ),
+                ("results".to_string(), JsonValue::Array(results)),
+            ]))),
+        })
     }
 }
 
@@ -2718,6 +2837,15 @@ fn oldest_pending_live_rlm_task(
     store: &RuntimeStore,
     runtime_thread_id: &str,
 ) -> AppResult<Option<TaskRecord>> {
+    Ok(pending_live_rlm_tasks(store, runtime_thread_id)?
+        .into_iter()
+        .next())
+}
+
+fn pending_live_rlm_tasks(
+    store: &RuntimeStore,
+    runtime_thread_id: &str,
+) -> AppResult<Vec<TaskRecord>> {
     let mut tasks = store
         .list_tasks(None, Some(runtime_thread_id), MAX_RLM_LIVE_TASK_LIST)?
         .into_iter()
@@ -2728,7 +2856,7 @@ fn oldest_pending_live_rlm_task(
             .cmp(&right.created_at)
             .then_with(|| left.id.cmp(&right.id))
     });
-    Ok(tasks.into_iter().next())
+    Ok(tasks)
 }
 
 fn rlm_live_cancelled_task_json(task: &TaskRecord, original_summary: &str) -> JsonValue {
@@ -3603,6 +3731,16 @@ fn parse_rlm_live_wait_poll_interval(raw: Option<&str>) -> AppResult<Duration> {
         None => 100,
     };
     Ok(Duration::from_millis(millis.clamp(25, 1_000)))
+}
+
+fn parse_rlm_live_drain_max_turns(raw: Option<&str>) -> AppResult<usize> {
+    let value = match raw.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => value
+            .parse::<usize>()
+            .map_err(|_| tool_failure("rlm_process_drain max_turns must be a positive integer"))?,
+        None => 10,
+    };
+    Ok(value.clamp(1, 100))
 }
 
 fn read_rlm_live_event_batch(
@@ -4855,6 +4993,68 @@ mod tests {
         assert_eq!(store.load_task(&first_turn).unwrap().status, "pending");
         let payload = read_rlm_live_session_turn_payload(&config, "run.next", &first_turn).unwrap();
         assert_eq!(payload.status, "queued");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rlm_process_drain_dry_run_lists_fifo_batch() {
+        let cwd = std::env::current_dir().unwrap();
+        let root = cwd.join("target").join(format!(
+            "dscode-rlm-live-drain-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let mut config = AppConfig::default();
+        config.workspace.config_dir = root.join(".dscode").display().to_string();
+        let rlm = RlmTool {
+            tool_name: "rlm_process",
+            config: config.clone(),
+            parent_depth: 0,
+        };
+        let first = rlm
+            .execute(
+                ToolInput::new()
+                    .with_arg("task", "first drain turn")
+                    .with_arg("content", "alpha drain payload")
+                    .with_arg("session_id", "drain.1")
+                    .with_arg("live", "true"),
+            )
+            .unwrap();
+        let first_turn = meta_value(&first.summary, "meta.rlm_turn_id").unwrap();
+        let second = rlm
+            .execute(
+                ToolInput::new()
+                    .with_arg("task", "second drain turn")
+                    .with_arg("content", "beta drain payload")
+                    .with_arg("session_id", "drain.1")
+                    .with_arg("live", "true"),
+            )
+            .unwrap();
+        let second_turn = meta_value(&second.summary, "meta.rlm_turn_id").unwrap();
+
+        let output = RlmLiveDrainTool {
+            config: config.clone(),
+            parent_depth: 0,
+        }
+        .execute(
+            ToolInput::new()
+                .with_arg("session_id", "drain.1")
+                .with_arg("max_turns", "1")
+                .with_arg("dry_run", "true"),
+        )
+        .unwrap();
+        assert!(output.summary.contains(r#""dry_run":true"#));
+        assert!(output.summary.contains(r#""selected_count":1"#));
+        assert!(output.summary.contains(&first_turn));
+        assert!(!output.summary.contains(&second_turn));
+        let store = rlm_runtime_store(&config);
+        assert_eq!(store.load_task(&first_turn).unwrap().status, "pending");
+        assert_eq!(store.load_task(&second_turn).unwrap().status, "pending");
+        assert_eq!(parse_rlm_live_drain_max_turns(Some("0")).unwrap(), 1);
+        assert_eq!(parse_rlm_live_drain_max_turns(Some("1000")).unwrap(), 100);
         let _ = fs::remove_dir_all(root);
     }
 

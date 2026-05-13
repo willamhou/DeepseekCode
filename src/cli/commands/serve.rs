@@ -46,9 +46,9 @@ use crate::tools::recall_archive::RecallArchiveTool;
 use crate::tools::revert_turn::RevertTurnTool;
 use crate::tools::review::{PrReviewCommentPlanTool, ReviewTool};
 use crate::tools::rlm::{
-    RlmBatchTool, RlmChunkPlanTool, RlmLiveCancelTool, RlmLiveEventsTool, RlmLiveRunNextTool,
-    RlmLiveWaitTool, RlmMapReducePlanTool, RlmModelSessionsTool, RlmPythonSessionTool,
-    RlmPythonSessionsTool, RlmPythonTool, RlmRecursivePlanTool, RlmTool,
+    RlmBatchTool, RlmChunkPlanTool, RlmLiveCancelTool, RlmLiveDrainTool, RlmLiveEventsTool,
+    RlmLiveRunNextTool, RlmLiveWaitTool, RlmMapReducePlanTool, RlmModelSessionsTool,
+    RlmPythonSessionTool, RlmPythonSessionsTool, RlmPythonTool, RlmRecursivePlanTool, RlmTool,
 };
 use crate::tools::run_shell::{is_safe_shell_command, RunShellTool};
 use crate::tools::run_tests::{render_run_tests_command, RunTestsTool};
@@ -876,6 +876,9 @@ fn execute_mcp_tool(
         }
         "rlm_process_run_next" => {
             return execute_mcp_model_rlm_tool("rlm_process_run_next", input, state);
+        }
+        "rlm_process_drain" => {
+            return execute_mcp_model_rlm_tool("rlm_process_drain", input, state);
         }
         "rlm_batch" => {
             return execute_mcp_model_rlm_tool("rlm_batch", input, state);
@@ -2463,6 +2466,11 @@ fn execute_mcp_model_rlm_tool(
             parent_depth: 0,
         }
         .execute(input)?,
+        "rlm_process_drain" => RlmLiveDrainTool {
+            config: state.config.clone(),
+            parent_depth: 0,
+        }
+        .execute(input)?,
         "rlm_batch" | "rlm_query_batched" | "llm_query_batched" => RlmBatchTool {
             tool_name: name,
             config: state.config.clone(),
@@ -3691,6 +3699,18 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
                     ("turn_id", string_property("Alias for task_id.")),
                     ("id", string_property("Alias for task_id.")),
                     ("dry_run", string_property("Set true to inspect without claiming or running.")),
+                ],
+                &["session_id"],
+            ),
+        ));
+        tools.push(mcp_tool_definition(
+            "rlm_process_drain",
+            "Run queued live RLM daemon turns in FIFO order from persisted payloads. Requires trusted side effects or durable MCP approval because it can spend model tokens and updates runtime state.",
+            mcp_schema(
+                vec![
+                    ("session_id", string_property("Live RLM session id.")),
+                    ("max_turns", string_property("Maximum queued turns to run.")),
+                    ("dry_run", string_property("Set true to preview without claiming or running.")),
                 ],
                 &["session_id"],
             ),
@@ -5855,6 +5875,7 @@ fn acp_tool_kind(name: &str) -> &'static str {
         | "exec_wait"
         | "rlm_process_cancel"
         | "rlm_process_run_next"
+        | "rlm_process_drain"
         | "rlm_python"
         | "rlm_python_session" => "execute",
         "rlm"
@@ -8332,6 +8353,7 @@ mod tests {
         assert!(!rendered.contains(r#""name":"rlm_python_session""#));
         assert!(!rendered.contains(r#""name":"rlm_process_cancel""#));
         assert!(!rendered.contains(r#""name":"rlm_process_run_next""#));
+        assert!(!rendered.contains(r#""name":"rlm_process_drain""#));
         assert!(!rendered.contains(r#""name":"rlm""#));
         assert!(!rendered.contains(r#""name":"rlm_query""#));
         assert!(!rendered.contains(r#""name":"llm_query""#));
@@ -8366,6 +8388,7 @@ mod tests {
         assert!(rendered.contains(r#""name":"rlm_python_session""#));
         assert!(!rendered.contains(r#""name":"rlm_process_cancel""#));
         assert!(rendered.contains(r#""name":"rlm_process_run_next""#));
+        assert!(rendered.contains(r#""name":"rlm_process_drain""#));
         assert!(rendered.contains(r#""name":"rlm""#));
         assert!(rendered.contains(r#""name":"rlm_query""#));
         assert!(rendered.contains(r#""name":"llm_query""#));
@@ -8959,6 +8982,7 @@ shell_allowlist = ["cargo test"]
         assert!(!rendered.contains(r#""name":"llm_query""#));
         assert!(!rendered.contains(r#""name":"rlm_process""#));
         assert!(!rendered.contains(r#""name":"rlm_process_run_next""#));
+        assert!(!rendered.contains(r#""name":"rlm_process_drain""#));
         assert!(!rendered.contains(r#""name":"rlm_batch""#));
         assert!(!rendered.contains(r#""name":"rlm_query_batched""#));
         assert!(!rendered.contains(r#""name":"llm_query_batched""#));
@@ -8982,6 +9006,7 @@ shell_allowlist = ["cargo test"]
         assert!(rendered.contains(r#""name":"llm_query""#));
         assert!(rendered.contains(r#""name":"rlm_process""#));
         assert!(rendered.contains(r#""name":"rlm_process_run_next""#));
+        assert!(rendered.contains(r#""name":"rlm_process_drain""#));
         assert!(rendered.contains(r#""name":"rlm_batch""#));
         assert!(rendered.contains(r#""name":"rlm_query_batched""#));
         assert!(rendered.contains(r#""name":"llm_query_batched""#));
@@ -9054,6 +9079,7 @@ shell_allowlist = ["cargo test"]
         assert!(rendered.contains(r#""name":"llm_query""#));
         assert!(rendered.contains(r#""name":"rlm_process""#));
         assert!(rendered.contains(r#""name":"rlm_process_run_next""#));
+        assert!(rendered.contains(r#""name":"rlm_process_drain""#));
         assert!(rendered.contains(r#""name":"rlm_batch""#));
         assert!(rendered.contains(r#""name":"rlm_query_batched""#));
         assert!(rendered.contains(r#""name":"llm_query_batched""#));
@@ -10267,6 +10293,7 @@ shell_allowlist = ["cargo test"]
         assert!(!rendered.contains(r#""name":"rlm_python_session""#));
         assert!(!rendered.contains(r#""name":"rlm_process_cancel""#));
         assert!(!rendered.contains(r#""name":"rlm_process_run_next""#));
+        assert!(!rendered.contains(r#""name":"rlm_process_drain""#));
         assert!(!rendered.contains(r#""name":"apply_patch""#));
         assert!(!rendered.contains(r#""name":"write_file""#));
         assert!(!rendered.contains(r#""name":"edit_file""#));
