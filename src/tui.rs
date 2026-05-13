@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{fs, io};
@@ -443,6 +444,7 @@ pub enum TuiMcpDetailKind {
     Shell,
     Memory,
     Network,
+    Status,
     Rollback,
     Reasoning,
     ComposerStash,
@@ -460,6 +462,7 @@ impl TuiMcpDetailKind {
             Self::Shell => "shell",
             Self::Memory => "memory",
             Self::Network => "network",
+            Self::Status => "status",
             Self::Rollback => "rollback",
             Self::Reasoning => "reasoning",
             Self::ComposerStash => "stash",
@@ -477,6 +480,7 @@ impl TuiMcpDetailKind {
             Self::Shell => "Shell Jobs",
             Self::Memory => "Memory",
             Self::Network => "Network",
+            Self::Status => "Status",
             Self::Rollback => "Rollback",
             Self::Reasoning => "Reasoning",
             Self::ComposerStash => "Composer Stash",
@@ -494,6 +498,7 @@ impl TuiMcpDetailKind {
             Self::Shell => Self::Manager,
             Self::Memory => Self::Manager,
             Self::Network => Self::Manager,
+            Self::Status => Self::Manager,
             Self::Rollback => Self::Manager,
             Self::Reasoning => Self::Manager,
             Self::ComposerStash => Self::Manager,
@@ -511,6 +516,7 @@ impl TuiMcpDetailKind {
             Self::Shell => Self::Manager,
             Self::Memory => Self::Manager,
             Self::Network => Self::Manager,
+            Self::Status => Self::Manager,
             Self::Rollback => Self::Manager,
             Self::Reasoning => Self::Manager,
             Self::ComposerStash => Self::Manager,
@@ -687,6 +693,17 @@ fn parse_tui_network_command(line: &str) -> Option<Result<TuiNetworkCommand, Str
             "usage: network [list|allow <host>|deny <host>|remove <host>|default <allow|deny|prompt>]"
                 .to_string(),
         )),
+    }
+}
+
+fn parse_tui_status_command(line: &str) -> Option<Result<(), String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/status")
+        .or_else(|| strip_tui_command_prefix(trimmed, "status"))?;
+    if rest.trim().is_empty() {
+        Some(Ok(()))
+    } else {
+        Some(Err("usage: status or /status".to_string()))
     }
 }
 
@@ -976,6 +993,7 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "network deny ",
     "network remove ",
     "network default ",
+    "status",
     "automations",
     "automation trigger",
     "compact",
@@ -3223,6 +3241,19 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(command) = parse_tui_status_command(&content) {
+                    match command {
+                        Ok(()) => {
+                            self.show_status_detail();
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some(title) = parse_tui_rename_command(&content) {
                     match title {
                         Ok(title) => {
@@ -3452,6 +3483,17 @@ impl TuiApp {
             match command {
                 Ok(command) => {
                     self.request_network_command(command);
+                }
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_status_command(command) {
+            match command {
+                Ok(()) => {
+                    self.show_status_detail();
                 }
                 Err(message) => {
                     self.status = message;
@@ -4730,6 +4772,234 @@ impl TuiApp {
             command,
         });
         self.status = format!("network command queued: {workspace}");
+    }
+
+    fn show_status_detail(&mut self) {
+        let detail = self.render_status_detail();
+        self.set_mcp_detail(TuiMcpDetailKind::Status, detail);
+        self.status = "status detail refreshed".to_string();
+    }
+
+    fn render_status_detail(&self) -> String {
+        let mut detail = String::new();
+        let _ = writeln!(detail, "DeepSeekCode TUI Status");
+        let _ = writeln!(detail, "=======================");
+        let _ = writeln!(detail);
+        push_status_row(&mut detail, "Version:", env!("CARGO_PKG_VERSION"));
+        push_status_row(&mut detail, "Mode:", self.mode.title());
+        push_status_row(&mut detail, "Status:", &self.status);
+        push_status_row(
+            &mut detail,
+            "Sessions:",
+            &format!(
+                "{} loaded, selected {}",
+                self.sessions.len(),
+                self.selected_session
+            ),
+        );
+        push_status_row(
+            &mut detail,
+            "Threads:",
+            &format!("{} loaded", self.threads.len()),
+        );
+        let _ = writeln!(detail);
+
+        match self.selected_session() {
+            Some(session) => {
+                push_status_row(
+                    &mut detail,
+                    "Session:",
+                    &format!("{} [{}]", session.title, session.status),
+                );
+                push_status_row(&mut detail, "Session id:", &session.id);
+                push_status_row(&mut detail, "Workspace:", &session.workspace);
+                push_status_row(
+                    &mut detail,
+                    "Session threads:",
+                    &session.thread_count.to_string(),
+                );
+            }
+            None => {
+                push_status_row(&mut detail, "Session:", "none selected");
+            }
+        }
+        let _ = writeln!(detail);
+
+        let items = self.active_thread_items();
+        let tasks = self.active_thread_tasks();
+        let automations = self.active_thread_automations();
+        match self.active_thread() {
+            Some(thread) => {
+                push_status_row(
+                    &mut detail,
+                    "Thread:",
+                    &format!("{} [{}]", thread.title, thread.status),
+                );
+                push_status_row(&mut detail, "Thread id:", &thread.id);
+                push_status_row(&mut detail, "Thread mode:", &thread.mode);
+                push_status_row(
+                    &mut detail,
+                    "Latest turn:",
+                    thread.latest_turn_id.as_deref().unwrap_or("none"),
+                );
+                push_status_row(&mut detail, "Event seq:", &thread.event_seq.to_string());
+            }
+            None => {
+                push_status_row(&mut detail, "Thread:", "none selected");
+            }
+        }
+        push_status_row(
+            &mut detail,
+            "Transcript:",
+            &format!(
+                "{} item(s), {} display line(s)",
+                items.len(),
+                self.transcript.len()
+            ),
+        );
+        if !items.is_empty() {
+            push_status_row(
+                &mut detail,
+                "Item states:",
+                &summarize_status_counts(items.iter().map(|item| item.status.as_str())),
+            );
+        }
+        push_status_row(
+            &mut detail,
+            "Tasks:",
+            &format!(
+                "{} active, {} selected",
+                tasks.len(),
+                self.selected_task_ids.len()
+            ),
+        );
+        if !tasks.is_empty() {
+            let task_states = task_status_counts_line(&tasks)
+                .strip_prefix("Task states: ")
+                .unwrap_or("")
+                .to_string();
+            push_status_row(&mut detail, "Task states:", &task_states);
+        }
+        let automation_states = summarize_status_counts(
+            automations
+                .iter()
+                .map(|automation| automation.status.as_str()),
+        );
+        push_status_row(
+            &mut detail,
+            "Automations:",
+            &format!("{} active ({automation_states})", automations.len()),
+        );
+        if let Some(running) = self.active_running_assistant_item() {
+            push_status_row(
+                &mut detail,
+                "Running:",
+                &format!("assistant item {} chars", running.content.chars().count()),
+            );
+        }
+        let _ = writeln!(detail);
+
+        let active_thread_id = self.selected_thread_id.as_deref();
+        let active_approvals = self
+            .approvals
+            .iter()
+            .filter(|approval| Some(approval.thread_id.as_str()) == active_thread_id)
+            .collect::<Vec<_>>();
+        let active_user_inputs = self
+            .user_inputs
+            .iter()
+            .filter(|request| Some(request.thread_id.as_str()) == active_thread_id)
+            .collect::<Vec<_>>();
+        push_status_row(
+            &mut detail,
+            "Approvals:",
+            &format!(
+                "{} active, {} pending total",
+                active_approvals.len(),
+                self.approvals
+                    .iter()
+                    .filter(|approval| approval.is_pending())
+                    .count()
+            ),
+        );
+        push_status_row(
+            &mut detail,
+            "User inputs:",
+            &format!(
+                "{} active, {} pending total",
+                active_user_inputs.len(),
+                self.user_inputs
+                    .iter()
+                    .filter(|request| request.is_pending())
+                    .count()
+            ),
+        );
+        let _ = writeln!(detail);
+
+        match self.active_usage_summary() {
+            Some(summary) => {
+                push_status_row(
+                    &mut detail,
+                    "Usage records:",
+                    &summary.record_count.to_string(),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Total tokens:",
+                    &summary.total_tokens.to_string(),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Latest tokens:",
+                    &summary.latest_total_tokens.to_string(),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Cache hit/miss:",
+                    &format!(
+                        "{} / {} ({})",
+                        summary.prompt_cache_hit_tokens,
+                        summary.prompt_cache_miss_tokens,
+                        format_cache_hit_rate(
+                            summary.prompt_cache_hit_tokens,
+                            summary.prompt_cache_miss_tokens
+                        )
+                    ),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Context:",
+                    &format!(
+                        "{} remaining / {}",
+                        summary.context_remaining_tokens, summary.context_strategy
+                    ),
+                );
+                let cost = summary
+                    .estimated_total_cost_microusd
+                    .map(format_microusd)
+                    .unwrap_or_else(|| "unpriced model".to_string());
+                push_status_row(&mut detail, "Est. cost:", &cost);
+                if let (Some(input), Some(output)) = (
+                    summary.estimated_input_cost_microusd,
+                    summary.estimated_output_cost_microusd,
+                ) {
+                    push_status_row(
+                        &mut detail,
+                        "Cost split:",
+                        &format!(
+                            "in {} / out {}",
+                            format_microusd(input),
+                            format_microusd(output)
+                        ),
+                    );
+                }
+            }
+            None => {
+                push_status_row(&mut detail, "Usage:", "no active-thread usage records");
+            }
+        }
+
+        detail
     }
 
     fn handle_composer_stash_command(&mut self, command: TuiComposerStashCommand) {
@@ -6573,6 +6843,25 @@ fn clamp_char_boundary(value: &str, cursor: usize) -> usize {
         cursor -= 1;
     }
     cursor
+}
+
+fn push_status_row(out: &mut String, label: &str, value: &str) {
+    let _ = writeln!(out, "  {label:<16} {value}");
+}
+
+fn summarize_status_counts<'a>(statuses: impl IntoIterator<Item = &'a str>) -> String {
+    let mut counts = BTreeMap::<&str, usize>::new();
+    for status in statuses {
+        *counts.entry(status).or_insert(0) += 1;
+    }
+    if counts.is_empty() {
+        return "none".to_string();
+    }
+    counts
+        .into_iter()
+        .map(|(status, count)| format!("{status}={count}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn context_strategy(latest_total_tokens: u64) -> &'static str {
@@ -9604,6 +9893,17 @@ mod tests {
             }]
         );
 
+        for ch in "/status".chars() {
+            assert!(app.handle_key(KeyCode::Char(ch)));
+        }
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert!(app.drain_actions().is_empty());
+        assert_eq!(
+            app.mcp_detail.as_ref().map(|(kind, _)| *kind),
+            Some(TuiMcpDetailKind::Status)
+        );
+
         for ch in "/review src/lib.rs".chars() {
             assert!(app.handle_key(KeyCode::Char(ch)));
         }
@@ -9630,6 +9930,116 @@ mod tests {
                 content: "## markdown heading".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn status_command_renders_active_runtime_summary() {
+        let mut app = TuiApp::with_runtime_usage_tasks_automations_approvals_and_user_inputs(
+            vec![TuiSession {
+                id: "session-one".to_string(),
+                title: "One".to_string(),
+                workspace: "/workspace/project".to_string(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-one".to_string()),
+                thread_count: 2,
+            }],
+            vec![TuiThread {
+                id: "thread-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                title: "First thread".to_string(),
+                mode: "agent".to_string(),
+                status: "running".to_string(),
+                latest_turn_id: Some("turn-one".to_string()),
+                event_seq: 42,
+            }],
+            vec![TuiItem {
+                id: "item-one".to_string(),
+                thread_id: "thread-one".to_string(),
+                turn_id: Some("turn-one".to_string()),
+                index: 0,
+                item_type: "message".to_string(),
+                role: Some("assistant".to_string()),
+                content: "streaming answer".to_string(),
+                status: "running".to_string(),
+            }],
+            vec![TuiTaskRecord {
+                id: "task-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                thread_id: Some("thread-one".to_string()),
+                parent_task_id: None,
+                kind: "agent".to_string(),
+                status: "pending".to_string(),
+                summary: "review parity".to_string(),
+                updated_at: "2026-05-14T00:00:00Z".to_string(),
+            }],
+            vec![TuiAutomationRecord {
+                id: "automation-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                thread_id: Some("thread-one".to_string()),
+                name: "daily".to_string(),
+                status: "active".to_string(),
+                schedule: "daily".to_string(),
+                prompt: "check".to_string(),
+                updated_at: "2026-05-14T00:00:00Z".to_string(),
+                last_run_at: None,
+                next_run_at: None,
+            }],
+            vec![TuiUsageSummary {
+                thread_id: "thread-one".to_string(),
+                record_count: 2,
+                total_tokens: 1234,
+                latest_total_tokens: 800,
+                prompt_cache_hit_tokens: 300,
+                prompt_cache_miss_tokens: 100,
+                estimated_input_cost_microusd: Some(10),
+                estimated_output_cost_microusd: Some(20),
+                estimated_total_cost_microusd: Some(30),
+                context_remaining_tokens: 999_200,
+                context_strategy: "normal".to_string(),
+            }],
+            vec![TuiApprovalRequest {
+                id: "approval-one".to_string(),
+                thread_id: "thread-one".to_string(),
+                turn_id: Some("turn-one".to_string()),
+                tool: "shell".to_string(),
+                kind: "shell".to_string(),
+                target: "cargo test".to_string(),
+                status: "pending".to_string(),
+            }],
+            vec![TuiUserInputRequest {
+                id: "input-one".to_string(),
+                thread_id: "thread-one".to_string(),
+                turn_id: Some("turn-one".to_string()),
+                status: "pending".to_string(),
+                questions: vec![TuiUserInputQuestion {
+                    header: "Mode".to_string(),
+                    id: "mode".to_string(),
+                    question: "Pick mode".to_string(),
+                    options: vec![TuiUserInputOption {
+                        label: "Agent".to_string(),
+                        description: "Run".to_string(),
+                    }],
+                }],
+            }],
+        );
+
+        app.execute_palette_command("status");
+
+        assert_eq!(app.status, "status detail refreshed");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("status detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Status);
+        assert!(detail.contains("DeepSeekCode TUI Status"));
+        assert!(detail.contains("Session:"));
+        assert!(detail.contains("One [active]"));
+        assert!(detail.contains("First thread [running]"));
+        assert!(detail.contains("Task states:"));
+        assert!(detail.contains("pending=1"));
+        assert!(detail.contains("Approvals:"));
+        assert!(detail.contains("1 active, 1 pending total"));
+        assert!(detail.contains("Total tokens:"));
+        assert!(detail.contains("1234"));
+        assert!(detail.contains("Est. cost:"));
+        assert!(detail.contains("$0.000030"));
     }
 
     #[test]
