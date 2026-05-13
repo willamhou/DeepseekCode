@@ -495,6 +495,7 @@ pub enum TuiMcpDetailKind {
     Links,
     Home,
     Mode,
+    Help,
     Rollback,
     Reasoning,
     ComposerStash,
@@ -523,6 +524,7 @@ impl TuiMcpDetailKind {
             Self::Links => "links",
             Self::Home => "home",
             Self::Mode => "mode",
+            Self::Help => "help",
             Self::Rollback => "rollback",
             Self::Reasoning => "reasoning",
             Self::ComposerStash => "stash",
@@ -551,6 +553,7 @@ impl TuiMcpDetailKind {
             Self::Links => "Links",
             Self::Home => "Home",
             Self::Mode => "Mode",
+            Self::Help => "Help",
             Self::Rollback => "Rollback",
             Self::Reasoning => "Reasoning",
             Self::ComposerStash => "Composer Stash",
@@ -579,6 +582,7 @@ impl TuiMcpDetailKind {
             Self::Links => Self::Manager,
             Self::Home => Self::Manager,
             Self::Mode => Self::Manager,
+            Self::Help => Self::Manager,
             Self::Rollback => Self::Manager,
             Self::Reasoning => Self::Manager,
             Self::ComposerStash => Self::Manager,
@@ -607,6 +611,7 @@ impl TuiMcpDetailKind {
             Self::Links => Self::Manager,
             Self::Home => Self::Manager,
             Self::Mode => Self::Manager,
+            Self::Help => Self::Manager,
             Self::Rollback => Self::Manager,
             Self::Reasoning => Self::Manager,
             Self::ComposerStash => Self::Manager,
@@ -757,6 +762,12 @@ pub enum TuiModeCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TuiHelpCommand {
+    Show,
+    Topic(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TuiProviderCommand {
     Show,
     List,
@@ -800,6 +811,24 @@ fn parse_tui_stash_command(line: &str) -> Option<Result<TuiComposerStashCommand,
         ["clear"] | ["wipe"] | ["drop"] => Some(Ok(TuiComposerStashCommand::Clear)),
         _ => Some(Err(
             "usage: stash [list|pop|clear] or /stash [list|pop|clear]".to_string(),
+        )),
+    }
+}
+
+fn parse_tui_help_command(line: &str) -> Option<Result<TuiHelpCommand, String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/help")
+        .or_else(|| strip_tui_command_prefix(trimmed, "help"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "/?"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "?"))?;
+    let args = rest.split_whitespace().collect::<Vec<_>>();
+    match args.as_slice() {
+        [] => Some(Ok(TuiHelpCommand::Show)),
+        [topic] if !topic.starts_with('-') => Some(Ok(TuiHelpCommand::Topic(
+            topic.trim_start_matches('/').to_string(),
+        ))),
+        _ => Some(Err(
+            "usage: help [command], /help [command], or /?".to_string()
         )),
     }
 }
@@ -1278,6 +1307,193 @@ const MAX_TUI_COMMAND_HISTORY: usize = 100;
 const MAX_TUI_COMPOSER_STASH_ENTRIES: usize = 100;
 const MAX_TUI_RENAME_TITLE_CHARS: usize = 100;
 const TUI_PICKER_PAGE_SIZE: usize = 5;
+
+struct TuiHelpCommandInfo {
+    category: &'static str,
+    name: &'static str,
+    aliases: &'static [&'static str],
+    usage: &'static str,
+    description: &'static str,
+}
+
+const TUI_HELP_COMMANDS: &[TuiHelpCommandInfo] = &[
+    TuiHelpCommandInfo {
+        category: "Workbench",
+        name: "mode",
+        aliases: &[],
+        usage: "/mode [agent|plan|yolo|1|2|3]",
+        description: "Show or switch Plan / Agent / YOLO mode.",
+    },
+    TuiHelpCommandInfo {
+        category: "Workbench",
+        name: "home",
+        aliases: &["stats", "overview"],
+        usage: "/home",
+        description: "Show the compact runtime dashboard.",
+    },
+    TuiHelpCommandInfo {
+        category: "Workbench",
+        name: "links",
+        aliases: &["dashboard", "api"],
+        usage: "/links",
+        description: "Show DeepSeekCode and DeepSeek API links.",
+    },
+    TuiHelpCommandInfo {
+        category: "Workbench",
+        name: "feedback",
+        aliases: &[],
+        usage: "/feedback [bug|feature|security]",
+        description: "Show bug, feature, and security feedback targets.",
+    },
+    TuiHelpCommandInfo {
+        category: "Runtime",
+        name: "status",
+        aliases: &[],
+        usage: "/status",
+        description: "Show detailed runtime, session, task, and usage state.",
+    },
+    TuiHelpCommandInfo {
+        category: "Runtime",
+        name: "tokens",
+        aliases: &[],
+        usage: "/tokens",
+        description: "Show active-thread token and context telemetry.",
+    },
+    TuiHelpCommandInfo {
+        category: "Runtime",
+        name: "cost",
+        aliases: &[],
+        usage: "/cost",
+        description: "Show active-thread approximate spend.",
+    },
+    TuiHelpCommandInfo {
+        category: "Runtime",
+        name: "cache",
+        aliases: &[],
+        usage: "/cache [count|inspect|warmup]",
+        description: "Show prompt-cache telemetry and read-only cache notes.",
+    },
+    TuiHelpCommandInfo {
+        category: "Config",
+        name: "model",
+        aliases: &[],
+        usage: "/model [name|list]",
+        description: "Inspect or update the selected workspace model.",
+    },
+    TuiHelpCommandInfo {
+        category: "Config",
+        name: "models",
+        aliases: &[],
+        usage: "/models",
+        description: "List the offline model catalog.",
+    },
+    TuiHelpCommandInfo {
+        category: "Config",
+        name: "provider",
+        aliases: &[],
+        usage: "/provider [name [model]|list]",
+        description: "Inspect or update the selected workspace provider preset.",
+    },
+    TuiHelpCommandInfo {
+        category: "Config",
+        name: "network",
+        aliases: &[],
+        usage: "/network [list|allow|deny|remove|default]",
+        description: "Inspect or edit selected workspace network policy.",
+    },
+    TuiHelpCommandInfo {
+        category: "Skills",
+        name: "skills",
+        aliases: &[],
+        usage: "/skills [prefix]",
+        description: "List configured TOML skills.",
+    },
+    TuiHelpCommandInfo {
+        category: "Skills",
+        name: "skill",
+        aliases: &[],
+        usage: "/skill <name>",
+        description: "Show one configured skill.",
+    },
+    TuiHelpCommandInfo {
+        category: "Interaction",
+        name: "memory",
+        aliases: &[],
+        usage: "/memory [show|path|clear|edit|help]",
+        description: "Inspect or manage local user memory.",
+    },
+    TuiHelpCommandInfo {
+        category: "Interaction",
+        name: "stash",
+        aliases: &["park"],
+        usage: "/stash [list|pop|clear]",
+        description: "List, restore, or clear parked composer drafts.",
+    },
+    TuiHelpCommandInfo {
+        category: "Interaction",
+        name: "rename",
+        aliases: &[],
+        usage: "/rename <new title>",
+        description: "Rename the selected durable session.",
+    },
+    TuiHelpCommandInfo {
+        category: "Interaction",
+        name: "init",
+        aliases: &[],
+        usage: "/init",
+        description: "Create project instructions in AGENTS.md.",
+    },
+    TuiHelpCommandInfo {
+        category: "Runtime Work",
+        name: "task",
+        aliases: &["tasks"],
+        usage: "task <summary>|pause|resume|cancel|select",
+        description: "Create and manage active-thread runtime tasks.",
+    },
+    TuiHelpCommandInfo {
+        category: "Runtime Work",
+        name: "jobs",
+        aliases: &["job"],
+        usage: "jobs [list|show|wait|poll|stdin|cancel]",
+        description: "Inspect and control local shell jobs.",
+    },
+    TuiHelpCommandInfo {
+        category: "Runtime Work",
+        name: "mcp",
+        aliases: &[],
+        usage: "mcp manager|tools|prompts|resources|init|add|enable|disable|remove|validate",
+        description: "Inspect and manage MCP server configuration.",
+    },
+    TuiHelpCommandInfo {
+        category: "Runtime Work",
+        name: "diagnostics",
+        aliases: &[],
+        usage: "diagnostics [--changed|paths...]",
+        description: "Queue local diagnostics for changed files or paths.",
+    },
+    TuiHelpCommandInfo {
+        category: "Runtime Work",
+        name: "restore",
+        aliases: &["revert"],
+        usage: "restore snapshot|list|show|hunks|apply-hunk|revert-turn",
+        description: "Inspect or apply rollback snapshots and hunks.",
+    },
+    TuiHelpCommandInfo {
+        category: "Runtime Work",
+        name: "reasoning",
+        aliases: &[],
+        usage: "reasoning [list|latest|show|replay|search|pin]",
+        description: "Inspect and pin local reasoning items for replay.",
+    },
+    TuiHelpCommandInfo {
+        category: "Runtime Work",
+        name: "compact",
+        aliases: &[],
+        usage: "compact [tail]",
+        description: "Compact the active durable thread.",
+    },
+];
+
 const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "mode plan",
     "mode agent",
@@ -1444,8 +1660,17 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "approval",
     "cancel",
     "help",
+    "help mode",
+    "help links",
+    "help mcp",
+    "?",
 ];
 const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
+    "/help",
+    "/help mode",
+    "/help links",
+    "/help mcp",
+    "/?",
     "/memory",
     "/memory show",
     "/memory path",
@@ -3687,6 +3912,19 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(command) = parse_tui_help_command(&content) {
+                    match command {
+                        Ok(command) => {
+                            self.show_help_detail(command);
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some(command) = parse_tui_stash_command(&content) {
                     match command {
                         Ok(command) => self.handle_composer_stash_command(command),
@@ -4108,6 +4346,17 @@ impl TuiApp {
         let command = command.trim();
         if let Some(command) = command.strip_prefix('!') {
             self.request_shell_run(command.trim().to_string());
+            return;
+        }
+        if let Some(command) = parse_tui_help_command(command) {
+            match command {
+                Ok(command) => {
+                    self.show_help_detail(command);
+                }
+                Err(message) => {
+                    self.status = message;
+                }
+            }
             return;
         }
         if let Some(command) = parse_tui_stash_command(command) {
@@ -5592,6 +5841,16 @@ impl TuiApp {
         let detail = self.render_mode_detail();
         self.set_mcp_detail(TuiMcpDetailKind::Mode, detail);
         self.status = "mode options shown".to_string();
+    }
+
+    fn show_help_detail(&mut self, command: TuiHelpCommand) {
+        let topic_status = match &command {
+            TuiHelpCommand::Show => "help shown".to_string(),
+            TuiHelpCommand::Topic(topic) => format!("help shown: {topic}"),
+        };
+        let detail = render_help_detail(&command);
+        self.set_mcp_detail(TuiMcpDetailKind::Help, detail);
+        self.status = topic_status;
     }
 
     fn render_mode_detail(&self) -> String {
@@ -8329,6 +8588,83 @@ fn render_links_detail() -> String {
     detail
 }
 
+fn render_help_detail(command: &TuiHelpCommand) -> String {
+    match command {
+        TuiHelpCommand::Show => render_help_index_detail(),
+        TuiHelpCommand::Topic(topic) => render_help_topic_detail(topic),
+    }
+}
+
+fn render_help_index_detail() -> String {
+    let mut detail = String::new();
+    let _ = writeln!(detail, "DeepSeekCode Help");
+    let _ = writeln!(detail, "=================");
+    let _ = writeln!(detail);
+    let _ = writeln!(detail, "Use /help <command> for command-specific help.");
+    let _ = writeln!(detail);
+
+    let mut current_category = "";
+    for command in TUI_HELP_COMMANDS {
+        if command.category != current_category {
+            current_category = command.category;
+            let _ = writeln!(detail);
+            let _ = writeln!(detail, "{current_category}");
+            let _ = writeln!(detail, "{}", "-".repeat(current_category.len()));
+        }
+        let aliases = if command.aliases.is_empty() {
+            String::new()
+        } else {
+            format!(" (aliases: {})", command.aliases.join(", "))
+        };
+        let _ = writeln!(
+            detail,
+            "- /{:<12} {}{}",
+            command.name, command.description, aliases
+        );
+    }
+    detail
+}
+
+fn render_help_topic_detail(topic: &str) -> String {
+    let mut detail = String::new();
+    let normalized = topic.trim().trim_start_matches('/').to_ascii_lowercase();
+    let _ = writeln!(detail, "DeepSeekCode Help");
+    let _ = writeln!(detail, "=================");
+    let _ = writeln!(detail);
+
+    if let Some(command) = find_tui_help_command(&normalized) {
+        let _ = writeln!(detail, "/{}", command.name);
+        let _ = writeln!(detail, "{}", "-".repeat(command.name.len() + 1));
+        let _ = writeln!(detail, "{}", command.description);
+        let _ = writeln!(detail);
+        let _ = writeln!(detail, "Usage: {}", command.usage);
+        if !command.aliases.is_empty() {
+            let _ = writeln!(detail, "Aliases: {}", command.aliases.join(", "));
+        }
+        return detail;
+    }
+
+    let _ = writeln!(detail, "Unknown command: {topic}");
+    let _ = writeln!(detail);
+    let _ = writeln!(detail, "Known commands:");
+    let _ = writeln!(
+        detail,
+        "{}",
+        TUI_HELP_COMMANDS
+            .iter()
+            .map(|command| format!("/{}", command.name))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    detail
+}
+
+fn find_tui_help_command(topic: &str) -> Option<&'static TuiHelpCommandInfo> {
+    TUI_HELP_COMMANDS.iter().find(|command| {
+        command.name == topic || command.aliases.iter().any(|alias| *alias == topic)
+    })
+}
+
 fn format_cache_hit_rate(cache_hit: u64, cache_miss: u64) -> String {
     let total = cache_hit.saturating_add(cache_miss);
     if total == 0 {
@@ -9387,6 +9723,37 @@ mod tests {
         assert_eq!(app.mode, TuiMode::Yolo);
         assert_eq!(app.status, "mode set: YOLO");
         assert_eq!(app.composer, "");
+    }
+
+    #[test]
+    fn help_command_renders_index_and_topics() {
+        let mut app = TuiApp::new(Vec::new());
+
+        run_palette_command(&mut app, "/help");
+
+        assert_eq!(app.status, "help shown");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("help detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Help);
+        assert!(detail.contains("DeepSeekCode Help"));
+        assert!(detail.contains("/mode"));
+        assert!(detail.contains("/links"));
+
+        run_palette_command(&mut app, "help mode");
+
+        assert_eq!(app.status, "help shown: mode");
+        let (_, detail) = app.mcp_detail.as_ref().expect("mode help detail");
+        assert!(detail.contains("Usage: /mode [agent|plan|yolo|1|2|3]"));
+        assert!(detail.contains("Show or switch"));
+
+        app.composer_focused = true;
+        app.composer = "/? links".to_string();
+        app.composer_cursor = app.composer.len();
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert_eq!(app.status, "help shown: links");
+        assert_eq!(app.composer, "");
+        let (_, detail) = app.mcp_detail.as_ref().expect("links help detail");
+        assert!(detail.contains("Aliases: dashboard, api"));
     }
 
     #[test]
