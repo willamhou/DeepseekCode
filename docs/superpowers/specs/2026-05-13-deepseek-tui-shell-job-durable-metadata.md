@@ -48,6 +48,7 @@ stdout/stderr for a known `task_id`.
 
 ## Remaining Gap
 
-This slice does not provide cross-process stdin or cancel takeover for a shell
-job that is no longer attached to the current DeepSeekCode process. Detached
-records are inspectable, but control remains process-local.
+This slice did not provide cross-process stdin or cancel takeover for a shell
+job that is no longer attached to the current DeepSeekCode process. A later
+detached-cancel slice adds best-effort process-group cancellation for durable
+`running` records; stdin remains process-local.

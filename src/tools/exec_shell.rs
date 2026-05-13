@@ -277,7 +277,9 @@ impl Tool for ExecShellCancelTool {
         let mut manager = shell_manager().lock().unwrap();
         if !manager.contains(task_id) {
             drop(manager);
-            return Err(detached_or_unknown_shell_task_error(cwd, task_id, "cancel"));
+            return Ok(ToolOutput {
+                summary: cancel_detached_shell_job(cwd, task_id)?,
+            });
         }
         manager.cancel(task_id)?;
         Ok(ToolOutput {
@@ -733,6 +735,36 @@ fn detached_or_unknown_shell_task_error(cwd: &str, task_id: &str, action: &str) 
     }
 }
 
+fn cancel_detached_shell_job(cwd: &str, task_id: &str) -> AppResult<String> {
+    let manifest = shell_job_manifest_path(cwd, task_id);
+    if !manifest.is_file() {
+        return Err(app_error(format!(
+            "unknown background shell task: {task_id}"
+        )));
+    }
+    let mut record = read_durable_shell_job_manifest(&manifest)?;
+    if record.status != "running" {
+        return Ok(format!(
+            "Detached background shell job is not running: {task_id}\nmanaged: false\nstatus: {}",
+            record.status
+        ));
+    }
+    if record.pid == 0 {
+        return Err(app_error(format!(
+            "detached background shell task {task_id} has no recorded pid for cancellation"
+        )));
+    }
+    kill_detached_process_group(record.pid)?;
+    record.status = "killed".to_string();
+    record.exit_code = None;
+    record.updated_at = epoch_label();
+    write_durable_shell_job_manifest(cwd, &record)?;
+    Ok(format!(
+        "Canceled detached background shell job: {task_id}\nmanaged: false\npid: {}\nstatus: killed\nnote: stdin remains unavailable for detached shell jobs.",
+        record.pid
+    ))
+}
+
 fn persist_job_snapshot(job: &BackgroundShellJob) -> AppResult<()> {
     fs::create_dir_all(&job.record_dir)?;
     let stdout_total = job.stdout.lock().unwrap().len();
@@ -782,6 +814,56 @@ fn persist_job_snapshot(job: &BackgroundShellJob) -> AppResult<()> {
     ]));
     fs::write(
         job.record_dir.join("manifest.json"),
+        json_value_to_string(&manifest),
+    )?;
+    Ok(())
+}
+
+fn write_durable_shell_job_manifest(cwd: &str, record: &DurableShellJobRecord) -> AppResult<()> {
+    let record_dir = shell_job_record_dir(cwd, &record.id);
+    fs::create_dir_all(&record_dir)?;
+    let exit_code = record
+        .exit_code
+        .map(|code| JsonValue::Number(code.to_string()))
+        .unwrap_or(JsonValue::Null);
+    let stdout_total = durable_log_bytes(&record_dir, "stdout.log", record.stdout_total_bytes);
+    let stderr_total = durable_log_bytes(&record_dir, "stderr.log", record.stderr_total_bytes);
+    let manifest = JsonValue::Object(BTreeMap::from([
+        (
+            "kind".to_string(),
+            JsonValue::String("deepseek.exec_shell.job.v1".to_string()),
+        ),
+        ("id".to_string(), JsonValue::String(record.id.clone())),
+        (
+            "command".to_string(),
+            JsonValue::String(record.command.clone()),
+        ),
+        ("cwd".to_string(), JsonValue::String(record.cwd.clone())),
+        (
+            "status".to_string(),
+            JsonValue::String(record.status.clone()),
+        ),
+        ("exit_code".to_string(), exit_code),
+        ("pid".to_string(), JsonValue::Number(record.pid.to_string())),
+        (
+            "started_at".to_string(),
+            JsonValue::String(record.started_at.clone()),
+        ),
+        (
+            "updated_at".to_string(),
+            JsonValue::String(record.updated_at.clone()),
+        ),
+        (
+            "stdout_total_bytes".to_string(),
+            JsonValue::Number(stdout_total.to_string()),
+        ),
+        (
+            "stderr_total_bytes".to_string(),
+            JsonValue::Number(stderr_total.to_string()),
+        ),
+    ]));
+    fs::write(
+        record_dir.join("manifest.json"),
         json_value_to_string(&manifest),
     )?;
     Ok(())
@@ -982,6 +1064,40 @@ fn kill_child_process_group(child: &mut Child) {
     let _ = child.kill();
 }
 
+fn kill_detached_process_group(pid: u32) -> AppResult<()> {
+    if pid <= 1 || pid == std::process::id() {
+        return Err(app_error(format!(
+            "refusing to cancel detached shell job with unsafe pid {pid}"
+        )));
+    }
+    #[cfg(unix)]
+    {
+        const SIGKILL: i32 = 9;
+        unsafe extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        let process_group = -(pid as i32);
+        let group_result = unsafe { kill(process_group, SIGKILL) };
+        if group_result == 0 {
+            return Ok(());
+        }
+        let process_result = unsafe { kill(pid as i32, SIGKILL) };
+        if process_result == 0 {
+            return Ok(());
+        }
+        return Err(app_error(format!(
+            "failed to cancel detached shell process {pid}: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    #[cfg(not(unix))]
+    {
+        Err(app_error(
+            "detached shell cancellation is not supported on this platform",
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1173,18 +1289,89 @@ mod tests {
             "{stdin_error}"
         );
 
-        let cancel_error = ExecShellCancelTool
+        let cancel_output = ExecShellCancelTool
             .execute(
                 ToolInput::new()
                     .with_arg("task_id", task_id)
                     .with_arg("cwd", cwd),
             )
-            .unwrap_err()
-            .to_string();
-        assert!(cancel_error.contains("detached"), "{cancel_error}");
+            .unwrap();
         assert!(
-            cancel_error.contains("cancel control requires"),
-            "{cancel_error}"
+            cancel_output
+                .summary
+                .contains("Detached background shell job is not running"),
+            "{}",
+            cancel_output.summary
+        );
+        assert!(cancel_output.summary.contains("status: completed"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exec_shell_cancel_kills_running_detached_durable_job() {
+        let root = temp_root("detached-cancel");
+        fs::create_dir_all(&root).unwrap();
+        let cwd = root.display().to_string();
+
+        let mut process = Command::new("sh");
+        process
+            .args(["-lc", "sleep 30"])
+            .current_dir(&root)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        configure_process_group(&mut process);
+        let mut child = process.spawn().unwrap();
+        let task_id = generated_job_id();
+        let record_dir = shell_job_record_dir(&cwd, &task_id);
+        fs::create_dir_all(&record_dir).unwrap();
+        fs::write(record_dir.join("stdout.log"), []).unwrap();
+        fs::write(record_dir.join("stderr.log"), []).unwrap();
+        let record = DurableShellJobRecord {
+            id: task_id.clone(),
+            command: "sleep 30".to_string(),
+            cwd: cwd.clone(),
+            status: "running".to_string(),
+            exit_code: None,
+            pid: child.id(),
+            started_at: epoch_label(),
+            updated_at: epoch_label(),
+            stdout_total_bytes: 0,
+            stderr_total_bytes: 0,
+        };
+        write_durable_shell_job_manifest(&cwd, &record).unwrap();
+
+        let cancelled = ExecShellCancelTool
+            .execute(
+                ToolInput::new()
+                    .with_arg("task_id", task_id.clone())
+                    .with_arg("cwd", cwd.clone()),
+            )
+            .unwrap();
+        assert!(
+            cancelled
+                .summary
+                .contains("Canceled detached background shell job"),
+            "{}",
+            cancelled.summary
+        );
+        assert!(cancelled.summary.contains("managed: false"));
+
+        let status = child.wait().unwrap();
+        assert!(!status.success());
+
+        let shown = ExecShellShowTool
+            .execute(
+                ToolInput::new()
+                    .with_arg("task_id", task_id)
+                    .with_arg("cwd", cwd),
+            )
+            .unwrap();
+        assert!(
+            shown.summary.contains("status: killed"),
+            "{}",
+            shown.summary
         );
         let _ = fs::remove_dir_all(root);
     }

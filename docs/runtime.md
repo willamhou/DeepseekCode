@@ -1291,11 +1291,13 @@ background job also writes durable metadata and stdout/stderr logs under
 `<cwd>/.dscode/shell-jobs/<task_id>/`. `exec_shell_list`, `exec_shell_show`,
 and `exec_shell_wait` can read those detached records when the caller supplies
 the same `cwd`, even after the original process exits. Detached records expose
-their last known status and captured logs with `managed: false`; stdin and
-cancel control still require the original DeepSeekCode process to remain
-attached to the job. `exec_shell_interact` and `exec_shell_cancel` distinguish
-detached durable records from unknown task ids and return an explicit detached
-control diagnostic instead of a generic missing-task error. MCP server mode
+their last known status and captured logs with `managed: false`. Detached stdin
+still requires the original DeepSeekCode process to remain attached to the job,
+but `exec_shell_cancel cwd=<path> task_id=<id>` can best-effort cancel a
+detached `running` record by its persisted pid/process group and then update
+the durable manifest to `killed`. `exec_shell_interact` distinguishes detached
+durable records from unknown task ids and returns an explicit detached stdin
+diagnostic instead of a generic missing-task error. MCP server mode
 exposes `exec_shell_list`, `exec_shell_show`, `exec_shell_wait`, `exec_wait`,
 and `task_shell_wait` as read-only tools by default, while `exec_shell`,
 `task_shell_start`, `exec_shell_interact`, `exec_interact`, and

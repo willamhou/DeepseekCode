@@ -9,8 +9,8 @@ Status: completed
 Durable shell job metadata made detached `exec_shell_list`, `exec_shell_show`,
 and `exec_shell_wait` useful after a process restart. However, attempting
 stdin or cancel control against a detached-but-known durable task id still
-looked the same as an entirely unknown task. That made the new boundary harder
-for TUI and MCP clients to explain.
+looked the same as an entirely unknown task. That made the original detached
+boundary harder for TUI and MCP clients to explain.
 
 ## Spec
 
@@ -27,11 +27,13 @@ for TUI and MCP clients to explain.
 ## Implementation
 
 - Added `durable_shell_job_exists` for cheap manifest detection.
-- Added `detached_or_unknown_shell_task_error` to share the control-boundary
-  message across stdin and cancel paths.
+- Added `detached_or_unknown_shell_task_error` for the stdin control-boundary
+  message. A later detached-cancel slice narrows the cancel side of this
+  boundary with best-effort process-group cancellation for durable `running`
+  records.
 - `exec_shell_interact` now forwards `cwd` into the follow-up wait call.
 - The existing durable shell job test now verifies detached show/wait plus
-  detached stdin/cancel diagnostics.
+  detached stdin diagnostics and non-running detached cancel reporting.
 
 ## Verification
 
