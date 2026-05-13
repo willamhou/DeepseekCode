@@ -4,7 +4,10 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::cli::app::{AgentsAction, AgentsServiceArgs, AgentsServiceKind};
+use crate::cli::app::{
+    AgentsAction, AgentsRlmEventsArgs, AgentsRlmStatusArgs, AgentsRlmWaitArgs, AgentsServiceArgs,
+    AgentsServiceKind,
+};
 use crate::config::load::load_or_default;
 use crate::config::types::AppConfig;
 use crate::core::agents::{load_agent_file, load_default_agents, AgentLoadResult, AgentSource};
@@ -26,10 +29,13 @@ use crate::tools::dispatch_subagent::{
     active_agent_thread_path, agent_threads_dir, thread_file_path, validate_thread_id,
 };
 use crate::tools::rlm::{
-    rlm_live_session_ids_by_runtime_thread, RlmLiveRecoverTool, RlmLiveRunNextTool,
+    rlm_live_session_ids_by_runtime_thread, RlmLiveEventsTool, RlmLiveRecoverTool,
+    RlmLiveRunNextTool, RlmLiveStatusTool, RlmLiveWaitTool,
 };
 use crate::tools::types::{Tool, ToolInput};
-use crate::util::json::{json_as_object, json_as_string, json_as_u64, parse_json_value};
+use crate::util::json::{
+    json_as_array, json_as_object, json_as_string, json_as_u64, parse_json_value,
+};
 use crate::util::json::{json_value_to_string, JsonValue};
 
 pub fn run(action: AgentsAction) -> AppResult<()> {
@@ -45,6 +51,9 @@ pub fn run(action: AgentsAction) -> AppResult<()> {
             once,
             json,
         } => run_runtime_daemon(config, budget, interval_ms, once, json),
+        AgentsAction::RlmStatus(args) => run_rlm_status(config, args),
+        AgentsAction::RlmEvents(args) => run_rlm_events(config, args),
+        AgentsAction::RlmWait(args) => run_rlm_wait(config, args),
         AgentsAction::Service(args) => render_agent_services(args),
         AgentsAction::Threads => list_threads(&config.workspace.config_dir),
         AgentsAction::ShowThread { id } => show_thread(&config.workspace.config_dir, &id),
@@ -305,6 +314,158 @@ fn run_runtime_daemon(
             return Ok(());
         }
         std::thread::sleep(interval);
+    }
+}
+
+fn run_rlm_status(config: AppConfig, args: AgentsRlmStatusArgs) -> AppResult<()> {
+    let output = RlmLiveStatusTool { config }.execute(rlm_status_tool_input(&args))?;
+    print_rlm_cli_output(&output.summary, args.json);
+    Ok(())
+}
+
+fn run_rlm_events(config: AppConfig, args: AgentsRlmEventsArgs) -> AppResult<()> {
+    let output = RlmLiveEventsTool { config }.execute(rlm_events_tool_input(&args))?;
+    print_rlm_cli_output(&output.summary, args.json);
+    Ok(())
+}
+
+fn run_rlm_wait(config: AppConfig, args: AgentsRlmWaitArgs) -> AppResult<()> {
+    let output = RlmLiveWaitTool { config }.execute(rlm_wait_tool_input(&args))?;
+    print_rlm_cli_output(&output.summary, args.json);
+    Ok(())
+}
+
+fn rlm_status_tool_input(args: &AgentsRlmStatusArgs) -> ToolInput {
+    let mut input = ToolInput::new();
+    if let Some(session_id) = &args.session_id {
+        input = input.with_arg("session_id", session_id.clone());
+    }
+    if let Some(limit) = args.limit {
+        input = input.with_arg("limit", limit.to_string());
+    }
+    input
+}
+
+fn rlm_events_tool_input(args: &AgentsRlmEventsArgs) -> ToolInput {
+    let mut input = ToolInput::new().with_arg("session_id", args.session_id.clone());
+    if let Some(cursor) = args.cursor {
+        input = input.with_arg("cursor", cursor.to_string());
+    }
+    if let Some(limit) = args.limit {
+        input = input.with_arg("limit", limit.to_string());
+    }
+    input
+}
+
+fn rlm_wait_tool_input(args: &AgentsRlmWaitArgs) -> ToolInput {
+    let mut input = ToolInput::new().with_arg("session_id", args.session_id.clone());
+    if let Some(cursor) = args.cursor {
+        input = input.with_arg("cursor", cursor.to_string());
+    }
+    if let Some(limit) = args.limit {
+        input = input.with_arg("limit", limit.to_string());
+    }
+    if let Some(timeout_ms) = args.timeout_ms {
+        input = input.with_arg("timeout_ms", timeout_ms.to_string());
+    }
+    if let Some(poll_interval_ms) = args.poll_interval_ms {
+        input = input.with_arg("poll_interval_ms", poll_interval_ms.to_string());
+    }
+    input
+}
+
+fn print_rlm_cli_output(summary: &str, json: bool) {
+    if json {
+        println!("{summary}");
+        return;
+    }
+    let Ok(value) = parse_json_value(summary) else {
+        println!("{summary}");
+        return;
+    };
+    let Some(root) = json_as_object(&value) else {
+        println!("{summary}");
+        return;
+    };
+    if let Some(sessions) = root.get("sessions").and_then(json_as_array) {
+        println!("RLM live sessions: {}", sessions.len());
+        for session in sessions.iter().take(20) {
+            print_rlm_status_line(session);
+        }
+        if let Some(errors) = root.get("errors").and_then(json_as_array) {
+            if !errors.is_empty() {
+                println!("errors: {}", errors.len());
+            }
+        }
+        return;
+    }
+    if let Some(events) = root.get("events").and_then(json_as_array) {
+        let session_id = root
+            .get("session_id")
+            .and_then(json_as_string)
+            .unwrap_or("-");
+        let cursor = rlm_cli_scalar(root.get("cursor"));
+        let next_cursor = rlm_cli_scalar(root.get("next_cursor"));
+        println!(
+            "RLM events for {session_id}: {} event(s), cursor={cursor}, next_cursor={next_cursor}",
+            events.len()
+        );
+        for event in events.iter().take(20) {
+            if let Some(event) = json_as_object(event) {
+                let seq = rlm_cli_scalar(event.get("seq"));
+                let kind = event.get("kind").and_then(json_as_string).unwrap_or("-");
+                let task_id = event.get("task_id").and_then(json_as_string).unwrap_or("-");
+                println!("- seq={seq} kind={kind} task={task_id}");
+            }
+        }
+        return;
+    }
+    print_rlm_status_line(&value);
+}
+
+fn print_rlm_status_line(value: &JsonValue) {
+    let Some(root) = json_as_object(value) else {
+        println!("{}", json_value_to_string(value));
+        return;
+    };
+    let session_id = root
+        .get("session_id")
+        .and_then(json_as_string)
+        .unwrap_or("-");
+    if matches!(root.get("exists"), Some(JsonValue::Bool(false))) {
+        println!("RLM live session {session_id}: not found");
+        return;
+    }
+    let status = root.get("status").and_then(json_as_string).unwrap_or("-");
+    let queued = rlm_cli_scalar(root.get("queued_turns_runtime"));
+    let active = rlm_cli_scalar(root.get("active_turn_id"));
+    let owner = root
+        .get("daemon_owner")
+        .and_then(json_as_string)
+        .unwrap_or("-");
+    let alive = rlm_cli_scalar(root.get("daemon_alive"));
+    println!(
+        "RLM live session {session_id}: status={status} queued={queued} active={active} owner={owner} alive={alive}"
+    );
+    if let Some(actions) = root.get("recommended_actions").and_then(json_as_array) {
+        let actions = actions
+            .iter()
+            .filter_map(json_as_string)
+            .take(3)
+            .collect::<Vec<_>>();
+        if !actions.is_empty() {
+            println!("  next: {}", actions.join("; "));
+        }
+    }
+}
+
+fn rlm_cli_scalar(value: Option<&JsonValue>) -> String {
+    match value {
+        Some(JsonValue::String(value)) => value.clone(),
+        Some(JsonValue::Number(value)) => value.clone(),
+        Some(JsonValue::Bool(value)) => value.to_string(),
+        Some(JsonValue::Null) | None => "-".to_string(),
+        Some(value) => json_value_to_string(value),
     }
 }
 
@@ -1764,6 +1925,41 @@ mod tests {
         let error = show_thread(config_dir.to_str().unwrap(), "../bad").unwrap_err();
 
         assert!(error.to_string().contains("invalid subagent thread id"));
+    }
+
+    #[test]
+    fn rlm_cli_read_lifecycle_args_build_tool_inputs() {
+        let status = rlm_status_tool_input(&AgentsRlmStatusArgs {
+            session_id: Some("live.1".to_string()),
+            limit: Some(5),
+            json: true,
+        });
+        assert_eq!(status.get("session_id"), Some("live.1"));
+        assert_eq!(status.get("limit"), Some("5"));
+
+        let events = rlm_events_tool_input(&AgentsRlmEventsArgs {
+            session_id: "live.1".to_string(),
+            cursor: Some(7),
+            limit: Some(3),
+            json: false,
+        });
+        assert_eq!(events.get("session_id"), Some("live.1"));
+        assert_eq!(events.get("cursor"), Some("7"));
+        assert_eq!(events.get("limit"), Some("3"));
+
+        let wait = rlm_wait_tool_input(&AgentsRlmWaitArgs {
+            session_id: "live.1".to_string(),
+            cursor: Some(9),
+            limit: Some(4),
+            timeout_ms: Some(2500),
+            poll_interval_ms: Some(50),
+            json: true,
+        });
+        assert_eq!(wait.get("session_id"), Some("live.1"));
+        assert_eq!(wait.get("cursor"), Some("9"));
+        assert_eq!(wait.get("limit"), Some("4"));
+        assert_eq!(wait.get("timeout_ms"), Some("2500"));
+        assert_eq!(wait.get("poll_interval_ms"), Some("50"));
     }
 
     #[test]

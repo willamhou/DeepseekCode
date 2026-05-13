@@ -75,7 +75,7 @@ recovery before claiming queued live RLM turns; `rlm_process_status` now gives
 TUI/MCP/model clients a read-only lifecycle dashboard with owner, queue, stale,
 and recommended-action state.
 Live PTY resize, attachable terminal replay/supervisor takeover, RLM TUI/ACP
-subscription polish, and richer daemon lifecycle commands remain open.
+subscription polish, and stateful daemon lifecycle CLI wrappers remain open.
 
 ## Next Candidate Specs
 

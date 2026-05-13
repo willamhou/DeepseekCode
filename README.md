@@ -21,8 +21,8 @@ This repository is an active workbench, not a polished hosted product.
   supervisors and TUI clients.
 - Compared with `DeepSeek-TUI`, the common terminal/runtime workflow is now
   substantially closer. The remaining gap is concentrated in hard
-  infrastructure edges: cross-process shell takeover, RLM daemon lifecycle
-  polish, platform-specific rollback fidelity, and external
+  infrastructure edges: cross-process shell takeover, stateful RLM daemon
+  lifecycle polish, platform-specific rollback fidelity, and external
   publishing or write-fixture validation.
 
 ## Feature Surface
@@ -37,6 +37,8 @@ This repository is an active workbench, not a polished hosted product.
   automations under `.dscode/runtime/`
 - `deepseek tui` terminal workbench with Plan / Agent / YOLO modes
 - Background agent tasks and daemon runner
+- Read-only RLM daemon lifecycle CLI commands for status, event replay, and
+  long-poll waits
 - HTTP runtime with health, session, thread, task, event, usage, diagnostics,
   automation, and SSE stream endpoints
 - ACP stdio adapter for editor clients, including durable session list/load

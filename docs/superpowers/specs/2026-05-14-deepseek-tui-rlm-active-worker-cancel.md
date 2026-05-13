@@ -46,4 +46,4 @@ active live RLM worker.
 
 Forced cross-process interruption is implemented separately in
 `2026-05-14-deepseek-tui-rlm-force-worker-interrupt.md`. TUI/ACP subscription
-polish and richer lifecycle commands remain open.
+polish and stateful lifecycle CLI wrappers remain open.

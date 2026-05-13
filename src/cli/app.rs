@@ -473,6 +473,9 @@ pub enum AgentsAction {
         once: bool,
         json: bool,
     },
+    RlmStatus(AgentsRlmStatusArgs),
+    RlmEvents(AgentsRlmEventsArgs),
+    RlmWait(AgentsRlmWaitArgs),
     Service(AgentsServiceArgs),
     Threads,
     ShowThread {
@@ -483,6 +486,31 @@ pub enum AgentsAction {
     },
     CurrentThread,
     ClearThread,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentsRlmStatusArgs {
+    pub session_id: Option<String>,
+    pub limit: Option<usize>,
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentsRlmEventsArgs {
+    pub session_id: String,
+    pub cursor: Option<u64>,
+    pub limit: Option<usize>,
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentsRlmWaitArgs {
+    pub session_id: String,
+    pub cursor: Option<u64>,
+    pub limit: Option<usize>,
+    pub timeout_ms: Option<u64>,
+    pub poll_interval_ms: Option<u64>,
+    pub json: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1736,6 +1764,9 @@ fn parse_agents_subcommand(args: Vec<String>) -> Result<AgentsAction, String> {
         }
         "run-task" => parse_agents_run_task_args(args.into_iter().skip(1).collect()),
         "daemon" => parse_agents_daemon_args(args.into_iter().skip(1).collect()),
+        "rlm-status" => parse_agents_rlm_status_args(args.into_iter().skip(1).collect()),
+        "rlm-events" => parse_agents_rlm_events_args(args.into_iter().skip(1).collect()),
+        "rlm-wait" => parse_agents_rlm_wait_args(args.into_iter().skip(1).collect()),
         "service" => parse_agents_service_args(args.into_iter().skip(1).collect()),
         "threads" => {
             if args.len() > 1 {
@@ -1772,7 +1803,7 @@ fn parse_agents_subcommand(args: Vec<String>) -> Result<AgentsAction, String> {
             Ok(AgentsAction::ClearThread)
         }
         other => Err(format!(
-            "unknown agents sub-action `{other}`; expected list|show|validate|run-task|daemon|service|threads|show-thread|switch|current|clear-current"
+            "unknown agents sub-action `{other}`; expected list|show|validate|run-task|daemon|rlm-status|rlm-events|rlm-wait|service|threads|show-thread|switch|current|clear-current"
         )),
     }
 }
@@ -1862,6 +1893,178 @@ fn parse_agents_daemon_args(args: Vec<String>) -> Result<AgentsAction, String> {
         once,
         json,
     })
+}
+
+fn parse_agents_rlm_status_args(args: Vec<String>) -> Result<AgentsAction, String> {
+    let mut session_id = None;
+    let mut limit = None;
+    let mut json = false;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--limit" if index + 1 < args.len() => {
+                limit = Some(
+                    args[index + 1]
+                        .parse::<usize>()
+                        .map_err(|_| "agents rlm-status --limit must be a number".to_string())?,
+                );
+                index += 2;
+            }
+            "--limit" => return Err("agents rlm-status --limit requires a value".to_string()),
+            "--json" => {
+                json = true;
+                index += 1;
+            }
+            value if value.starts_with('-') => {
+                return Err(format!(
+                    "unknown flag for `agents rlm-status`: {value}; expected --limit|--json"
+                ));
+            }
+            value => {
+                if session_id.is_some() {
+                    return Err("agents rlm-status accepts at most one session id".to_string());
+                }
+                session_id = Some(value.to_string());
+                index += 1;
+            }
+        }
+    }
+    Ok(AgentsAction::RlmStatus(AgentsRlmStatusArgs {
+        session_id,
+        limit,
+        json,
+    }))
+}
+
+fn parse_agents_rlm_events_args(args: Vec<String>) -> Result<AgentsAction, String> {
+    let mut session_id = None;
+    let mut cursor = None;
+    let mut limit = None;
+    let mut json = false;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--cursor" | "--since-seq" if index + 1 < args.len() => {
+                cursor = Some(args[index + 1].parse::<u64>().map_err(|_| {
+                    "agents rlm-events --cursor/--since-seq must be a number".to_string()
+                })?);
+                index += 2;
+            }
+            "--cursor" | "--since-seq" => {
+                return Err("agents rlm-events --cursor/--since-seq requires a value".to_string());
+            }
+            "--limit" if index + 1 < args.len() => {
+                limit = Some(
+                    args[index + 1]
+                        .parse::<usize>()
+                        .map_err(|_| "agents rlm-events --limit must be a number".to_string())?,
+                );
+                index += 2;
+            }
+            "--limit" => return Err("agents rlm-events --limit requires a value".to_string()),
+            "--json" => {
+                json = true;
+                index += 1;
+            }
+            value if value.starts_with('-') => {
+                return Err(format!(
+                    "unknown flag for `agents rlm-events`: {value}; expected --cursor|--since-seq|--limit|--json"
+                ));
+            }
+            value => {
+                if session_id.is_some() {
+                    return Err("agents rlm-events accepts exactly one session id".to_string());
+                }
+                session_id = Some(value.to_string());
+                index += 1;
+            }
+        }
+    }
+    let session_id =
+        session_id.ok_or_else(|| "agents rlm-events requires a session id".to_string())?;
+    Ok(AgentsAction::RlmEvents(AgentsRlmEventsArgs {
+        session_id,
+        cursor,
+        limit,
+        json,
+    }))
+}
+
+fn parse_agents_rlm_wait_args(args: Vec<String>) -> Result<AgentsAction, String> {
+    let mut session_id = None;
+    let mut cursor = None;
+    let mut limit = None;
+    let mut timeout_ms = None;
+    let mut poll_interval_ms = None;
+    let mut json = false;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--cursor" | "--since-seq" if index + 1 < args.len() => {
+                cursor = Some(args[index + 1].parse::<u64>().map_err(|_| {
+                    "agents rlm-wait --cursor/--since-seq must be a number".to_string()
+                })?);
+                index += 2;
+            }
+            "--cursor" | "--since-seq" => {
+                return Err("agents rlm-wait --cursor/--since-seq requires a value".to_string());
+            }
+            "--limit" if index + 1 < args.len() => {
+                limit = Some(
+                    args[index + 1]
+                        .parse::<usize>()
+                        .map_err(|_| "agents rlm-wait --limit must be a number".to_string())?,
+                );
+                index += 2;
+            }
+            "--limit" => return Err("agents rlm-wait --limit requires a value".to_string()),
+            "--timeout-ms" if index + 1 < args.len() => {
+                timeout_ms =
+                    Some(args[index + 1].parse::<u64>().map_err(|_| {
+                        "agents rlm-wait --timeout-ms must be a number".to_string()
+                    })?);
+                index += 2;
+            }
+            "--timeout-ms" => {
+                return Err("agents rlm-wait --timeout-ms requires a value".to_string());
+            }
+            "--poll-interval-ms" if index + 1 < args.len() => {
+                poll_interval_ms = Some(args[index + 1].parse::<u64>().map_err(|_| {
+                    "agents rlm-wait --poll-interval-ms must be a number".to_string()
+                })?);
+                index += 2;
+            }
+            "--poll-interval-ms" => {
+                return Err("agents rlm-wait --poll-interval-ms requires a value".to_string());
+            }
+            "--json" => {
+                json = true;
+                index += 1;
+            }
+            value if value.starts_with('-') => {
+                return Err(format!(
+                    "unknown flag for `agents rlm-wait`: {value}; expected --cursor|--since-seq|--limit|--timeout-ms|--poll-interval-ms|--json"
+                ));
+            }
+            value => {
+                if session_id.is_some() {
+                    return Err("agents rlm-wait accepts exactly one session id".to_string());
+                }
+                session_id = Some(value.to_string());
+                index += 1;
+            }
+        }
+    }
+    let session_id =
+        session_id.ok_or_else(|| "agents rlm-wait requires a session id".to_string())?;
+    Ok(AgentsAction::RlmWait(AgentsRlmWaitArgs {
+        session_id,
+        cursor,
+        limit,
+        timeout_ms,
+        poll_interval_ms,
+        json,
+    }))
 }
 
 fn parse_agents_service_args(args: Vec<String>) -> Result<AgentsAction, String> {
@@ -3320,6 +3523,69 @@ mod tests {
                 once: true,
                 json: true,
             }))
+        ));
+
+        let rlm_status = Cli::from_argv(vec![
+            "agents".to_string(),
+            "rlm-status".to_string(),
+            "live.1".to_string(),
+            "--limit".to_string(),
+            "5".to_string(),
+            "--json".to_string(),
+        ])
+        .expect("parse should succeed");
+        assert!(matches!(
+            rlm_status.command,
+            Some(Command::Agents(AgentsAction::RlmStatus(AgentsRlmStatusArgs {
+                session_id: Some(ref id),
+                limit: Some(5),
+                json: true,
+            }))) if id == "live.1"
+        ));
+
+        let rlm_events = Cli::from_argv(vec![
+            "agents".to_string(),
+            "rlm-events".to_string(),
+            "live.1".to_string(),
+            "--since-seq".to_string(),
+            "7".to_string(),
+            "--limit".to_string(),
+            "3".to_string(),
+        ])
+        .expect("parse should succeed");
+        assert!(matches!(
+            rlm_events.command,
+            Some(Command::Agents(AgentsAction::RlmEvents(AgentsRlmEventsArgs {
+                ref session_id,
+                cursor: Some(7),
+                limit: Some(3),
+                json: false,
+            }))) if session_id == "live.1"
+        ));
+
+        let rlm_wait = Cli::from_argv(vec![
+            "agents".to_string(),
+            "rlm-wait".to_string(),
+            "live.1".to_string(),
+            "--cursor".to_string(),
+            "9".to_string(),
+            "--timeout-ms".to_string(),
+            "2500".to_string(),
+            "--poll-interval-ms".to_string(),
+            "50".to_string(),
+            "--json".to_string(),
+        ])
+        .expect("parse should succeed");
+        assert!(matches!(
+            rlm_wait.command,
+            Some(Command::Agents(AgentsAction::RlmWait(AgentsRlmWaitArgs {
+                ref session_id,
+                cursor: Some(9),
+                limit: None,
+                timeout_ms: Some(2500),
+                poll_interval_ms: Some(50),
+                json: true,
+            }))) if session_id == "live.1"
         ));
 
         let service = Cli::from_argv(vec![

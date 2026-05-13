@@ -1450,7 +1450,12 @@ so a restarted supervisor can repair interrupted turns across the workspace.
 live sessions: it reports manifest/runtime queue counts, active turn status,
 daemon owner liveness/stale state, payload/runtime task counts, and recommended
 next commands such as recover, wait, run-next, drain, daemon, or reset. Without
-`session_id`, it summarizes all live sessions and workspace totals.
+`session_id`, it summarizes all live sessions and workspace totals. The same
+read-only lifecycle surface is available from the terminal as
+`deepseek agents rlm-status [session_id] [--limit N] [--json]`,
+`deepseek agents rlm-events <session_id> [--cursor N|--since-seq N] [--limit N]
+[--json]`, and `deepseek agents rlm-wait <session_id> [--cursor N|--since-seq
+N] [--limit N] [--timeout-ms N] [--poll-interval-ms N] [--json]`.
 `rlm_process_stop session_id=<id>` stops an idle live session, cancels queued
 pending turns, appends `session_stopped`, and blocks accidental reuse until
 `rlm_process live=true reset=true` is supplied for the same `session_id`.
@@ -1468,8 +1473,8 @@ now first runs safe all-session live RLM recovery, which requeues/fails stale
 running turns while preserving live-owned turns unless forced, then runs one
 queued live RLM turn per tick through the same worker path. Forced
 cross-process worker interruption now exists as an explicit `force=true`
-operator action on `rlm_process_cancel`; broader RLM daemon lifecycle commands
-remain future work.
+operator action on `rlm_process_cancel`; stateful RLM daemon lifecycle CLI
+wrappers remain future work.
 `rlm_process_events session_id=<id> cursor=<seq>` replays parsed
 `.dscode/rlm-daemon/<session_id>/events.jsonl` records with `seq` greater than
 the cursor and returns `next_cursor` for clients that want deterministic live

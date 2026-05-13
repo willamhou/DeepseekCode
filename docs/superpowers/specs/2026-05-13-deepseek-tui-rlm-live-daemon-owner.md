@@ -37,4 +37,4 @@ running session, but it could not tell whether that owner still existed.
 
 ## Remaining
 
-TUI/ACP subscription polish and broader lifecycle/status commands remain open.
+TUI/ACP subscription polish and stateful lifecycle CLI wrappers remain open.

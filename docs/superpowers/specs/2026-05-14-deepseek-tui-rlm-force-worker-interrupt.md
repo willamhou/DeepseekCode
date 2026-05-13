@@ -44,4 +44,4 @@ interrupted explicitly.
 
 ## Remaining
 
-TUI/ACP subscription polish and richer lifecycle commands remain open.
+TUI/ACP subscription polish and stateful lifecycle CLI wrappers remain open.

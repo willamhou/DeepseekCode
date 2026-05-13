@@ -545,7 +545,10 @@ Remaining:
   unless `force=true` is supplied; `deepseek agents daemon` now runs safe
   all-session live RLM recovery before claiming one queued live RLM turn per
   tick; `rlm_process_status` now provides a read-only lifecycle dashboard with
-  owner liveness, queue/running counts, and recommended next commands
+  owner liveness, queue/running counts, and recommended next commands; terminal
+  operators can now call the same read-only lifecycle surface through
+  `deepseek agents rlm-status`, `deepseek agents rlm-events`, and
+  `deepseek agents rlm-wait`
 - Review remote PR context signals now exist: `review` parses
   `github_pr_context` JSON to report requested changes, failing/cancelled status
   checks, and missing `include_diff=true` context before optional semantic

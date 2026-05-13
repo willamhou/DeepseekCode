@@ -201,7 +201,7 @@ resumption.
      turn per tick through `rlm_process_run_next`, and the existing
      systemd/launchd templates already run that daemon; `rlm_process_status`
      now provides a read-only lifecycle dashboard for one or all live sessions;
-     richer lifecycle commands remain open
+     stateful lifecycle CLI wrappers remain open
 
 ## Verification Plan
 
@@ -223,4 +223,4 @@ Future implementation should add these gates:
 Do not rename the existing bounded child-agent `rlm_process` implementation as a
 live daemon. It is already useful and should remain the default until a real
 live worker exists. The remaining executable RLM slices should focus on TUI/ACP
-subscription polish and richer lifecycle commands.
+subscription polish and stateful lifecycle CLI wrappers.

@@ -36,4 +36,4 @@ the same native stream shape for DeepSeek-TUI-style external observers.
 
 ## Remaining
 
-TUI/ACP subscription polish and richer lifecycle commands remain open.
+TUI/ACP subscription polish and stateful lifecycle CLI wrappers remain open.
