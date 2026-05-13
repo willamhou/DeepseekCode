@@ -40,5 +40,6 @@ GitHub metadata that `github_pr_context` already includes.
 
 ## Remaining
 
-Live remote PR review fixtures, semantic child review over real PR context, and
-automatic comment/retry loops remain out of this slice.
+Live remote PR review fixtures remain out of this slice. Later slices added
+semantic child review routing over real PR context plus automatic comment,
+inline-comment, and retry planning loops.

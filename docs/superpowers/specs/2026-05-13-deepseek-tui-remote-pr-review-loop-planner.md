@@ -42,6 +42,6 @@ context gathering into the review tool.
 
 Follow-up work added read-only PR comment planning through
 `pr_review_comment_plan`, plus an explicit-post planner handoff to guarded
-`github_comment`. Live remote PR review fixtures, semantic child review over
-real GitHub PR context, inline review comments, and retry loops after failed or
-denied comments remain future work.
+`github_comment`, plus failure recovery and inline PR review comments. A later
+remote PR semantic review slice routes explicit semantic/deep review wording to
+`review semantic=true`; live remote PR retry fixtures remain future work.

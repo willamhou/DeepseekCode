@@ -2,7 +2,7 @@
 # name, task, category, assertion_bundle, skill, workdir, isolate_workdir, notes, budget,
 # seed_observations,
 # expect_tool, expect_tool_sequence, forbid_tool, expect_message_contains,
-# expect_tool_output_contains, expect_last_tool_output_contains,
+# expect_tool_input_contains, expect_tool_output_contains, expect_last_tool_output_contains,
 # min_tool_calls, max_tool_calls, max_failed_tools
 # Common bundles:
 # read_only_inspect, read_only_search,
@@ -164,6 +164,19 @@ budget = 2
 expect_tool = "review"
 expect_tool_sequence = ["review"]
 expect_tool_output_contains = "review:GitHub PR has requested changes"
+max_failed_tools = 0
+max_tool_calls = 1
+
+name = "seeded-pr-context-semantic-review"
+task = "Run a semantic review of pull request #42 'Route benchmark command' on owner/repo for real behavioral bugs."
+category = "pr_workflow"
+workdir = "fixtures/rust-cli-mini"
+notes = "Seeded github_pr_context should route explicit semantic remote PR review through review semantic=true"
+seed_observations = "github_pr_context:ok:meta.kind=pr\nmeta.number=42\nmeta.state=OPEN\nPR #42: Route benchmark command\njson:\n{\"number\":42,\"title\":\"Route benchmark command\",\"reviewDecision\":\"CHANGES_REQUESTED\",\"statusCheckRollup\":[{\"name\":\"unit-tests\",\"conclusion\":\"SUCCESS\"}]}\ndiff:\ndiff --git a/src/cli/app.rs b/src/cli/app.rs\n--- a/src/cli/app.rs\n+++ b/src/cli/app.rs\n@@ -1,2 +1,4 @@\n+pub fn route_benchmark_subcommand() {}\n"
+budget = 2
+expect_tool = "review"
+expect_tool_sequence = ["review"]
+expect_tool_input_contains = "review:semantic=true"
 max_failed_tools = 0
 max_tool_calls = 1
 

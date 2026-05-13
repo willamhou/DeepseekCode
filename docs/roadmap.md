@@ -811,7 +811,9 @@
 **10i-6 (`main`, 2026-05-07) — 已完成基础版**：
 - benchmark manifest 新增：
   - `expect_tool_output_contains = "tool_name:needle"`
+  - `expect_tool_input_contains = "tool_name:key=value"`（2026-05-13 remote PR semantic review slice）
 - 语义是：目标 tool 最后一次调用的输出必须包含给定 `needle`
+- input 断言语义是：目标 tool 最后一次调用的指定 input key 必须包含给定 value
 - 这让 benchmark 不再只能断言：
   - final message
   - last tool output

@@ -441,6 +441,12 @@ impl DeepSeekClient {
             }
             if tool_available("review") && !used_tools.contains("review") {
                 if let Some(context) = latest_github_pr_context {
+                    let mut tool_input = ToolInput::new()
+                        .with_arg("target", "github_pr_context")
+                        .with_arg("github_context", context.to_string());
+                    if task_requests_semantic_review(&task_lower) {
+                        tool_input = tool_input.with_arg("semantic", "true");
+                    }
                     return ModelResponse {
                         message: format!(
                             "{} planner is running structured review over the gathered GitHub PR context.",
@@ -448,9 +454,7 @@ impl DeepSeekClient {
                         ),
                         action: ModelAction::CallTool {
                             tool_name: "review".to_string(),
-                            input: ToolInput::new()
-                                .with_arg("target", "github_pr_context")
-                                .with_arg("github_context", context.to_string()),
+                            input: tool_input,
                         },
                     };
                 }
@@ -2459,6 +2463,16 @@ fn task_requests_remote_pr_comment_plan(task_lower: &str) -> bool {
         || task_lower.contains("post a review")
         || task_lower.contains("review reply")
         || task_lower.contains("review response")
+}
+
+fn task_requests_semantic_review(task_lower: &str) -> bool {
+    task_lower.contains("semantic review")
+        || task_lower.contains("semantic code review")
+        || task_lower.contains("deep review")
+        || task_lower.contains("thorough review")
+        || task_lower.contains("behavioral review")
+        || task_lower.contains("real bug")
+        || task_lower.contains("logic bug")
 }
 
 fn task_requests_remote_pr_comment_post(task_lower: &str) -> bool {
@@ -6296,6 +6310,51 @@ diff --git a/src/cli/app.rs b/src/cli/app.rs\n\
                 assert_eq!(input.get("github_context"), Some(context));
             }
             ModelAction::Finish => panic!("expected review tool call"),
+        }
+    }
+
+    #[test]
+    fn offline_planner_enables_semantic_review_for_remote_pr_when_requested() {
+        let context = "meta.kind=pr\n\
+meta.number=42\n\
+PR #42: Route benchmark command\n\
+json:\n\
+{\"number\":42,\"title\":\"Route benchmark command\",\"reviewDecision\":\"CHANGES_REQUESTED\"}\n\
+diff:\n\
+diff --git a/src/cli/app.rs b/src/cli/app.rs\n";
+        let request = ModelRequest {
+            system_prompt: String::new(),
+            task:
+                "Run a semantic review of pull request #42 on owner/repo for real behavioral bugs."
+                    .to_string(),
+            image_inputs: Vec::new(),
+            profile_name: "rust".to_string(),
+            profile_hints: Vec::new(),
+            primary_file: None,
+            suggested_test_command: None,
+            available_tools: vec![
+                "github_pr_context".to_string(),
+                "review".to_string(),
+                "read_file".to_string(),
+            ],
+            observations: vec![Observation::ok("github_pr_context", context)],
+            todos: Vec::new(),
+            planning_mode: false,
+            recent_steps: Vec::new(),
+        };
+
+        let response = planner()
+            .respond(request, &mut crate::ui::stream::NoopStreamEvents)
+            .unwrap()
+            .0;
+        match response.action {
+            ModelAction::CallTool { tool_name, input } => {
+                assert_eq!(tool_name, "review");
+                assert_eq!(input.get("target"), Some("github_pr_context"));
+                assert_eq!(input.get("github_context"), Some(context));
+                assert_eq!(input.get("semantic"), Some("true"));
+            }
+            ModelAction::Finish => panic!("expected semantic review tool call"),
         }
     }
 

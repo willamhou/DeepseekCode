@@ -482,6 +482,10 @@ Remaining:
   review tasks through `github_pr_context include_diff=true` and then `review`
   over that gathered context, with a seeded benchmark fixture covering blocker
   metadata
+- Remote PR semantic review planning now exists: explicit semantic/deep/
+  thorough/behavioral/real-bug/logic-bug PR review requests set
+  `review semantic=true` over gathered `github_pr_context`, with a seeded
+  benchmark assertion over tool input
 - Remote PR comment planning now exists: `pr_review_comment_plan` converts
   structured `review` JSON plus optional `github_pr_context` into Markdown body
   text, evidence JSON, and a dry-run `github_comment` input; the offline planner
@@ -500,8 +504,7 @@ Remaining:
   context includes a head commit SHA and findings have `path` + `line`, and the
   offline planner routes explicit inline/line/file/diff comment requests to that
   guarded tool
-- Remaining: stronger live end-to-end semantic review fixtures / remote PR
-  live retry fixtures
+- Remaining: stronger live end-to-end remote PR retry fixtures
 
 ### Phase G2: MCP Server Mode
 

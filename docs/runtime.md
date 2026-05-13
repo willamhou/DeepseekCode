@@ -1130,7 +1130,10 @@ such as requested changes, failing/cancelled status checks, and missing
 `include_diff=true` context. The offline planner has an explicit remote PR
 review route: when `github_pr_context` and `review` are both available, PR review
 tasks gather `github_pr_context include_diff=true` first and then run `review`
-over the gathered context. If the task asks to draft or prepare a PR comment and
+over the gathered context. If the PR task explicitly asks for a semantic, deep,
+thorough, behavioral, real-bug, or logic-bug review, the planner sets
+`semantic=true` on that review call so the read-only child-agent semantic pass is
+included. If the task asks to draft or prepare a PR comment and
 `pr_review_comment_plan` is available, the planner turns the structured review
 JSON plus optional PR context into Markdown body text, evidence JSON, and a
 dry-run `github_comment` input. If the task explicitly says to post, publish,

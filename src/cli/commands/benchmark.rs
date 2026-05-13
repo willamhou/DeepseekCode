@@ -211,6 +211,7 @@ struct BenchmarkCase {
     expect_tool_sequence: Option<Vec<String>>,
     forbid_tool: Option<String>,
     expect_message_contains: Option<String>,
+    expect_tool_input_contains: Option<ToolInputExpectation>,
     expect_tool_output_contains: Option<ToolOutputExpectation>,
     expect_last_tool_output_contains: Option<String>,
     min_tool_calls: Option<usize>,
@@ -222,6 +223,13 @@ struct BenchmarkCase {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ToolOutputExpectation {
     tool_name: String,
+    needle: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ToolInputExpectation {
+    tool_name: String,
+    key: String,
     needle: String,
 }
 
@@ -276,6 +284,31 @@ impl BenchmarkCase {
         if let Some(needle) = self.expect_message_contains.as_deref() {
             if !result.final_message.contains(needle) {
                 failures.push(format!("final message did not contain `{needle}`"));
+            }
+        }
+        if let Some(expectation) = self.expect_tool_input_contains.as_ref() {
+            if let Some(event) = result
+                .tool_events
+                .iter()
+                .rev()
+                .find(|event| event.tool_name == expectation.tool_name)
+            {
+                match event.input.get(&expectation.key) {
+                    Some(value) if value.contains(&expectation.needle) => {}
+                    Some(value) => failures.push(format!(
+                        "tool `{}` input `{}` value `{}` did not contain `{}`",
+                        expectation.tool_name, expectation.key, value, expectation.needle
+                    )),
+                    None => failures.push(format!(
+                        "tool `{}` input did not include key `{}`",
+                        expectation.tool_name, expectation.key
+                    )),
+                }
+            } else {
+                failures.push(format!(
+                    "tool `{}` input did not contain `{}` because the tool was never called",
+                    expectation.tool_name, expectation.needle
+                ));
             }
         }
         if let Some(expectation) = self.expect_tool_output_contains.as_ref() {
@@ -828,6 +861,7 @@ struct PendingCase {
     expect_tool_sequence: Option<Vec<String>>,
     forbid_tool: Option<String>,
     expect_message_contains: Option<String>,
+    expect_tool_input_contains: Option<ToolInputExpectation>,
     expect_tool_output_contains: Option<ToolOutputExpectation>,
     expect_last_tool_output_contains: Option<String>,
     min_tool_calls: Option<usize>,
@@ -849,6 +883,7 @@ impl PendingCase {
             || !self.seed_observations.is_empty()
             || self.expect_tool.is_some()
             || self.expect_message_contains.is_some()
+            || self.expect_tool_input_contains.is_some()
             || self.expect_tool_output_contains.is_some()
             || self.expect_last_tool_output_contains.is_some()
             || self.forbid_tool.is_some()
@@ -888,6 +923,9 @@ impl PendingCase {
             }
             "forbid_tool" => self.forbid_tool = Some(value),
             "expect_message_contains" => self.expect_message_contains = Some(value),
+            "expect_tool_input_contains" => {
+                self.expect_tool_input_contains = Some(parse_tool_input_expectation(&value)?)
+            }
             "expect_tool_output_contains" => {
                 self.expect_tool_output_contains = Some(parse_tool_output_expectation(&value)?)
             }
@@ -934,6 +972,7 @@ impl PendingCase {
             expect_message_contains: self
                 .expect_message_contains
                 .or(assertion_defaults.expect_message_contains),
+            expect_tool_input_contains: self.expect_tool_input_contains,
             expect_tool_output_contains: self
                 .expect_tool_output_contains
                 .or(assertion_defaults.expect_tool_output_contains),
@@ -2258,6 +2297,32 @@ fn parse_tool_output_expectation(value: &str) -> AppResult<ToolOutputExpectation
     })
 }
 
+fn parse_tool_input_expectation(value: &str) -> AppResult<ToolInputExpectation> {
+    let Some((tool_name, rest)) = value.split_once(':') else {
+        return Err(app_error(format!(
+            "invalid expect_tool_input_contains value `{value}`; expected `tool_name:key=value`"
+        )));
+    };
+    let Some((key, needle)) = rest.split_once('=') else {
+        return Err(app_error(format!(
+            "invalid expect_tool_input_contains value `{value}`; expected `tool_name:key=value`"
+        )));
+    };
+    let tool_name = tool_name.trim();
+    let key = key.trim();
+    let needle = needle.trim();
+    if tool_name.is_empty() || key.is_empty() || needle.is_empty() {
+        return Err(app_error(format!(
+            "invalid expect_tool_input_contains value `{value}`; expected `tool_name:key=value`"
+        )));
+    }
+    Ok(ToolInputExpectation {
+        tool_name: tool_name.to_string(),
+        key: key.to_string(),
+        needle: needle.to_string(),
+    })
+}
+
 fn parse_manifest_bool(key: &str, value: &str) -> AppResult<bool> {
     match value.trim() {
         "true" => Ok(true),
@@ -2551,6 +2616,7 @@ seed_observations = "search_text:failed:no matches || recovery_hint:ok:after=sea
                     ]),
                     forbid_tool: None,
                     expect_message_contains: None,
+                    expect_tool_input_contains: None,
                     expect_tool_output_contains: None,
                     expect_last_tool_output_contains: None,
                     min_tool_calls: None,
@@ -2594,6 +2660,11 @@ seed_observations = "search_text:failed:no matches || recovery_hint:ok:after=sea
             expect_tool_sequence: Some(vec!["search_text".to_string(), "read_file".to_string()]),
             forbid_tool: Some("list_files".to_string()),
             expect_message_contains: Some("needle".to_string()),
+            expect_tool_input_contains: Some(ToolInputExpectation {
+                tool_name: "review".to_string(),
+                key: "semantic".to_string(),
+                needle: "true".to_string(),
+            }),
             expect_tool_output_contains: Some(ToolOutputExpectation {
                 tool_name: "run_shell".to_string(),
                 needle: "meta.result=ok".to_string(),
@@ -2628,6 +2699,9 @@ seed_observations = "search_text:failed:no matches || recovery_hint:ok:after=sea
             .failures
             .iter()
             .any(|failure| failure.contains("forbidden tool `list_files`")));
+        assert!(evaluation.failures.iter().any(|failure| failure.contains(
+            "tool `review` input did not contain `true` because the tool was never called"
+        )));
         assert!(evaluation
             .failures
             .iter()
@@ -2814,6 +2888,7 @@ seed_observations = "search_text:failed:no matches || recovery_hint:ok:after=sea
                 expect_tool_sequence: Some(vec!["list_files".to_string(), "read_file".to_string()]),
                 forbid_tool: None,
                 expect_message_contains: None,
+                expect_tool_input_contains: None,
                 expect_tool_output_contains: None,
                 expect_last_tool_output_contains: None,
                 min_tool_calls: None,
@@ -2956,6 +3031,7 @@ seed_observations = "search_text:failed:no matches || recovery_hint:ok:after=sea
             expect_tool_sequence: Some(vec!["run_shell".to_string()]),
             forbid_tool: None,
             expect_message_contains: None,
+            expect_tool_input_contains: None,
             expect_tool_output_contains: None,
             expect_last_tool_output_contains: Some("meta.result=ok".to_string()),
             min_tool_calls: None,
@@ -2992,6 +3068,7 @@ seed_observations = "search_text:failed:no matches || recovery_hint:ok:after=sea
             expect_tool_sequence: Some(vec!["run_shell".to_string()]),
             forbid_tool: None,
             expect_message_contains: None,
+            expect_tool_input_contains: None,
             expect_tool_output_contains: None,
             expect_last_tool_output_contains: Some("meta.result=ok".to_string()),
             min_tool_calls: None,
@@ -3032,6 +3109,7 @@ seed_observations = "search_text:failed:no matches || recovery_hint:ok:after=sea
             expect_tool_sequence: Some(vec!["run_shell".to_string(), "read_file".to_string()]),
             forbid_tool: None,
             expect_message_contains: None,
+            expect_tool_input_contains: None,
             expect_tool_output_contains: Some(ToolOutputExpectation {
                 tool_name: "run_shell".to_string(),
                 needle: "meta.failure_kind=test_failure".to_string(),
@@ -3065,9 +3143,59 @@ seed_observations = "search_text:failed:no matches || recovery_hint:ok:after=sea
     }
 
     #[test]
+    fn benchmark_evaluation_accepts_named_tool_input_expectation() {
+        let case = BenchmarkCase {
+            name: "semantic-review".to_string(),
+            task: "semantic review PR".to_string(),
+            category: "pr_workflow".to_string(),
+            skill: None,
+            workdir: None,
+            isolate_workdir: false,
+            budget: 4,
+            seed_observations: Vec::new(),
+            expect_tool: Some("review".to_string()),
+            expect_tool_sequence: Some(vec!["review".to_string()]),
+            forbid_tool: None,
+            expect_message_contains: None,
+            expect_tool_input_contains: Some(ToolInputExpectation {
+                tool_name: "review".to_string(),
+                key: "semantic".to_string(),
+                needle: "true".to_string(),
+            }),
+            expect_tool_output_contains: None,
+            expect_last_tool_output_contains: None,
+            min_tool_calls: None,
+            max_tool_calls: None,
+            max_failed_tools: Some(0),
+            notes: None,
+        };
+        let result = RunResult {
+            final_message: "done".to_string(),
+            tool_events: vec![crate::core::loop_runtime::ToolEvent {
+                tool_name: "review".to_string(),
+                input: std::collections::BTreeMap::from([(
+                    "semantic".to_string(),
+                    "true".to_string(),
+                )]),
+                output: "{}".to_string(),
+                status: crate::model::protocol::ObservationStatus::Ok,
+            }],
+            usage: crate::model::protocol::TokenUsage::default(),
+        };
+        let evaluation = case.evaluate(&result);
+        assert!(evaluation.passed);
+    }
+
+    #[test]
     fn parse_tool_output_expectation_rejects_invalid_shape() {
         let error = parse_tool_output_expectation("run_shell").unwrap_err();
         assert!(error.to_string().contains("expected `tool_name:needle`"));
+    }
+
+    #[test]
+    fn parse_tool_input_expectation_rejects_invalid_shape() {
+        let error = parse_tool_input_expectation("review:semantic").unwrap_err();
+        assert!(error.to_string().contains("expected `tool_name:key=value`"));
     }
 
     #[test]
