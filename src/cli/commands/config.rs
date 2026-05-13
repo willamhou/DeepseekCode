@@ -92,6 +92,38 @@ pub(crate) struct ModelSetResult {
     pub(crate) changed: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProviderConfigSummary {
+    pub(crate) path: std::path::PathBuf,
+    pub(crate) provider: String,
+    pub(crate) label: String,
+    pub(crate) base_url: String,
+    pub(crate) model: String,
+    pub(crate) api_key_env: String,
+    pub(crate) reasoning_effort: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProviderSetResult {
+    pub(crate) path: std::path::PathBuf,
+    pub(crate) previous_provider: String,
+    pub(crate) provider: String,
+    pub(crate) label: String,
+    pub(crate) base_url: String,
+    pub(crate) model: String,
+    pub(crate) api_key_env: String,
+    pub(crate) changed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProviderPreset {
+    name: &'static str,
+    label: &'static str,
+    base_url: &'static str,
+    api_key_env: &'static str,
+    default_model: &'static str,
+}
+
 fn print_network_rule_result(result: &NetworkRuleResult) {
     if result.changed {
         println!("{}: added {}", result.key, result.host);
@@ -250,6 +282,71 @@ pub(crate) fn set_model_at(root: &std::path::Path, model: &str) -> AppResult<Mod
         path,
         previous,
         model,
+        changed,
+    })
+}
+
+pub(crate) fn provider_config_summary_at(
+    root: &std::path::Path,
+) -> AppResult<ProviderConfigSummary> {
+    let model = model_config_summary_at(root)?;
+    let preset = infer_provider_preset(&model.base_url);
+    Ok(ProviderConfigSummary {
+        path: model.path,
+        provider: preset.name.to_string(),
+        label: preset.label.to_string(),
+        base_url: model.base_url,
+        model: model.model,
+        api_key_env: model.api_key_env,
+        reasoning_effort: model.reasoning_effort,
+    })
+}
+
+pub(crate) fn set_provider_at(
+    root: &std::path::Path,
+    provider: &str,
+    model: Option<&str>,
+) -> AppResult<ProviderSetResult> {
+    let preset = parse_provider_preset(provider).ok_or_else(|| {
+        app_error(format!(
+            "unknown provider `{provider}`; expected one of: {}",
+            provider_preset_names()
+        ))
+    })?;
+    let path = network_config_path_at(root);
+    if !path.exists() {
+        init_config_at(root, false)?;
+    }
+    let content = std::fs::read_to_string(&path)?;
+    let previous_base_url = read_string_key(&content, "model.base_url")
+        .unwrap_or_else(|| AppConfig::default().model.base_url);
+    let previous_provider = infer_provider_preset(&previous_base_url).name.to_string();
+    let previous_model = read_string_key(&content, "model.model")
+        .unwrap_or_else(|| AppConfig::default().model.model);
+    let previous_api_key_env = read_string_key(&content, "model.api_key_env")
+        .unwrap_or_else(|| AppConfig::default().model.api_key_env);
+    let model = match model {
+        Some(model) => provider_model_value(preset, model)?,
+        None => preset.default_model.to_string(),
+    };
+    let changed = previous_base_url != preset.base_url
+        || previous_model != model
+        || previous_api_key_env != preset.api_key_env;
+    if changed {
+        let updated = replace_or_append_string_key(&content, "model.base_url", preset.base_url);
+        let updated =
+            replace_or_append_string_key(&updated, "model.api_key_env", preset.api_key_env);
+        let updated = replace_or_append_string_key(&updated, "model.model", &model);
+        std::fs::write(&path, updated)?;
+    }
+    Ok(ProviderSetResult {
+        path,
+        previous_provider,
+        provider: preset.name.to_string(),
+        label: preset.label.to_string(),
+        base_url: preset.base_url.to_string(),
+        model,
+        api_key_env: preset.api_key_env.to_string(),
         changed,
     })
 }
@@ -471,6 +568,163 @@ fn normalize_model_value(model: &str) -> AppResult<String> {
         ));
     }
     Ok(normalized)
+}
+
+fn provider_presets() -> &'static [ProviderPreset] {
+    &[
+        ProviderPreset {
+            name: "deepseek",
+            label: "DeepSeek",
+            base_url: "https://api.deepseek.com",
+            api_key_env: "DEEPSEEK_API_KEY",
+            default_model: "deepseek-v4-pro",
+        },
+        ProviderPreset {
+            name: "nvidia-nim",
+            label: "NVIDIA NIM",
+            base_url: "https://integrate.api.nvidia.com/v1",
+            api_key_env: "NVIDIA_API_KEY",
+            default_model: "deepseek-ai/deepseek-v4-pro",
+        },
+        ProviderPreset {
+            name: "openai",
+            label: "OpenAI-compatible",
+            base_url: "https://api.openai.com/v1",
+            api_key_env: "OPENAI_API_KEY",
+            default_model: "gpt-4.1",
+        },
+        ProviderPreset {
+            name: "atlascloud",
+            label: "AtlasCloud",
+            base_url: "https://api.atlascloud.ai/v1",
+            api_key_env: "ATLASCLOUD_API_KEY",
+            default_model: "deepseek-ai/deepseek-v4-flash",
+        },
+        ProviderPreset {
+            name: "openrouter",
+            label: "OpenRouter",
+            base_url: "https://openrouter.ai/api/v1",
+            api_key_env: "OPENROUTER_API_KEY",
+            default_model: "deepseek/deepseek-v4-pro",
+        },
+        ProviderPreset {
+            name: "novita",
+            label: "Novita AI",
+            base_url: "https://api.novita.ai/v1",
+            api_key_env: "NOVITA_API_KEY",
+            default_model: "deepseek/deepseek-v4-pro",
+        },
+        ProviderPreset {
+            name: "fireworks",
+            label: "Fireworks AI",
+            base_url: "https://api.fireworks.ai/inference/v1",
+            api_key_env: "FIREWORKS_API_KEY",
+            default_model: "accounts/fireworks/models/deepseek-v4-pro",
+        },
+        ProviderPreset {
+            name: "sglang",
+            label: "SGLang",
+            base_url: "http://localhost:30000/v1",
+            api_key_env: "DEEPSEEK_API_KEY",
+            default_model: "deepseek-ai/DeepSeek-V4-Pro",
+        },
+        ProviderPreset {
+            name: "vllm",
+            label: "vLLM",
+            base_url: "http://localhost:8000/v1",
+            api_key_env: "DEEPSEEK_API_KEY",
+            default_model: "deepseek-ai/DeepSeek-V4-Pro",
+        },
+        ProviderPreset {
+            name: "ollama",
+            label: "Ollama",
+            base_url: "http://localhost:11434/v1",
+            api_key_env: "OLLAMA_API_KEY",
+            default_model: "deepseek-coder:1.3b",
+        },
+    ]
+}
+
+fn provider_preset_names() -> String {
+    provider_presets()
+        .iter()
+        .map(|preset| preset.name)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn parse_provider_preset(value: &str) -> Option<ProviderPreset> {
+    let normalized = value.trim().to_ascii_lowercase();
+    let name = match normalized.as_str() {
+        "deepseek" | "deep-seek" => "deepseek",
+        "nvidia" | "nvidia_nim" | "nvidia-nim" | "nim" => "nvidia-nim",
+        "openai" | "open-ai" => "openai",
+        "atlas" | "atlascloud" | "atlas-cloud" | "atlas_cloud" => "atlascloud",
+        "openrouter" | "open_router" => "openrouter",
+        "novita" => "novita",
+        "fireworks" | "fireworks-ai" => "fireworks",
+        "sglang" | "sg-lang" => "sglang",
+        "vllm" | "v-llm" => "vllm",
+        "ollama" | "ollama-local" => "ollama",
+        _ => return None,
+    };
+    provider_presets()
+        .iter()
+        .copied()
+        .find(|preset| preset.name == name)
+}
+
+fn infer_provider_preset(base_url: &str) -> ProviderPreset {
+    let lower = base_url.trim_end_matches('/').to_ascii_lowercase();
+    if lower.contains("integrate.api.nvidia.com") {
+        return parse_provider_preset("nvidia-nim").expect("nvidia preset");
+    }
+    if lower.contains("api.openai.com") {
+        return parse_provider_preset("openai").expect("openai preset");
+    }
+    if lower.contains("api.atlascloud.ai") {
+        return parse_provider_preset("atlascloud").expect("atlascloud preset");
+    }
+    if lower.contains("openrouter.ai") {
+        return parse_provider_preset("openrouter").expect("openrouter preset");
+    }
+    if lower.contains("api.novita.ai") {
+        return parse_provider_preset("novita").expect("novita preset");
+    }
+    if lower.contains("api.fireworks.ai") {
+        return parse_provider_preset("fireworks").expect("fireworks preset");
+    }
+    if lower.contains("localhost:30000") || lower.contains("127.0.0.1:30000") {
+        return parse_provider_preset("sglang").expect("sglang preset");
+    }
+    if lower.contains("localhost:8000") || lower.contains("127.0.0.1:8000") {
+        return parse_provider_preset("vllm").expect("vllm preset");
+    }
+    if lower.contains("localhost:11434") || lower.contains("127.0.0.1:11434") {
+        return parse_provider_preset("ollama").expect("ollama preset");
+    }
+    parse_provider_preset("deepseek").expect("deepseek preset")
+}
+
+fn provider_model_value(preset: ProviderPreset, raw: &str) -> AppResult<String> {
+    let model = normalize_model_value(raw)?;
+    let lower = model.to_ascii_lowercase();
+    let mapped = match (preset.name, lower.as_str()) {
+        ("nvidia-nim", "deepseek-v4-pro") => "deepseek-ai/deepseek-v4-pro",
+        ("nvidia-nim", "deepseek-v4-flash") => "deepseek-ai/deepseek-v4-flash",
+        ("openrouter", "deepseek-v4-pro") => "deepseek/deepseek-v4-pro",
+        ("openrouter", "deepseek-v4-flash") => "deepseek/deepseek-v4-flash",
+        ("novita", "deepseek-v4-pro") => "deepseek/deepseek-v4-pro",
+        ("novita", "deepseek-v4-flash") => "deepseek/deepseek-v4-flash",
+        ("fireworks", "deepseek-v4-pro") => "accounts/fireworks/models/deepseek-v4-pro",
+        ("fireworks", "deepseek-v4-flash") => "accounts/fireworks/models/deepseek-v4-flash",
+        ("sglang", "deepseek-v4-pro") => "deepseek-ai/DeepSeek-V4-Pro",
+        ("sglang", "deepseek-v4-flash") => "deepseek-ai/DeepSeek-V4-Flash",
+        ("vllm", "deepseek-v4-pro") => "deepseek-ai/DeepSeek-V4-Pro",
+        ("vllm", "deepseek-v4-flash") => "deepseek-ai/DeepSeek-V4-Flash",
+        _ => return Ok(model),
+    };
+    Ok(mapped.to_string())
 }
 
 fn read_string_key(content: &str, key: &str) -> Option<String> {

@@ -468,6 +468,7 @@ pub enum TuiMcpDetailKind {
     Cost,
     Cache,
     Model,
+    Provider,
     Skills,
     Rollback,
     Reasoning,
@@ -491,6 +492,7 @@ impl TuiMcpDetailKind {
             Self::Cost => "cost",
             Self::Cache => "cache",
             Self::Model => "model",
+            Self::Provider => "provider",
             Self::Skills => "skills",
             Self::Rollback => "rollback",
             Self::Reasoning => "reasoning",
@@ -514,6 +516,7 @@ impl TuiMcpDetailKind {
             Self::Cost => "Cost",
             Self::Cache => "Cache",
             Self::Model => "Model",
+            Self::Provider => "Provider",
             Self::Skills => "Skills",
             Self::Rollback => "Rollback",
             Self::Reasoning => "Reasoning",
@@ -537,6 +540,7 @@ impl TuiMcpDetailKind {
             Self::Cost => Self::Manager,
             Self::Cache => Self::Manager,
             Self::Model => Self::Manager,
+            Self::Provider => Self::Manager,
             Self::Skills => Self::Manager,
             Self::Rollback => Self::Manager,
             Self::Reasoning => Self::Manager,
@@ -560,6 +564,7 @@ impl TuiMcpDetailKind {
             Self::Cost => Self::Manager,
             Self::Cache => Self::Manager,
             Self::Model => Self::Manager,
+            Self::Provider => Self::Manager,
             Self::Skills => Self::Manager,
             Self::Rollback => Self::Manager,
             Self::Reasoning => Self::Manager,
@@ -705,6 +710,16 @@ pub enum TuiModelCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TuiProviderCommand {
+    Show,
+    List,
+    Set {
+        provider: String,
+        model: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TuiSkillsCommand {
     List { prefix: Option<String> },
     Show { name: String },
@@ -842,6 +857,30 @@ fn parse_tui_model_command(line: &str) -> Option<Result<TuiModelCommand, String>
     }
 }
 
+fn parse_tui_provider_command(line: &str) -> Option<Result<TuiProviderCommand, String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/provider")
+        .or_else(|| strip_tui_command_prefix(trimmed, "provider"))?;
+    let args = rest.split_whitespace().collect::<Vec<_>>();
+    match args.as_slice() {
+        [] => Some(Ok(TuiProviderCommand::Show)),
+        ["list" | "ls" | "show"] => Some(Ok(TuiProviderCommand::List)),
+        [provider] if !provider.starts_with('-') => Some(Ok(TuiProviderCommand::Set {
+            provider: (*provider).to_string(),
+            model: None,
+        })),
+        [provider, model] if !provider.starts_with('-') && !model.starts_with('-') => {
+            Some(Ok(TuiProviderCommand::Set {
+                provider: (*provider).to_string(),
+                model: Some((*model).to_string()),
+            }))
+        }
+        _ => Some(Err(
+            "usage: provider [name [model]|list] or /provider [name [model]|list]".to_string(),
+        )),
+    }
+}
+
 fn parse_tui_skills_command(line: &str) -> Option<Result<TuiSkillsCommand, String>> {
     let trimmed = line.trim();
     let rest = strip_tui_command_prefix(trimmed, "/skills")
@@ -953,6 +992,10 @@ pub enum TuiAction {
     Model {
         workspace: String,
         command: TuiModelCommand,
+    },
+    Provider {
+        workspace: String,
+        command: TuiProviderCommand,
     },
     Skills {
         command: TuiSkillsCommand,
@@ -1183,6 +1226,12 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "model deepseek-v4-flash",
     "model deepseek-v4-pro",
     "models",
+    "provider",
+    "provider list",
+    "provider deepseek",
+    "provider nvidia-nim",
+    "provider openrouter",
+    "provider ollama",
     "skills",
     "skill ",
     "automations",
@@ -3504,6 +3553,19 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(command) = parse_tui_provider_command(&content) {
+                    match command {
+                        Ok(command) => {
+                            self.request_provider_command(command);
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some(command) =
                     parse_tui_skills_command(&content).or_else(|| parse_tui_skill_command(&content))
                 {
@@ -3803,6 +3865,17 @@ impl TuiApp {
             match command {
                 Ok(command) => {
                     self.request_model_command(command);
+                }
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_provider_command(command) {
+            match command {
+                Ok(command) => {
+                    self.request_provider_command(command);
                 }
                 Err(message) => {
                     self.status = message;
@@ -5106,6 +5179,18 @@ impl TuiApp {
             command,
         });
         self.status = format!("model command queued: {workspace}");
+    }
+
+    fn request_provider_command(&mut self, command: TuiProviderCommand) {
+        let workspace = self
+            .selected_session()
+            .map(|session| session.workspace.clone())
+            .unwrap_or_else(|| ".".to_string());
+        self.pending_actions.push(TuiAction::Provider {
+            workspace: workspace.clone(),
+            command,
+        });
+        self.status = format!("provider command queued: {workspace}");
     }
 
     fn request_skills_command(&mut self, command: TuiSkillsCommand) {
@@ -10357,6 +10442,60 @@ mod tests {
     }
 
     #[test]
+    fn command_palette_requests_provider_actions() {
+        let mut app = TuiApp::with_runtime(
+            vec![TuiSession {
+                id: "session-one".to_string(),
+                title: "One".to_string(),
+                workspace: "/tmp/deepseek-provider".to_string(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-one".to_string()),
+                thread_count: 1,
+            }],
+            vec![TuiThread {
+                id: "thread-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                title: "First thread".to_string(),
+                mode: "agent".to_string(),
+                status: "active".to_string(),
+                latest_turn_id: None,
+                event_seq: 1,
+            }],
+            Vec::new(),
+        );
+
+        run_palette_command(&mut app, "provider");
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::Provider {
+                workspace: "/tmp/deepseek-provider".to_string(),
+                command: TuiProviderCommand::Show,
+            }]
+        );
+
+        run_palette_command(&mut app, "/provider nvidia-nim flash");
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::Provider {
+                workspace: "/tmp/deepseek-provider".to_string(),
+                command: TuiProviderCommand::Set {
+                    provider: "nvidia-nim".to_string(),
+                    model: Some("flash".to_string()),
+                },
+            }]
+        );
+
+        run_palette_command(&mut app, "provider list");
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::Provider {
+                workspace: "/tmp/deepseek-provider".to_string(),
+                command: TuiProviderCommand::List,
+            }]
+        );
+    }
+
+    #[test]
     fn command_palette_requests_skills_actions() {
         let mut app = TuiApp::new(Vec::new());
 
@@ -10630,6 +10769,22 @@ mod tests {
                 workspace: ".".to_string(),
                 command: TuiModelCommand::Set {
                     model: "auto".to_string(),
+                },
+            }]
+        );
+
+        for ch in "/provider openrouter pro".chars() {
+            assert!(app.handle_key(KeyCode::Char(ch)));
+        }
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::Provider {
+                workspace: ".".to_string(),
+                command: TuiProviderCommand::Set {
+                    provider: "openrouter".to_string(),
+                    model: Some("pro".to_string()),
                 },
             }]
         );

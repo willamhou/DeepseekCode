@@ -32,6 +32,8 @@ Current surfaces:
   records
 - model configuration inspection and switching with `model` / `/model`,
   `model <name>` / `/model <name>`, and offline `models` / `/models`
+- provider preset inspection and switching with `provider` / `/provider`,
+  `provider list`, and `provider <name> [model]`
 - skill registry inspection with `skills [prefix]` / `/skills [prefix]` and
   `skill <name>` / `/skill <name>` over DeepSeekCode's configured TOML skills
 - composer and command-palette editing preserve terminal modifier keys, including
@@ -286,6 +288,9 @@ Command palette commands currently implemented:
 | `model`, `/model` | Show selected workspace model config in the right-side detail panel |
 | `model <name>`, `/model <name>` | Update selected workspace `model.model`; aliases include `auto`, `flash`, `pro`, `chat`, `coder`, and `reasoner` |
 | `models`, `/models`, `model list` | Show the offline DeepSeekCode model catalog and current project model |
+| `provider`, `/provider` | Show selected workspace provider preset inferred from `model.base_url` |
+| `provider list` | Show supported provider presets: DeepSeek, NVIDIA NIM, OpenAI-compatible, AtlasCloud, OpenRouter, Novita, Fireworks, SGLang, vLLM, and Ollama |
+| `provider <name> [model]`, `/provider <name> [model]` | Update selected workspace `model.base_url`, `model.api_key_env`, and `model.model` with provider defaults or an optional model override |
 | `skills`, `/skills`, `skills <prefix>` | List configured TOML skills from repo and user skill directories |
 | `skill <name>`, `/skill <name>` | Show one configured TOML skill's description, triggers, tools, references, policy, and system append |
 | `automations`, `automation` | Show active-thread automation count in the status bar |

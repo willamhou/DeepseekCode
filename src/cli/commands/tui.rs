@@ -15,9 +15,10 @@ use std::time::Duration;
 
 use crate::cli::app::{McpConfigScope, TuiArgs};
 use crate::cli::commands::config::{
-    model_config_summary_at, network_policy_summary_at, remove_network_rule_at, set_model_at,
-    set_network_default_at, set_network_rule_at, ModelConfigSummary, NetworkPolicySummary,
-    NetworkRuleTarget,
+    model_config_summary_at, network_policy_summary_at, provider_config_summary_at,
+    remove_network_rule_at, set_model_at, set_network_default_at, set_network_rule_at,
+    set_provider_at, ModelConfigSummary, NetworkPolicySummary, NetworkRuleTarget,
+    ProviderConfigSummary,
 };
 use crate::cli::commands::mcp::{
     add_mcp_server_at, init_mcp_config_at, list_remote_prompts_summary,
@@ -56,8 +57,8 @@ use crate::tools::types::{Tool, ToolInput};
 use crate::tui::{
     render_once, run_interactive, run_interactive_with_refresh_actions_and_live, TuiAction, TuiApp,
     TuiApprovalRequest, TuiAutomationRecord, TuiItem, TuiLiveEvent, TuiMcpConfigScope,
-    TuiMcpDetailKind, TuiMemoryCommand, TuiModelCommand, TuiNetworkCommand, TuiSession,
-    TuiSkillsCommand, TuiTaskRecord, TuiThread, TuiUsageSummary, TuiUserInputRequest,
+    TuiMcpDetailKind, TuiMemoryCommand, TuiModelCommand, TuiNetworkCommand, TuiProviderCommand,
+    TuiSession, TuiSkillsCommand, TuiTaskRecord, TuiThread, TuiUsageSummary, TuiUserInputRequest,
 };
 use crate::ui::stream::StreamEvents;
 use crate::util::json::{
@@ -621,6 +622,9 @@ fn handle_tui_http_action(
         TuiAction::Model { .. } => {
             app.set_status("model commands require local file-backed TUI".to_string());
         }
+        TuiAction::Provider { .. } => {
+            app.set_status("provider commands require local file-backed TUI".to_string());
+        }
         TuiAction::Skills { .. } => {
             app.set_status("skills commands require local file-backed TUI".to_string());
         }
@@ -1168,6 +1172,7 @@ fn mcp_detail_summary(
         TuiMcpDetailKind::Cost => Err(app_error("cost details are not MCP details")),
         TuiMcpDetailKind::Cache => Err(app_error("cache details are not MCP details")),
         TuiMcpDetailKind::Model => Err(app_error("model details are not MCP details")),
+        TuiMcpDetailKind::Provider => Err(app_error("provider details are not MCP details")),
         TuiMcpDetailKind::Skills => Err(app_error("skill details are not MCP details")),
         TuiMcpDetailKind::Rollback => Err(app_error("rollback details are not MCP details")),
         TuiMcpDetailKind::Reasoning => Err(app_error("reasoning details are not MCP details")),
@@ -1364,6 +1369,53 @@ fn format_model_catalog_summary(summary: &ModelConfigSummary) -> String {
     out
 }
 
+fn format_provider_config_summary(summary: &ProviderConfigSummary) -> String {
+    format!(
+        "DeepSeekCode Provider Config ({})\n\nprovider = {} ({})\nmodel.base_url = {}\nmodel.api_key_env = {}\nmodel.model = {}\nmodel.reasoning_effort = {}\n\nUse provider <name> [model] to update this project config. Use provider list for supported presets.",
+        summary.path.display(),
+        summary.provider,
+        summary.label,
+        summary.base_url,
+        summary.api_key_env,
+        summary.model,
+        summary.reasoning_effort
+    )
+}
+
+fn format_provider_catalog_summary(summary: &ProviderConfigSummary) -> String {
+    let providers = [
+        ("deepseek", "DeepSeek"),
+        ("nvidia-nim", "NVIDIA NIM"),
+        ("openai", "OpenAI-compatible"),
+        ("atlascloud", "AtlasCloud"),
+        ("openrouter", "OpenRouter"),
+        ("novita", "Novita AI"),
+        ("fireworks", "Fireworks AI"),
+        ("sglang", "SGLang local"),
+        ("vllm", "vLLM local"),
+        ("ollama", "Ollama local"),
+    ];
+    let mut out = String::new();
+    out.push_str("DeepSeekCode Provider Presets\n");
+    out.push_str("=============================\n\n");
+    out.push_str(&format!(
+        "Current provider: {} ({})\n",
+        summary.provider, summary.label
+    ));
+    out.push_str(&format!("Current model: {}\n\n", summary.model));
+    for (name, label) in providers {
+        if name == summary.provider {
+            out.push_str(&format!("- {name}: {label} (current)\n"));
+        } else {
+            out.push_str(&format!("- {name}: {label}\n"));
+        }
+    }
+    out.push_str(
+        "\nThis command updates model.base_url/api_key_env/model.model. DeepSeek-TUI's picker UI remains a separate parity gap.\n",
+    );
+    out
+}
+
 fn format_string_list(values: &[String]) -> String {
     if values.is_empty() {
         "[]".to_string()
@@ -1547,6 +1599,33 @@ fn handle_tui_action_with_live(
                 }
             };
             app.set_mcp_detail(TuiMcpDetailKind::Model, detail);
+            app.set_status(status);
+        }
+        TuiAction::Provider { workspace, command } => {
+            let workspace = Path::new(&workspace);
+            let status = match &command {
+                TuiProviderCommand::Show => "provider config shown".to_string(),
+                TuiProviderCommand::List => "provider catalog shown".to_string(),
+                TuiProviderCommand::Set { provider, model } => {
+                    let result = set_provider_at(workspace, provider, model.as_deref())?;
+                    if result.changed {
+                        format!(
+                            "provider set: {} -> {} ({})",
+                            result.previous_provider, result.provider, result.model
+                        )
+                    } else {
+                        format!("provider unchanged: {} ({})", result.provider, result.model)
+                    }
+                }
+            };
+            let summary = provider_config_summary_at(workspace)?;
+            let detail = match command {
+                TuiProviderCommand::List => format_provider_catalog_summary(&summary),
+                TuiProviderCommand::Show | TuiProviderCommand::Set { .. } => {
+                    format_provider_config_summary(&summary)
+                }
+            };
+            app.set_mcp_detail(TuiMcpDetailKind::Provider, detail);
             app.set_status(status);
         }
         TuiAction::Skills { command } => {
@@ -4847,6 +4926,55 @@ mod tests {
         assert!(output.contains("model catalog shown"));
         assert!(output.contains("deepseek-v4-pro (current)"));
         assert!(output.contains("auto"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn handle_tui_action_manages_provider_config() {
+        let root = temp_root("provider-config");
+        let store = RuntimeStore::new(root.join("runtime"));
+        let mut app = TuiApp::new(Vec::new());
+
+        handle_tui_action(
+            &store,
+            None,
+            &mut app,
+            TuiAction::Provider {
+                workspace: root.display().to_string(),
+                command: TuiProviderCommand::Set {
+                    provider: "nvidia-nim".to_string(),
+                    model: Some("flash".to_string()),
+                },
+            },
+        )
+        .unwrap();
+
+        let config = std::fs::read_to_string(root.join(".dscode/config.toml")).unwrap();
+        assert!(config.contains(r#"model.base_url = "https://integrate.api.nvidia.com/v1""#));
+        assert!(config.contains(r#"model.api_key_env = "NVIDIA_API_KEY""#));
+        assert!(config.contains(r#"model.model = "deepseek-ai/deepseek-v4-flash""#));
+        let output = render_once(&app, 120, 36).unwrap();
+        assert!(output.contains("provider set:"));
+        assert!(output.contains("provider = nvidia-nim"));
+        assert!(output.contains("deepseek-ai/deepseek-v4-flash"));
+
+        handle_tui_action(
+            &store,
+            None,
+            &mut app,
+            TuiAction::Provider {
+                workspace: root.display().to_string(),
+                command: TuiProviderCommand::List,
+            },
+        )
+        .unwrap();
+
+        let output = render_once(&app, 120, 36).unwrap();
+        assert!(output.contains("provider catalog shown"));
+        assert!(output.contains("nvidia-nim"));
+        assert!(output.contains("(current)"));
+        assert!(output.contains("openrouter"));
 
         let _ = std::fs::remove_dir_all(root);
     }
