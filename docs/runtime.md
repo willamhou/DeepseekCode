@@ -344,6 +344,7 @@ Exposed tools:
 | `rlm_python` | Run restricted pure-compute Python helper code with imports/files/network/subprocess blocked |
 | `rlm_python_sessions` | List or inspect persisted `rlm_python_session` JSON state without running Python |
 | `rlm_process_sessions` | List or inspect persisted `rlm_process` durable model-session summaries, optionally including live daemon manifests, without running a child model |
+| `rlm_process_events` | Replay live `rlm_process` daemon event logs by cursor without running a child model |
 | `rlm_python_session` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and writes `.dscode/rlm-python` helper state |
 | `rlm` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and runs bounded model-backed RLM child analysis |
 | `rlm_query` | Alias for `rlm` |
@@ -1405,12 +1406,16 @@ session runtime thread, enqueues a pending `rlm_process` runtime task, writes
 the live manifest, and appends a `turn_queued` event without spending model
 tokens. It is queueing only; a live worker that claims turns, streams model
 deltas, handles cancellation, and records completion remains future work.
+`rlm_process_events session_id=<id> cursor=<seq>` replays parsed
+`.dscode/rlm-daemon/<session_id>/events.jsonl` records with `seq` greater than
+the cursor and returns `next_cursor` for clients that want deterministic live
+RLM event polling before full streaming worker support lands.
 This gives the model DeepSeek-TUI-style Recursive Language Model entrypoints for
 synthesis/classification tasks with both file-backed and optional process-backed
 Python helper state. MCP server mode exposes the local RLM planning helpers
 (`rlm_chunk_plan`, `rlm_map_reduce_plan`, `rlm_recursive_plan`), restricted pure-compute
-`rlm_python`, read-only `rlm_python_sessions`, and read-only
-`rlm_process_sessions` by default. Stateful
+`rlm_python`, read-only `rlm_python_sessions`, read-only `rlm_process_sessions`,
+and read-only `rlm_process_events` by default. Stateful
 `rlm_python_session` is hidden by default and requires trusted side effects or
 durable runtime approvals because it writes `.dscode/rlm-python` state.
 Model-running child-agent RLM tools (`rlm`, `rlm_query`, `llm_query`,

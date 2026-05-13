@@ -1072,6 +1072,10 @@ pub struct RlmModelSessionsTool {
     pub config: AppConfig,
 }
 
+pub struct RlmLiveEventsTool {
+    pub config: AppConfig,
+}
+
 impl Tool for RlmPythonSessionsTool {
     fn name(&self) -> &str {
         "rlm_python_sessions"
@@ -1346,6 +1350,78 @@ impl Tool for RlmModelSessionsTool {
             )
         };
         Ok(ToolOutput { summary })
+    }
+}
+
+impl Tool for RlmLiveEventsTool {
+    fn name(&self) -> &str {
+        "rlm_process_events"
+    }
+
+    fn execute(&self, input: ToolInput) -> AppResult<ToolOutput> {
+        let session_id = input
+            .get("session_id")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| tool_failure("rlm_process_events requires non-empty `session_id`"))?;
+        validate_rlm_model_session_id(session_id)?;
+        let cursor = parse_rlm_live_event_cursor(
+            input
+                .get("cursor")
+                .or_else(|| input.get("after_seq"))
+                .or_else(|| input.get("since_seq")),
+        )?;
+        let limit = parse_rlm_live_events_limit(input.get("limit"))?;
+        let path = rlm_live_session_event_log_path(&self.config, session_id);
+        if !path.exists() {
+            return Ok(ToolOutput {
+                summary: format!(
+                    "{{\"session_id\":\"{}\",\"path\":\"{}\",\"exists\":false,\"cursor\":{},\"next_cursor\":{},\"events\":[],\"limit\":{}}}",
+                    json_escape(session_id),
+                    json_escape(&path.display().to_string()),
+                    cursor,
+                    cursor,
+                    limit
+                ),
+            });
+        }
+        let content = fs::read_to_string(&path)
+            .map_err(|error| tool_failure(format!("rlm_process_events read failed: {error}")))?;
+        let mut events = String::new();
+        let mut count = 0usize;
+        let mut next_cursor = cursor;
+        for line in content.lines().filter(|line| !line.trim().is_empty()) {
+            let value = parse_json_value(line).map_err(|error| {
+                tool_failure(format!("rlm_process_events invalid JSON: {error}"))
+            })?;
+            let seq = match &value {
+                JsonValue::Object(root) => root.get("seq").and_then(json_as_u64).unwrap_or(0),
+                _ => 0,
+            };
+            if seq <= cursor {
+                continue;
+            }
+            if count >= limit {
+                break;
+            }
+            if count > 0 {
+                events.push(',');
+            }
+            events.push_str(&json_value_to_string(&value));
+            next_cursor = seq;
+            count += 1;
+        }
+        Ok(ToolOutput {
+            summary: format!(
+                "{{\"session_id\":\"{}\",\"path\":\"{}\",\"exists\":true,\"cursor\":{},\"next_cursor\":{},\"events\":[{}],\"limit\":{}}}",
+                json_escape(session_id),
+                json_escape(&path.display().to_string()),
+                cursor,
+                next_cursor,
+                events,
+                limit
+            ),
+        })
     }
 }
 
@@ -2545,6 +2621,25 @@ fn parse_rlm_model_sessions_limit(raw: Option<&str>) -> AppResult<usize> {
     Ok(limit.clamp(1, 100))
 }
 
+fn parse_rlm_live_events_limit(raw: Option<&str>) -> AppResult<usize> {
+    let limit = match raw.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => value
+            .parse::<usize>()
+            .map_err(|_| tool_failure("rlm_process_events limit must be a positive integer"))?,
+        None => 50,
+    };
+    Ok(limit.clamp(1, 500))
+}
+
+fn parse_rlm_live_event_cursor(raw: Option<&str>) -> AppResult<u64> {
+    match raw.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => value
+            .parse::<u64>()
+            .map_err(|_| tool_failure("rlm_process_events cursor must be a non-negative integer")),
+        None => Ok(0),
+    }
+}
+
 fn parse_bool_arg(raw: Option<&str>) -> bool {
     matches!(
         raw.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
@@ -3395,6 +3490,82 @@ mod tests {
         assert!(events.contains(r#""kind":"turn_queued""#));
         assert!(events.contains(r#""seq":1"#));
         assert!(events.contains(r#""seq":2"#));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rlm_process_events_reads_live_event_cursor() {
+        let cwd = std::env::current_dir().unwrap();
+        let root = cwd.join("target").join(format!(
+            "dscode-rlm-live-events-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let mut config = AppConfig::default();
+        config.workspace.config_dir = root.join(".dscode").display().to_string();
+        let rlm = RlmTool {
+            tool_name: "rlm_process",
+            config: config.clone(),
+            parent_depth: 0,
+        };
+        rlm.execute(
+            ToolInput::new()
+                .with_arg("task", "first live turn")
+                .with_arg("content", "alpha")
+                .with_arg("session_id", "events.1")
+                .with_arg("live", "true"),
+        )
+        .unwrap();
+        rlm.execute(
+            ToolInput::new()
+                .with_arg("task", "second live turn")
+                .with_arg("session_id", "events.1")
+                .with_arg("live", "true"),
+        )
+        .unwrap();
+
+        let events_tool = RlmLiveEventsTool {
+            config: config.clone(),
+        };
+        let first = events_tool
+            .execute(
+                ToolInput::new()
+                    .with_arg("session_id", "events.1")
+                    .with_arg("limit", "1"),
+            )
+            .unwrap();
+        assert!(first.summary.contains(r#""exists":true"#));
+        assert!(first.summary.contains(r#""cursor":0"#));
+        assert!(first.summary.contains(r#""next_cursor":1"#));
+        assert!(first.summary.contains(r#""seq":1"#));
+        assert!(!first.summary.contains(r#""seq":2"#));
+
+        let second = events_tool
+            .execute(
+                ToolInput::new()
+                    .with_arg("session_id", "events.1")
+                    .with_arg("cursor", "1"),
+            )
+            .unwrap();
+        assert!(second.summary.contains(r#""cursor":1"#));
+        assert!(second.summary.contains(r#""next_cursor":2"#));
+        assert!(second.summary.contains(r#""seq":2"#));
+        assert!(second.summary.contains("second live turn"));
+
+        let missing = events_tool
+            .execute(ToolInput::new().with_arg("session_id", "missing"))
+            .unwrap();
+        assert!(missing.summary.contains(r#""exists":false"#));
+        assert_eq!(parse_rlm_live_events_limit(None).unwrap(), 50);
+        assert_eq!(parse_rlm_live_events_limit(Some("0")).unwrap(), 1);
+        assert_eq!(parse_rlm_live_events_limit(Some("1000")).unwrap(), 500);
+        assert!(parse_rlm_live_event_cursor(Some("bad"))
+            .unwrap_err()
+            .to_string()
+            .contains("cursor"));
         let _ = fs::remove_dir_all(root);
     }
 

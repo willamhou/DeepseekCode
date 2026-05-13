@@ -154,9 +154,13 @@ resumption.
    - `rlm_process live=true`
    - `rlm_process_wait`
    - MCP/ACP schema updates
+   - status: partial; `rlm_process live=true` queueing and
+     `rlm_process_events` read-only replay are implemented
 4. Streaming and cancellation:
    - `rlm_process_events`
    - active turn cancellation via runtime cancel events
+   - status: partial; event-log replay is implemented, worker streaming and
+     cancellation remain open
 5. Recovery:
    - daemon restart scan
    - stale pid detection

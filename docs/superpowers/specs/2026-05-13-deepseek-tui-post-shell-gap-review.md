@@ -61,9 +61,10 @@ durable shell replay has since narrowed to byte-offset stdout/stderr slices;
 shell ownership diagnostics now persist stable child pid, owner pid, and process
 group metadata; RLM process semantics have since narrowed to durable
 model-session context plus session-only continuation; live RLM daemon
-manifest/inventory discovery and runtime-thread-backed turn queueing have
-landed. Live PTY resize, attachable terminal replay/supervisor takeover, and
-live RLM worker execution, streaming, cancellation, and recovery remain open.
+manifest/inventory discovery, runtime-thread-backed turn queueing, and cursor
+event replay have landed. Live PTY resize, attachable terminal
+replay/supervisor takeover, and live RLM worker execution, delta streaming,
+cancellation, and recovery remain open.
 
 ## Next Candidate Specs
 
@@ -73,7 +74,7 @@ live RLM worker execution, streaming, cancellation, and recovery remain open.
   backend.
 - True live model-backed RLM REPL/daemon implementation now has a design spec:
   `2026-05-13-deepseek-tui-rlm-live-daemon-design.md`. The next executable
-  slice should be live worker claiming/execution or live-turn streaming because
-  manifest/inventory and runtime-thread-backed queueing have landed.
+  slice should be live worker claiming/execution because manifest/inventory,
+  runtime-thread-backed queueing, and cursor event replay have landed.
 - Platform restore strategy for device nodes and Windows symlink semantics.
 - Live GitHub write-fixture harness behind an explicit opt-in test repository.
