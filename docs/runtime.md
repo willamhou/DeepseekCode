@@ -334,6 +334,9 @@ Exposed tools:
 | `run_shell` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and still limited by the existing safe-command allowlist |
 | `exec_shell_list` | List in-process and durable background shell job records |
 | `exec_shell_show` | Show one in-process or detached durable background shell job snapshot |
+| `exec_shell_replay` | Replay durable stdout/stderr shell log slices by byte offset |
+| `exec_shell_attach` | Return a terminal-oriented durable stdout PTY/log attach snapshot by cursor |
+| `exec_shell_supervisor_status` | Inspect workspace-local shell supervisor protocol state without starting a supervisor |
 | `exec_shell_wait` | Wait for or poll one background shell job and return incremental output, or show a detached durable snapshot |
 | `exec_wait` | Alias for `exec_shell_wait` |
 | `task_shell_wait` | DeepSeek-TUI-compatible wait/poll helper for `task_shell_start` jobs |
@@ -341,6 +344,7 @@ Exposed tools:
 | `task_shell_start` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and starts background safe shell commands |
 | `exec_shell_interact` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and sends stdin to a background shell job |
 | `exec_interact` | Alias for `exec_shell_interact` |
+| `exec_shell_resize` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and updates TTY geometry with best-effort `stty` control |
 | `exec_shell_cancel` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and cancels one or all background shell jobs |
 | `rlm_chunk_plan` | Plan DeepSeek-TUI-style RLM chunks for a workspace file or inline content without running child agents |
 | `rlm_map_reduce_plan` | Plan a local RLM map-reduce workflow without running child agents |
@@ -1333,8 +1337,13 @@ also carry the supervisor capability skeleton for a later native PTY supervisor:
 `supervisor_epoch`, `terminal_event_log`, and `terminal_event_seq`. Current
 plain-pipe and `script` jobs render `attachable: false` and `resizable: false`;
 those flags are reserved for future supervisor-owned PTY sessions and should not
-be confused with the best-effort `script` resize path. Optional `tty_rows` plus
-`tty_cols` set the initial PTY geometry and are persisted in the same manifest.
+be confused with the best-effort `script` resize path.
+`exec_shell_supervisor_status cwd=<path>` inspects the planned
+`.dscode/shell-supervisor/manifest.json` and `supervisor.sock` protocol state,
+reports absent/stale/ready status and supported method names, and never prints
+`control_token_hash`; it is a protocol/status skeleton, not a supervisor
+launcher. Optional `tty_rows` plus `tty_cols` set the initial PTY geometry and
+are persisted in the same manifest.
 `exec_shell_resize cwd=<path> task_id=<id> tty_rows=<n>
 tty_cols=<n>` updates the durable PTY geometry and, for running TTY jobs with
 stdin control, sends a best-effort `stty rows <n> cols <n>` control command
@@ -1357,10 +1366,11 @@ available through `exec_shell_replay stream=stderr`.
 stdin from unknown task ids and returns an explicit diagnostic instead of a
 generic missing-task error. MCP server mode
 exposes `exec_shell_list`, `exec_shell_show`, `exec_shell_replay`,
-`exec_shell_attach`, `exec_shell_wait`, `exec_wait`, and `task_shell_wait` as
-read-only tools by default, while `exec_shell`, `task_shell_start`,
-`exec_shell_interact`, `exec_interact`, `exec_shell_resize`, and
-`exec_shell_cancel` require trusted side effects or durable runtime approvals.
+`exec_shell_attach`, `exec_shell_supervisor_status`, `exec_shell_wait`,
+`exec_wait`, and `task_shell_wait` as read-only tools by default, while
+`exec_shell`, `task_shell_start`, `exec_shell_interact`, `exec_interact`,
+`exec_shell_resize`, and `exec_shell_cancel` require trusted side effects or
+durable runtime approvals.
 
 ### Exec Snapshot TOML
 

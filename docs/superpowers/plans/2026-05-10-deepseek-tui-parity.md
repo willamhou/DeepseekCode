@@ -237,8 +237,11 @@ Landed first slice:
   `terminal_event_log`, `terminal_event_seq`) so current `script` records
   explicitly render as non-attachable/non-supervisor while future
   `native-supervisor` records can be read without downgrading their backend;
-  manifests now keep stable child pid, process-group, and owner-pid metadata so
-  detached snapshots can report owner liveness separately from child status
+  `exec_shell_supervisor_status` now exposes the planned workspace-local
+  `.dscode/shell-supervisor` manifest/socket status and protocol method names
+  without starting a supervisor or leaking `control_token_hash`; manifests now
+  keep stable child pid, process-group, and owner-pid metadata so detached
+  snapshots can report owner liveness separately from child status
 - richer structured data validation
 
 ### Phase D: TUI

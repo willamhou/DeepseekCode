@@ -39,6 +39,8 @@ pub struct ExecShellReplayTool;
 
 pub struct ExecShellAttachTool;
 
+pub struct ExecShellSupervisorStatusTool;
+
 pub struct ExecShellResizeTool;
 
 pub struct ExecShellInteractTool {
@@ -298,6 +300,19 @@ impl Tool for ExecShellAttachTool {
         }
         Ok(ToolOutput {
             summary: render_shell_attach(cwd, task_id, cursor, limit_bytes, tail, wait_ms)?,
+        })
+    }
+}
+
+impl Tool for ExecShellSupervisorStatusTool {
+    fn name(&self) -> &str {
+        "exec_shell_supervisor_status"
+    }
+
+    fn execute(&self, input: ToolInput) -> AppResult<ToolOutput> {
+        let cwd = input.get("cwd").unwrap_or(".");
+        Ok(ToolOutput {
+            summary: render_shell_supervisor_status(cwd)?,
         })
     }
 }
@@ -1204,12 +1219,36 @@ struct DurableShellJobRecord {
     stderr_total_bytes: usize,
 }
 
+#[derive(Debug, Default)]
+struct ShellSupervisorManifest {
+    kind: Option<String>,
+    supervisor_pid: Option<u32>,
+    supervisor_socket: Option<String>,
+    supervisor_epoch: Option<String>,
+    protocol: Option<String>,
+    started_at: Option<String>,
+    updated_at: Option<String>,
+    active_jobs: Option<u64>,
+}
+
 fn shell_job_record_dir(cwd: &str, task_id: &str) -> PathBuf {
     Path::new(cwd).join(".dscode/shell-jobs").join(task_id)
 }
 
 fn shell_job_manifest_path(cwd: &str, task_id: &str) -> PathBuf {
     shell_job_record_dir(cwd, task_id).join("manifest.json")
+}
+
+fn shell_supervisor_state_dir(cwd: &str) -> PathBuf {
+    Path::new(cwd).join(".dscode/shell-supervisor")
+}
+
+fn shell_supervisor_manifest_path(cwd: &str) -> PathBuf {
+    shell_supervisor_state_dir(cwd).join("manifest.json")
+}
+
+fn shell_supervisor_default_socket_path(cwd: &str) -> PathBuf {
+    shell_supervisor_state_dir(cwd).join("supervisor.sock")
 }
 
 fn durable_shell_job_exists(cwd: &str, task_id: &str) -> bool {
@@ -1631,6 +1670,132 @@ fn list_durable_shell_jobs(cwd: &str) -> AppResult<Vec<DurableShellJobRecord>> {
     Ok(records)
 }
 
+fn render_shell_supervisor_status(cwd: &str) -> AppResult<String> {
+    let state_dir = shell_supervisor_state_dir(cwd);
+    let manifest_path = shell_supervisor_manifest_path(cwd);
+    let default_socket = shell_supervisor_default_socket_path(cwd);
+    let manifest = if manifest_path.is_file() {
+        Some(read_shell_supervisor_manifest(&manifest_path)?)
+    } else {
+        None
+    };
+    let socket_path = manifest
+        .as_ref()
+        .and_then(|manifest| manifest.supervisor_socket.as_deref())
+        .map(PathBuf::from)
+        .unwrap_or(default_socket);
+    let socket_kind = shell_supervisor_socket_kind(&socket_path);
+    let supervisor_alive = manifest
+        .as_ref()
+        .and_then(|manifest| manifest.supervisor_pid)
+        .map(process_is_alive);
+    let status = shell_supervisor_status_label(
+        manifest.is_some(),
+        socket_kind == "socket",
+        supervisor_alive,
+    );
+    Ok(format!(
+        "kind: deepseek.exec_shell.supervisor_status.v1\nstatus: {status}\nplatform: {}\ncwd: {}\nstate_dir: {}\nmanifest: {}\nmanifest_exists: {}\nmanifest_kind: {}\nsocket: {}\nsocket_kind: {socket_kind}\nsupervisor_pid: {}\nsupervisor_alive: {}\nsupervisor_epoch: {}\nprotocol: {}\nmethods: start,show,wait,replay,attach,stdin,resize,cancel,shutdown\nactive_jobs: {}\nstarted_at: {}\nupdated_at: {}\nnote: this is the shell supervisor protocol/status skeleton; native PTY ownership, live attach, and TIOCSWINSZ resize are not implemented until a real supervisor process writes this state.\n",
+        shell_supervisor_platform_label(),
+        cwd,
+        state_dir.display(),
+        manifest_path.display(),
+        manifest.is_some(),
+        shell_optional_string_label(manifest.as_ref().and_then(|manifest| manifest.kind.as_deref())),
+        socket_path.display(),
+        shell_optional_pid_label(manifest.as_ref().and_then(|manifest| manifest.supervisor_pid)),
+        supervisor_alive
+            .map(|alive| alive.to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
+        shell_optional_string_label(
+            manifest
+                .as_ref()
+                .and_then(|manifest| manifest.supervisor_epoch.as_deref())
+        ),
+        shell_optional_string_label(
+            manifest
+                .as_ref()
+                .and_then(|manifest| manifest.protocol.as_deref())
+        ),
+        shell_optional_u64_label(manifest.as_ref().and_then(|manifest| manifest.active_jobs)),
+        shell_optional_string_label(
+            manifest
+                .as_ref()
+                .and_then(|manifest| manifest.started_at.as_deref())
+        ),
+        shell_optional_string_label(
+            manifest
+                .as_ref()
+                .and_then(|manifest| manifest.updated_at.as_deref())
+        )
+    )
+    .trim_end()
+    .to_string())
+}
+
+fn shell_supervisor_status_label(
+    manifest_exists: bool,
+    socket_ready: bool,
+    supervisor_alive: Option<bool>,
+) -> &'static str {
+    match (manifest_exists, socket_ready, supervisor_alive) {
+        (false, false, _) => "not_configured",
+        (false, true, _) => "socket_without_manifest",
+        (true, true, Some(true)) => "ready",
+        (true, _, Some(false)) => "stale",
+        (true, false, Some(true)) => "socket_missing",
+        (true, true, None) => "socket_without_pid",
+        (true, false, None) => "manifest_only",
+    }
+}
+
+fn shell_supervisor_platform_label() -> &'static str {
+    #[cfg(unix)]
+    {
+        "unix"
+    }
+    #[cfg(not(unix))]
+    {
+        "unsupported"
+    }
+}
+
+fn read_shell_supervisor_manifest(path: &Path) -> AppResult<ShellSupervisorManifest> {
+    let content = fs::read_to_string(path)?;
+    let root = parse_root_object(&content)?;
+    Ok(ShellSupervisorManifest {
+        kind: root
+            .get("kind")
+            .and_then(json_as_string)
+            .map(str::to_string),
+        supervisor_pid: root
+            .get("supervisor_pid")
+            .and_then(json_as_u64)
+            .map(|pid| pid as u32),
+        supervisor_socket: root
+            .get("supervisor_socket")
+            .and_then(json_as_string)
+            .map(str::to_string),
+        supervisor_epoch: root
+            .get("supervisor_epoch")
+            .and_then(json_as_string)
+            .map(str::to_string),
+        protocol: root
+            .get("protocol")
+            .and_then(json_as_string)
+            .map(str::to_string),
+        started_at: root
+            .get("started_at")
+            .and_then(json_as_string)
+            .map(str::to_string),
+        updated_at: root
+            .get("updated_at")
+            .and_then(json_as_string)
+            .map(str::to_string),
+        active_jobs: root.get("active_jobs").and_then(json_as_u64),
+    })
+}
+
 fn render_durable_snapshot(cwd: &str, task_id: &str) -> AppResult<String> {
     let manifest = shell_job_manifest_path(cwd, task_id);
     if !manifest.is_file() {
@@ -2013,6 +2178,29 @@ fn read_durable_log(record_dir: &Path, name: &str) -> String {
     fs::read(record_dir.join(name))
         .map(|bytes| String::from_utf8_lossy(&bytes).to_string())
         .unwrap_or_default()
+}
+
+fn shell_supervisor_socket_kind(path: &Path) -> &'static str {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return "missing";
+    };
+    let file_type = metadata.file_type();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt;
+        if file_type.is_socket() {
+            return "socket";
+        }
+    }
+    if file_type.is_file() {
+        "file"
+    } else if file_type.is_dir() {
+        "directory"
+    } else if file_type.is_symlink() {
+        "symlink"
+    } else {
+        "other"
+    }
 }
 
 fn write_fifo_stdin(path: &Path, data: &str) -> AppResult<()> {
@@ -2781,6 +2969,73 @@ mod tests {
         );
         assert!(loaded.attachable);
         assert!(loaded.resizable);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn exec_shell_supervisor_status_reports_manifest_without_secret() {
+        let root = temp_root("supervisor-status");
+        fs::create_dir_all(&root).unwrap();
+        let cwd = root.display().to_string();
+        let absent = ExecShellSupervisorStatusTool
+            .execute(ToolInput::new().with_arg("cwd", cwd.clone()))
+            .unwrap();
+        assert!(
+            absent.summary.contains("status: not_configured"),
+            "{}",
+            absent.summary
+        );
+        assert!(
+            absent
+                .summary
+                .contains(".dscode/shell-supervisor/supervisor.sock"),
+            "{}",
+            absent.summary
+        );
+
+        let state_dir = shell_supervisor_state_dir(&cwd);
+        fs::create_dir_all(&state_dir).unwrap();
+        fs::write(
+            state_dir.join("manifest.json"),
+            format!(
+                "{{\"kind\":\"deepseek.exec_shell.supervisor.v1\",\"supervisor_pid\":{},\"supervisor_socket\":\"{}\",\"supervisor_epoch\":\"epoch+77\",\"protocol\":\"newline-json-v1\",\"active_jobs\":2,\"started_at\":\"epoch+70\",\"updated_at\":\"epoch+76\",\"control_token_hash\":\"sha256:do-not-print\"}}",
+                std::process::id(),
+                state_dir.join("supervisor.sock").display()
+            ),
+        )
+        .unwrap();
+
+        let status = ExecShellSupervisorStatusTool
+            .execute(ToolInput::new().with_arg("cwd", cwd.clone()))
+            .unwrap();
+        assert!(
+            status.summary.contains("status: socket_missing"),
+            "{}",
+            status.summary
+        );
+        assert!(
+            status.summary.contains("supervisor_alive: true"),
+            "{}",
+            status.summary
+        );
+        assert!(
+            status.summary.contains("supervisor_epoch: epoch+77"),
+            "{}",
+            status.summary
+        );
+        assert!(
+            status.summary.contains("protocol: newline-json-v1"),
+            "{}",
+            status.summary
+        );
+        assert!(
+            status.summary.contains("active_jobs: 2"),
+            "{}",
+            status.summary
+        );
+        assert!(!status.summary.contains("control_token_hash"));
+        assert!(!status.summary.contains("do-not-print"));
 
         let _ = fs::remove_dir_all(root);
     }

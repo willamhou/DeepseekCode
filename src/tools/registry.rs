@@ -14,8 +14,8 @@ use crate::tools::dispatch_subagent::{DispatchSubagentTool, DispatchSubagentsToo
 use crate::tools::document::{ImageOcrTool, PandocConvertTool};
 use crate::tools::exec_shell::{
     ExecShellAttachTool, ExecShellCancelTool, ExecShellInteractTool, ExecShellListTool,
-    ExecShellReplayTool, ExecShellResizeTool, ExecShellShowTool, ExecShellTool, ExecShellWaitTool,
-    TaskShellStartTool, TaskShellWaitTool,
+    ExecShellReplayTool, ExecShellResizeTool, ExecShellShowTool, ExecShellSupervisorStatusTool,
+    ExecShellTool, ExecShellWaitTool, TaskShellStartTool, TaskShellWaitTool,
 };
 use crate::tools::file_search::FileSearchTool;
 use crate::tools::file_write::{EditFileTool, FimEditTool, WriteFileTool};
@@ -818,6 +818,7 @@ pub fn default_registry_with_context(
         Box::new(ExecShellShowTool),
         Box::new(ExecShellReplayTool),
         Box::new(ExecShellAttachTool),
+        Box::new(ExecShellSupervisorStatusTool),
         Box::new(ExecShellResizeTool),
         Box::new(ExecShellInteractTool {
             tool_name: "exec_shell_interact",
@@ -1278,6 +1279,7 @@ done
             "exec_shell_show",
             "exec_shell_replay",
             "exec_shell_attach",
+            "exec_shell_supervisor_status",
             "exec_shell_resize",
             "exec_shell_interact",
             "exec_interact",

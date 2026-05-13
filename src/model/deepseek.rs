@@ -3057,6 +3057,12 @@ const TOOL_SPECS: &[StaticToolSpec] = &[
         required_json: r#"["task_id"]"#,
     },
     StaticToolSpec {
+        name: "exec_shell_supervisor_status",
+        description: "Inspect workspace-local shell supervisor protocol state without starting a supervisor or running a command.",
+        properties_json: r#"{"cwd":{"type":"string","description":"Workspace directory containing .dscode/shell-supervisor."}}"#,
+        required_json: r#"[]"#,
+    },
+    StaticToolSpec {
         name: "exec_shell_resize",
         description: "Resize a TTY-backed background exec_shell task by updating durable PTY geometry and sending a best-effort stty control command.",
         properties_json: r#"{"task_id":{"type":"string","description":"Task id returned by exec_shell background=true."},"id":{"type":"string","description":"Alias for task_id."},"cwd":{"type":"string","description":"Working directory used to find detached durable shell records."},"tty_rows":{"type":"string","description":"New PTY row count."},"tty_cols":{"type":"string","description":"New PTY column count."},"rows":{"type":"string","description":"Alias for tty_rows."},"cols":{"type":"string","description":"Alias for tty_cols."}}"#,
@@ -5166,6 +5172,7 @@ mod tests {
             "exec_shell_wait".to_string(),
             "exec_shell_replay".to_string(),
             "exec_shell_attach".to_string(),
+            "exec_shell_supervisor_status".to_string(),
             "exec_shell_resize".to_string(),
             "exec_shell_interact".to_string(),
             "exec_shell_cancel".to_string(),
@@ -5188,6 +5195,8 @@ mod tests {
         assert!(openai.contains("\"name\":\"exec_shell_attach\""));
         assert!(openai.contains("\"cursor\""));
         assert!(openai.contains("terminal-oriented attach snapshot"));
+        assert!(openai.contains("\"name\":\"exec_shell_supervisor_status\""));
+        assert!(openai.contains("shell supervisor protocol state"));
         assert!(openai.contains("\"name\":\"exec_shell_resize\""));
         assert!(openai.contains("best-effort stty"));
         assert!(openai.contains("\"name\":\"exec_shell_interact\""));

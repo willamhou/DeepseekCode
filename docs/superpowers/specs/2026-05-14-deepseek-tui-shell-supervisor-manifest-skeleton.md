@@ -27,13 +27,24 @@ show/list/refresh code.
   capability fields explicitly.
 - Future `pty_backend="native-supervisor"` manifests are read and rendered as
   `native-supervisor` instead of being derived back to `script`.
+- Added read-only `exec_shell_supervisor_status` to inspect the planned
+  workspace-local `.dscode/shell-supervisor` manifest/socket state and protocol
+  method names without launching a supervisor.
 - Normal tool output deliberately does not print `control_token_hash`.
 - Runtime docs and the DeepSeek-TUI parity plan document the boundary: this is
   a manifest/protocol skeleton, not native PTY ownership.
 
 ## Verification
 
+- `cargo test exec_shell_supervisor_status --lib`
 - `cargo test exec_shell --lib`
+- `cargo test default_registry_includes_exec_shell_background_tools --lib`
+- `cargo test build_tool_specs_include_exec_shell_background_tools --lib`
+- `cargo test mcp_tools_list --lib`
+- `cargo test serve --lib`
+- `cargo fmt --check`
+- `cargo check`
+- `git diff --check`
 
 ## Remaining
 

@@ -27,8 +27,8 @@ use crate::tools::diagnostics::DiagnosticsTool;
 use crate::tools::document::{ImageOcrTool, PandocConvertTool};
 use crate::tools::exec_shell::{
     ExecShellAttachTool, ExecShellCancelTool, ExecShellInteractTool, ExecShellListTool,
-    ExecShellReplayTool, ExecShellResizeTool, ExecShellShowTool, ExecShellTool, ExecShellWaitTool,
-    TaskShellStartTool, TaskShellWaitTool,
+    ExecShellReplayTool, ExecShellResizeTool, ExecShellShowTool, ExecShellSupervisorStatusTool,
+    ExecShellTool, ExecShellWaitTool, TaskShellStartTool, TaskShellWaitTool,
 };
 use crate::tools::file_search::FileSearchTool;
 use crate::tools::file_write::EditFileTool;
@@ -799,6 +799,7 @@ fn execute_mcp_tool(
         "exec_shell_show" => ExecShellShowTool.execute(input)?,
         "exec_shell_replay" => ExecShellReplayTool.execute(input)?,
         "exec_shell_attach" => ExecShellAttachTool.execute(input)?,
+        "exec_shell_supervisor_status" => ExecShellSupervisorStatusTool.execute(input)?,
         "exec_shell_wait" => ExecShellWaitTool {
             tool_name: "exec_shell_wait",
         }
@@ -3407,6 +3408,17 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
                     ("wait_ms", number_property("Wait milliseconds for new terminal bytes.")),
                 ],
                 &["task_id"],
+            ),
+        ),
+        mcp_tool_definition(
+            "exec_shell_supervisor_status",
+            "Inspect workspace-local shell supervisor protocol state without starting a supervisor or running a command.",
+            mcp_schema(
+                vec![(
+                    "cwd",
+                    string_property("Workspace directory containing .dscode/shell-supervisor."),
+                )],
+                &[],
             ),
         ),
         mcp_tool_definition(
@@ -6085,6 +6097,7 @@ fn acp_tool_kind(name: &str) -> &'static str {
         | "load_skill"
         | "exec_shell_replay"
         | "exec_shell_attach"
+        | "exec_shell_supervisor_status"
         | "rlm_process_sessions"
         | "rlm_process_status"
         | "rlm_process_events"
@@ -8919,6 +8932,7 @@ mod tests {
         assert!(rendered.contains(r#""name":"exec_shell_show""#));
         assert!(rendered.contains(r#""name":"exec_shell_replay""#));
         assert!(rendered.contains(r#""name":"exec_shell_attach""#));
+        assert!(rendered.contains(r#""name":"exec_shell_supervisor_status""#));
         assert!(rendered.contains(r#""name":"exec_shell_wait""#));
         assert!(rendered.contains(r#""name":"exec_wait""#));
         assert!(rendered.contains(r#""name":"task_shell_wait""#));
