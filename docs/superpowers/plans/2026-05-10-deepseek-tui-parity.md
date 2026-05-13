@@ -579,6 +579,9 @@ Landed first slice:
   standard `tool_call` and `tool_call_update` payloads before the final JSON-RPC
   result; loaded-session updates include runtime turn/item ids under
   `_meta.runtime` to align ACP clients with durable runtime audit records
+- ACP `session/tools/call` now emits bounded intermediate `tool_call_update`
+  progress chunks for large tool outputs before the final completion update,
+  while preserving the existing small-output response shape
 - `deepseek serve --acp --workspace <path>` starts ACP from an explicit
   workspace
 - `deepseek mcp add/get/remove/enable/disable/validate` covers common MCP
@@ -614,8 +617,8 @@ Remaining:
 
 - audit the remaining DeepSeek-TUI MCP long tail after the shell-session and
   RLM exposure slices
-- true long-running ACP tool output streaming beyond synchronous
-  `tool_call_update` completion payloads
+- true process-level ACP stdout/stderr streaming while tools are still
+  executing, beyond bounded post-execution output progress chunks
 
 ### Phase H: Packaging
 

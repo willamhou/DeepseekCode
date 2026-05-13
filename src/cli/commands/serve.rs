@@ -59,6 +59,9 @@ use crate::util::json::{
 
 const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 const ACP_PROTOCOL_VERSION: u64 = 1;
+const ACP_TOOL_PROGRESS_MIN_CHARS: usize = 4096;
+const ACP_TOOL_PROGRESS_CHUNK_CHARS: usize = 2048;
+const ACP_TOOL_PROGRESS_MAX_CHUNKS: usize = 4;
 static ACP_TOOL_CALL_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn env_flag(name: &str) -> bool {
@@ -4067,6 +4070,12 @@ fn acp_session_tools_call_responses(
         &arguments,
         &outcome,
     )];
+    responses.extend(acp_session_tool_progress_updates(
+        session_id,
+        name,
+        &tool_call_id,
+        &outcome,
+    ));
     responses.push(acp_session_tool_result_update(
         session_id,
         name,
@@ -4616,6 +4625,113 @@ fn acp_session_tool_result_update(
         update.insert("_meta".to_string(), meta);
     }
     acp_structured_session_update(session_id, JsonValue::Object(update))
+}
+
+fn acp_session_tool_progress_updates(
+    session_id: &str,
+    name: &str,
+    tool_call_id: &str,
+    outcome: &AcpToolCallOutcome,
+) -> Vec<JsonValue> {
+    let (chunks, truncated) = acp_tool_progress_chunks(&outcome.text);
+    let chunk_count = chunks.len();
+    chunks
+        .into_iter()
+        .enumerate()
+        .map(|(index, chunk)| {
+            acp_session_tool_progress_update(
+                session_id,
+                name,
+                tool_call_id,
+                outcome,
+                chunk,
+                index + 1,
+                chunk_count,
+                truncated,
+            )
+        })
+        .collect()
+}
+
+fn acp_session_tool_progress_update(
+    session_id: &str,
+    name: &str,
+    tool_call_id: &str,
+    outcome: &AcpToolCallOutcome,
+    chunk: String,
+    chunk_index: usize,
+    chunk_count: usize,
+    truncated: bool,
+) -> JsonValue {
+    let mut update = BTreeMap::new();
+    update.insert(
+        "sessionUpdate".to_string(),
+        JsonValue::String("tool_call_update".to_string()),
+    );
+    update.insert(
+        "toolCallId".to_string(),
+        JsonValue::String(tool_call_id.to_string()),
+    );
+    update.insert(
+        "status".to_string(),
+        JsonValue::String("in_progress".to_string()),
+    );
+    update.insert(
+        "content".to_string(),
+        JsonValue::Array(vec![object([
+            ("type", JsonValue::String("content".to_string())),
+            (
+                "content",
+                object([
+                    ("type", JsonValue::String("text".to_string())),
+                    ("text", JsonValue::String(chunk.clone())),
+                ]),
+            ),
+        ])]),
+    );
+    update.insert(
+        "rawOutput".to_string(),
+        object([
+            ("text", JsonValue::String(chunk)),
+            ("tool", JsonValue::String(name.to_string())),
+            ("partial", JsonValue::Bool(true)),
+            ("chunkIndex", JsonValue::Number(chunk_index.to_string())),
+            ("chunkCount", JsonValue::Number(chunk_count.to_string())),
+            ("truncated", JsonValue::Bool(truncated)),
+        ]),
+    );
+    if let Some(meta) = acp_tool_runtime_meta(outcome) {
+        update.insert("_meta".to_string(), meta);
+    }
+    acp_structured_session_update(session_id, JsonValue::Object(update))
+}
+
+fn acp_tool_progress_chunks(text: &str) -> (Vec<String>, bool) {
+    let total_chars = text.chars().count();
+    if total_chars <= ACP_TOOL_PROGRESS_MIN_CHARS {
+        return (Vec::new(), false);
+    }
+
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut current_len = 0usize;
+    let mut emitted_chars = 0usize;
+    for character in text.chars() {
+        if chunks.len() >= ACP_TOOL_PROGRESS_MAX_CHUNKS {
+            break;
+        }
+        current.push(character);
+        current_len += 1;
+        emitted_chars += 1;
+        if current_len >= ACP_TOOL_PROGRESS_CHUNK_CHARS {
+            chunks.push(std::mem::take(&mut current));
+            current_len = 0;
+        }
+    }
+    if chunks.len() < ACP_TOOL_PROGRESS_MAX_CHUNKS && !current.is_empty() {
+        chunks.push(current);
+    }
+    (chunks, emitted_chars < total_chars)
 }
 
 fn acp_tool_title(name: &str) -> String {
@@ -8713,6 +8829,60 @@ mod tests {
         assert!(result_update.contains(r#""isError":false"#));
         assert!(rendered.contains(r#""id":23"#));
         assert!(rendered.contains("hello acp tool"));
+        assert!(rendered.contains(r#""isError":false"#));
+    }
+
+    #[test]
+    fn acp_session_tools_call_streams_large_tool_output_updates() {
+        let mut state = acp_state("acp-tools-large-output");
+        let workspace = temp_dir("acp-tools-large-output-workspace");
+        fs::write(
+            workspace.join("large.txt"),
+            format!("{}\n", "large-output-".repeat(600)),
+        )
+        .unwrap();
+        let new_request = format!(
+            r#"{{"jsonrpc":"2.0","id":32,"method":"session/new","params":{{"cwd":"{}"}}}}"#,
+            crate::util::json::json_escape(&workspace.display().to_string())
+        );
+        let AcpDispatch::Responses(new_responses) =
+            acp_dispatch_for_message(&new_request, &mut state)
+        else {
+            panic!("expected ACP responses");
+        };
+        let rendered_new = json_value_to_string(&new_responses[0]);
+        let root = parse_root_object(&rendered_new).unwrap();
+        let acp_session_id = root
+            .get("result")
+            .and_then(json_as_object)
+            .and_then(|result| result.get("sessionId"))
+            .and_then(json_as_string)
+            .unwrap();
+        let request = format!(
+            r#"{{"jsonrpc":"2.0","id":33,"method":"session/tools/call","params":{{"sessionId":"{acp_session_id}","name":"read_file","arguments":{{"path":"large.txt","max_lines":1}}}}}}"#
+        );
+
+        let AcpDispatch::Responses(responses) = acp_dispatch_for_message(&request, &mut state)
+        else {
+            panic!("expected ACP responses");
+        };
+
+        assert!(responses.len() > 3);
+        let call_update = json_value_to_string(&responses[0]);
+        let first_progress_update = json_value_to_string(&responses[1]);
+        let final_update = json_value_to_string(&responses[responses.len() - 2]);
+        let rendered = json_value_to_string(&responses[responses.len() - 1]);
+        assert!(call_update.contains(r#""sessionUpdate":"tool_call""#));
+        assert!(first_progress_update.contains(r#""sessionUpdate":"tool_call_update""#));
+        assert!(first_progress_update.contains(r#""status":"in_progress""#));
+        assert!(first_progress_update.contains(r#""partial":true"#));
+        assert!(first_progress_update.contains(r#""chunkIndex":1"#));
+        assert!(first_progress_update.contains(r#""chunkCount":4"#));
+        assert!(first_progress_update.contains(r#""rawOutput""#));
+        assert!(final_update.contains(r#""status":"completed""#));
+        assert!(!final_update.contains(r#""partial":true"#));
+        assert!(rendered.contains(r#""id":33"#));
+        assert!(rendered.contains("large-output-large-output"));
         assert!(rendered.contains(r#""isError":false"#));
     }
 
