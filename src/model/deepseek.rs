@@ -3495,6 +3495,12 @@ const TOOL_SPECS: &[StaticToolSpec] = &[
         required_json: r#"[]"#,
     },
     StaticToolSpec {
+        name: "rlm_process_stop",
+        description: "Stop an idle live RLM daemon session. Cancels queued pending turns, writes a session_stopped event, and prevents accidental reuse until reset=true is supplied to rlm_process live=true.",
+        properties_json: r#"{"session_id":{"type":"string","description":"Live RLM session id."},"reason":{"type":"string","description":"Optional stop reason stored in the live event log."}}"#,
+        required_json: r#"["session_id"]"#,
+    },
+    StaticToolSpec {
         name: "rlm_process_run_next",
         description: "Claim and run the next queued live RLM daemon turn from its persisted payload. Use dry_run=true to inspect the selected payload and rendered task without claiming it.",
         properties_json: r#"{"session_id":{"type":"string","description":"Live RLM session id."},"task_id":{"type":"string","description":"Optional runtime task id for a specific queued turn."},"turn_id":{"type":"string","description":"Alias for task_id."},"id":{"type":"string","description":"Alias for task_id."},"dry_run":{"type":"string","description":"Set true/1/yes/on to load the payload and render the child task without claiming or running it."}}"#,
@@ -5186,6 +5192,7 @@ mod tests {
             "rlm_process_wait".to_string(),
             "rlm_process_cancel".to_string(),
             "rlm_process_recover".to_string(),
+            "rlm_process_stop".to_string(),
             "rlm_process_run_next".to_string(),
             "rlm_process_drain".to_string(),
             "rlm_batch".to_string(),
@@ -5207,6 +5214,7 @@ mod tests {
         assert!(openai.contains("\"name\":\"rlm_process_wait\""));
         assert!(openai.contains("\"name\":\"rlm_process_cancel\""));
         assert!(openai.contains("\"name\":\"rlm_process_recover\""));
+        assert!(openai.contains("\"name\":\"rlm_process_stop\""));
         assert!(openai.contains("\"name\":\"rlm_process_run_next\""));
         assert!(openai.contains("\"name\":\"rlm_process_drain\""));
         assert!(openai.contains("\"name\":\"rlm_batch\""));
@@ -5232,6 +5240,7 @@ mod tests {
         assert!(openai.contains("enqueue a live RLM daemon turn"));
         assert!(openai.contains("queued pending live RLM daemon turns"));
         assert!(openai.contains("interrupted live RLM daemon turns"));
+        assert!(openai.contains("session_stopped"));
         assert!(openai.contains("persisted payload"));
         assert!(openai.contains("\"overlap\""));
         assert!(openai.contains("\"include_text\""));
@@ -5255,6 +5264,7 @@ mod tests {
             "rlm_process_wait".to_string(),
             "rlm_process_cancel".to_string(),
             "rlm_process_recover".to_string(),
+            "rlm_process_stop".to_string(),
             "rlm_process_run_next".to_string(),
             "rlm_process_drain".to_string(),
             "rlm_batch".to_string(),
@@ -5276,6 +5286,7 @@ mod tests {
         assert!(anthropic.contains("\"name\":\"rlm_process_wait\""));
         assert!(anthropic.contains("\"name\":\"rlm_process_cancel\""));
         assert!(anthropic.contains("\"name\":\"rlm_process_recover\""));
+        assert!(anthropic.contains("\"name\":\"rlm_process_stop\""));
         assert!(anthropic.contains("\"name\":\"rlm_process_run_next\""));
         assert!(anthropic.contains("\"name\":\"rlm_process_drain\""));
         assert!(anthropic.contains("\"name\":\"rlm_batch\""));

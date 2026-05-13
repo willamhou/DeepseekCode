@@ -110,7 +110,6 @@ Future tools:
 
 - `rlm_process_wait`
 - `rlm_process_cancel`
-- `rlm_process_stop`
 - `rlm_process_events`
 
 ### Cancellation
@@ -159,6 +158,7 @@ resumption.
    - `rlm_process_wait`
    - `rlm_process_cancel`
    - `rlm_process_recover`
+   - `rlm_process_stop`
    - `rlm_process_run_next`
    - `rlm_process_drain`
    - MCP/ACP schema updates
@@ -168,6 +168,8 @@ resumption.
      `rlm_process_cancel` is implemented for queued pending turns only;
      `rlm_process_recover` is implemented for interrupted running turns in one
      live session or across all live session manifests with `all=true`;
+     `rlm_process_stop` is implemented for idle session shutdown and queued
+     turn cancellation;
      `rlm_process_run_next` is implemented as a single-step worker bridge;
      `rlm_process_drain` is implemented as a bounded FIFO batch worker bridge
 4. Streaming and cancellation:

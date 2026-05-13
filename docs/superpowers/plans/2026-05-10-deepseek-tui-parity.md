@@ -529,7 +529,9 @@ Remaining:
   packaging yet; `rlm_process_recover` can requeue or fail interrupted
   `running` live turns for one session or all live manifests and records
   `turn_recovered`; `deepseek agents daemon` now runs one queued live RLM turn
-  per tick through the RLM worker path instead of the generic runtime task path
+  per tick through the RLM worker path instead of the generic runtime task path;
+  `rlm_process_stop` stops idle live sessions and blocks accidental reuse until
+  `reset=true`
 - Review remote PR context signals now exist: `review` parses
   `github_pr_context` JSON to report requested changes, failing/cancelled status
   checks, and missing `include_diff=true` context before optional semantic

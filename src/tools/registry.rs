@@ -39,7 +39,7 @@ use crate::tools::revert_turn::RevertTurnTool;
 use crate::tools::review::{PrReviewCommentPlanTool, ReviewTool};
 use crate::tools::rlm::{
     RlmBatchTool, RlmChunkPlanTool, RlmLiveCancelTool, RlmLiveDrainTool, RlmLiveEventsTool,
-    RlmLiveRecoverTool, RlmLiveRunNextTool, RlmLiveWaitTool, RlmMapReducePlanTool,
+    RlmLiveRecoverTool, RlmLiveRunNextTool, RlmLiveStopTool, RlmLiveWaitTool, RlmMapReducePlanTool,
     RlmModelSessionsTool, RlmPythonSessionTool, RlmPythonSessionsTool, RlmPythonTool,
     RlmRecursivePlanTool, RlmTool,
 };
@@ -1016,6 +1016,9 @@ pub fn default_registry_with_context(
         tools.push(Box::new(RlmLiveRecoverTool {
             config: config.clone(),
         }));
+        tools.push(Box::new(RlmLiveStopTool {
+            config: config.clone(),
+        }));
         tools.push(Box::new(RlmBatchTool {
             tool_name: "rlm_batch",
             config: config.clone(),
@@ -1784,6 +1787,9 @@ done
             .contains(&"rlm_process_recover"));
         assert!(root
             .names_for_policy(&ExecutionPolicy::new(&approval, None))
+            .contains(&"rlm_process_stop"));
+        assert!(root
+            .names_for_policy(&ExecutionPolicy::new(&approval, None))
             .contains(&"rlm_batch"));
         assert!(root
             .names_for_policy(&ExecutionPolicy::new(&approval, None))
@@ -1854,6 +1860,9 @@ done
         assert!(nested
             .names_for_policy(&ExecutionPolicy::new(&approval, None))
             .contains(&"rlm_process_recover"));
+        assert!(nested
+            .names_for_policy(&ExecutionPolicy::new(&approval, None))
+            .contains(&"rlm_process_stop"));
         assert!(nested
             .names_for_policy(&ExecutionPolicy::new(&approval, None))
             .contains(&"rlm_batch"));
