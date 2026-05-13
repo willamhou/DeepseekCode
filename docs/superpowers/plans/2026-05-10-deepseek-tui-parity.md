@@ -368,6 +368,9 @@ Landed first slice:
   `/memory show|path|clear|edit|help` commands without starting model turns;
   the command palette also exposes `memory show|path|clear|edit|help` over the
   same opt-in `memory.memory_path` used by the `remember` tool
+- local file-backed TUI now supports DeepSeek-TUI-style `/note` workspace notes
+  over `memory.notes_path`, including add/list/show/edit/remove/clear/path
+  commands from the composer or command palette
 - local file-backed TUI composer and command palette now expand project/user
   custom markdown slash commands from `.dscode/commands/*.md` and the
   configured user commands dir, reusing REPL argument expansion semantics and

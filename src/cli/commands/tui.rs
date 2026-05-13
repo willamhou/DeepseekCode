@@ -58,8 +58,8 @@ use crate::tui::{
     discover_custom_slash_commands_dir, render_once, run_interactive,
     run_interactive_with_refresh_actions_and_live, TuiAction, TuiApp, TuiApprovalRequest,
     TuiAutomationRecord, TuiItem, TuiLiveEvent, TuiMcpConfigScope, TuiMcpDetailKind,
-    TuiMemoryCommand, TuiModelCommand, TuiNetworkCommand, TuiProviderCommand, TuiSession,
-    TuiSkillsCommand, TuiTaskRecord, TuiThread, TuiUsageSummary, TuiUserInputRequest,
+    TuiMemoryCommand, TuiModelCommand, TuiNetworkCommand, TuiNoteCommand, TuiProviderCommand,
+    TuiSession, TuiSkillsCommand, TuiTaskRecord, TuiThread, TuiUsageSummary, TuiUserInputRequest,
 };
 use crate::ui::stream::StreamEvents;
 use crate::util::json::{
@@ -762,6 +762,9 @@ fn handle_tui_http_action(
         TuiAction::AppendMemory { .. } | TuiAction::Memory { .. } => {
             app.set_status("memory commands require local file-backed TUI".to_string());
         }
+        TuiAction::Note { .. } => {
+            app.set_status("note commands require local file-backed TUI".to_string());
+        }
         TuiAction::McpManager
         | TuiAction::McpList
         | TuiAction::McpInit { .. }
@@ -1195,6 +1198,7 @@ fn mcp_detail_summary(
         TuiMcpDetailKind::Feedback => Err(app_error("feedback details are not MCP details")),
         TuiMcpDetailKind::Links => Err(app_error("link details are not MCP details")),
         TuiMcpDetailKind::Home => Err(app_error("home details are not MCP details")),
+        TuiMcpDetailKind::Note => Err(app_error("note details are not MCP details")),
         TuiMcpDetailKind::Mode => Err(app_error("mode details are not MCP details")),
         TuiMcpDetailKind::Help => Err(app_error("help details are not MCP details")),
         TuiMcpDetailKind::Settings => Err(app_error("settings details are not MCP details")),
@@ -1809,6 +1813,9 @@ fn handle_tui_action_with_live(
         TuiAction::Memory { command } => {
             run_tui_memory_command(app, config, command);
         }
+        TuiAction::Note { command } => {
+            run_tui_note_command(app, config, command);
+        }
         TuiAction::McpManager => match config {
             Some(config) => match mcp_manager_summary(config) {
                 Ok(summary) => {
@@ -2293,6 +2300,193 @@ fn run_tui_memory_command(app: &mut TuiApp, config: Option<&AppConfig>, command:
             );
         }
     }
+}
+
+fn run_tui_note_command(app: &mut TuiApp, config: Option<&AppConfig>, command: TuiNoteCommand) {
+    let Some(config) = config else {
+        app.set_status("note commands require local config".to_string());
+        return;
+    };
+    let path = config.memory.notes_path();
+    match command {
+        TuiNoteCommand::Add { content } => match append_tui_note(&path, &content) {
+            Ok(()) => {
+                app.set_status(format!("note appended: {}", path.display()));
+                app.set_mcp_detail(
+                    TuiMcpDetailKind::Note,
+                    format!(
+                        "Note appended\nPath: {}\n\n{}",
+                        path.display(),
+                        content.trim()
+                    ),
+                );
+            }
+            Err(error) => app.set_status(format!("note append failed: {error}")),
+        },
+        TuiNoteCommand::List => match read_tui_notes(&path) {
+            Ok(notes) => {
+                app.set_status(format!("notes listed: {} note(s)", notes.len()));
+                app.set_mcp_detail(TuiMcpDetailKind::Note, render_tui_notes_list(&path, &notes));
+            }
+            Err(error) => app.set_status(format!("note list failed: {error}")),
+        },
+        TuiNoteCommand::Show { index } => match read_tui_notes(&path) {
+            Ok(notes) => match notes.get(index - 1) {
+                Some(note) => {
+                    app.set_status(format!("showing note {index}"));
+                    app.set_mcp_detail(
+                        TuiMcpDetailKind::Note,
+                        format!("Note {index}\nPath: {}\n\n{}", path.display(), note),
+                    );
+                }
+                None => app.set_status(format!("note {index} not found")),
+            },
+            Err(error) => app.set_status(format!("note show failed: {error}")),
+        },
+        TuiNoteCommand::Edit { index, content } => match read_tui_notes(&path) {
+            Ok(mut notes) => {
+                if index > notes.len() {
+                    app.set_status(format!("note {index} not found"));
+                    return;
+                }
+                notes[index - 1] = content.trim().to_string();
+                match write_tui_notes(&path, &notes) {
+                    Ok(()) => {
+                        app.set_status(format!("note {index} updated"));
+                        app.set_mcp_detail(
+                            TuiMcpDetailKind::Note,
+                            format!(
+                                "Note {index} updated\nPath: {}\n\n{}",
+                                path.display(),
+                                content.trim()
+                            ),
+                        );
+                    }
+                    Err(error) => app.set_status(format!("note edit failed: {error}")),
+                }
+            }
+            Err(error) => app.set_status(format!("note edit failed: {error}")),
+        },
+        TuiNoteCommand::Remove { index } => match read_tui_notes(&path) {
+            Ok(mut notes) => {
+                if index > notes.len() {
+                    app.set_status(format!("note {index} not found"));
+                    return;
+                }
+                let removed = notes.remove(index - 1);
+                match write_tui_notes(&path, &notes) {
+                    Ok(()) => {
+                        app.set_status(format!("note {index} removed"));
+                        app.set_mcp_detail(
+                            TuiMcpDetailKind::Note,
+                            format!(
+                                "Note {index} removed\nPath: {}\n\nRemoved:\n{}",
+                                path.display(),
+                                removed
+                            ),
+                        );
+                    }
+                    Err(error) => app.set_status(format!("note remove failed: {error}")),
+                }
+            }
+            Err(error) => app.set_status(format!("note remove failed: {error}")),
+        },
+        TuiNoteCommand::Clear => match write_tui_notes(&path, &[]) {
+            Ok(()) => {
+                app.set_status(format!("notes cleared: {}", path.display()));
+                app.set_mcp_detail(
+                    TuiMcpDetailKind::Note,
+                    format!("Notes cleared\nPath: {}", path.display()),
+                );
+            }
+            Err(error) => app.set_status(format!("note clear failed: {error}")),
+        },
+        TuiNoteCommand::Path => {
+            app.set_status(format!("notes path: {}", path.display()));
+            app.set_mcp_detail(
+                TuiMcpDetailKind::Note,
+                format!("Notes path\n\n{}", path.display()),
+            );
+        }
+        TuiNoteCommand::Help => {
+            app.set_status("note commands: add|list|show|edit|remove|clear|path".to_string());
+            app.set_mcp_detail(
+                TuiMcpDetailKind::Note,
+                format!(
+                    "Note commands:\n- /note <text> appends a persistent workspace note.\n- /note add <text> appends a note.\n- /note list lists notes.\n- /note show <n> shows one note.\n- /note edit <n> <text> replaces one note.\n- /note remove <n> removes one note.\n- /note clear clears the notes file.\n- /note path prints the configured notes path.\n\nPath: {}",
+                    path.display()
+                ),
+            );
+        }
+    }
+}
+
+fn append_tui_note(path: &Path, content: &str) -> AppResult<()> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return Err(app_error("note content must not be empty"));
+    }
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    writeln!(file, "\n---\n{trimmed}")?;
+    Ok(())
+}
+
+fn read_tui_notes(path: &Path) -> AppResult<Vec<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => Ok(parse_tui_notes(&content)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn write_tui_notes(path: &Path, notes: &[String]) -> AppResult<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    let body = notes
+        .iter()
+        .map(|note| note.trim())
+        .filter(|note| !note.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n---\n");
+    std::fs::write(path, body)?;
+    Ok(())
+}
+
+fn parse_tui_notes(content: &str) -> Vec<String> {
+    content
+        .split("\n---\n")
+        .map(str::trim)
+        .filter(|note| !note.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn render_tui_notes_list(path: &Path, notes: &[String]) -> String {
+    let mut detail = String::new();
+    detail.push_str("Notes\n");
+    detail.push_str(&format!("Path: {}\n", path.display()));
+    detail.push_str(&format!("Count: {}\n", notes.len()));
+    detail.push('\n');
+    if notes.is_empty() {
+        detail.push_str("No notes recorded. Use /note <text> or /note add <text>.\n");
+    } else {
+        for (index, note) in notes.iter().enumerate() {
+            detail.push_str(&format!("{}. {}\n", index + 1, runtime_summary(note)));
+        }
+        detail.push_str("\nUse /note show <n>, /note edit <n> <text>, or /note remove <n>.\n");
+    }
+    detail
 }
 
 fn run_tui_diagnostics_from_current_dir(app: &mut TuiApp, changed: bool, paths: Vec<String>) {
@@ -5809,6 +6003,74 @@ shell_allowlist = ["git diff"]
         assert!(render_once(&app, 160, 48)
             .unwrap()
             .contains("memory cleared"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn handle_tui_action_manages_note_file() {
+        let root = temp_root("note-action");
+        fs::create_dir_all(&root).unwrap();
+        let store = RuntimeStore::new(root.join(".dscode/runtime"));
+        let mut config = temp_config(&root);
+        config.memory.notes_path = root.join("notes.md").display().to_string();
+        let notes_path = config.memory.notes_path();
+        let mut app = TuiApp::new(Vec::new());
+
+        handle_tui_action(
+            &store,
+            Some(&config),
+            &mut app,
+            TuiAction::Note {
+                command: TuiNoteCommand::Add {
+                    content: "keep release notes short".to_string(),
+                },
+            },
+        )
+        .unwrap();
+        assert!(fs::read_to_string(&notes_path)
+            .unwrap()
+            .contains("keep release notes short"));
+
+        handle_tui_action(
+            &store,
+            Some(&config),
+            &mut app,
+            TuiAction::Note {
+                command: TuiNoteCommand::List,
+            },
+        )
+        .unwrap();
+        let output = render_once(&app, 160, 48).unwrap();
+        assert!(output.contains("Notes"));
+        assert!(output.contains("keep release notes short"));
+
+        handle_tui_action(
+            &store,
+            Some(&config),
+            &mut app,
+            TuiAction::Note {
+                command: TuiNoteCommand::Edit {
+                    index: 1,
+                    content: "updated note".to_string(),
+                },
+            },
+        )
+        .unwrap();
+        assert!(fs::read_to_string(&notes_path)
+            .unwrap()
+            .contains("updated note"));
+
+        handle_tui_action(
+            &store,
+            Some(&config),
+            &mut app,
+            TuiAction::Note {
+                command: TuiNoteCommand::Remove { index: 1 },
+            },
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(&notes_path).unwrap().trim(), "");
 
         let _ = fs::remove_dir_all(root);
     }

@@ -567,6 +567,7 @@ pub enum TuiMcpDetailKind {
     Feedback,
     Links,
     Home,
+    Note,
     Mode,
     Help,
     Settings,
@@ -601,6 +602,7 @@ impl TuiMcpDetailKind {
             Self::Feedback => "feedback",
             Self::Links => "links",
             Self::Home => "home",
+            Self::Note => "note",
             Self::Mode => "mode",
             Self::Help => "help",
             Self::Settings => "settings",
@@ -635,6 +637,7 @@ impl TuiMcpDetailKind {
             Self::Feedback => "Feedback",
             Self::Links => "Links",
             Self::Home => "Home",
+            Self::Note => "Note",
             Self::Mode => "Mode",
             Self::Help => "Help",
             Self::Settings => "Settings",
@@ -669,6 +672,7 @@ impl TuiMcpDetailKind {
             Self::Feedback => Self::Manager,
             Self::Links => Self::Manager,
             Self::Home => Self::Manager,
+            Self::Note => Self::Manager,
             Self::Mode => Self::Manager,
             Self::Help => Self::Manager,
             Self::Settings => Self::Manager,
@@ -703,6 +707,7 @@ impl TuiMcpDetailKind {
             Self::Feedback => Self::Manager,
             Self::Links => Self::Manager,
             Self::Home => Self::Manager,
+            Self::Note => Self::Manager,
             Self::Mode => Self::Manager,
             Self::Help => Self::Manager,
             Self::Settings => Self::Manager,
@@ -870,6 +875,18 @@ pub enum TuiThemeCommand {
     Show,
     Cycle,
     Set(TuiTheme),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TuiNoteCommand {
+    Add { content: String },
+    List,
+    Show { index: usize },
+    Edit { index: usize, content: String },
+    Remove { index: usize },
+    Clear,
+    Path,
+    Help,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1232,6 +1249,58 @@ fn parse_tui_feedback_command(line: &str) -> Option<Result<TuiFeedbackCommand, S
     }
 }
 
+fn parse_tui_note_command(line: &str) -> Option<Result<TuiNoteCommand, String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/note")
+        .or_else(|| strip_tui_command_prefix(trimmed, "note"))?;
+    let args = rest.split_whitespace().collect::<Vec<_>>();
+    match args.as_slice() {
+        [] | ["help" | "--help" | "-h"] => Some(Ok(TuiNoteCommand::Help)),
+        ["list" | "ls"] => Some(Ok(TuiNoteCommand::List)),
+        ["path"] => Some(Ok(TuiNoteCommand::Path)),
+        ["clear"] => Some(Ok(TuiNoteCommand::Clear)),
+        ["show", index] => parse_note_index_arg(index)
+            .map(|index| TuiNoteCommand::Show { index })
+            .map_or_else(
+                || Some(Err("usage: note show <n> or /note show <n>".to_string())),
+                |command| Some(Ok(command)),
+            ),
+        ["remove" | "rm" | "delete", index] => parse_note_index_arg(index)
+            .map(|index| TuiNoteCommand::Remove { index })
+            .map_or_else(
+                || Some(Err("usage: note remove <n> or /note remove <n>".to_string())),
+                |command| Some(Ok(command)),
+            ),
+        ["show"] => Some(Err("usage: note show <n> or /note show <n>".to_string())),
+        ["remove" | "rm" | "delete"] => {
+            Some(Err("usage: note remove <n> or /note remove <n>".to_string()))
+        }
+        ["edit", index, content @ ..] if !content.is_empty() => match parse_note_index_arg(index) {
+            Some(index) => Some(Ok(TuiNoteCommand::Edit {
+                index,
+                content: content.join(" "),
+            })),
+            None => Some(Err(
+                "usage: note edit <n> <text> or /note edit <n> <text>".to_string()
+            )),
+        },
+        ["edit", ..] => Some(Err(
+            "usage: note edit <n> <text> or /note edit <n> <text>".to_string()
+        )),
+        ["add", content @ ..] if !content.is_empty() => Some(Ok(TuiNoteCommand::Add {
+            content: content.join(" "),
+        })),
+        ["add"] => Some(Err("usage: note add <text> or /note add <text>".to_string())),
+        content @ [_, ..] => Some(Ok(TuiNoteCommand::Add {
+            content: content.join(" "),
+        })),
+    }
+}
+
+fn parse_note_index_arg(value: &str) -> Option<usize> {
+    value.parse::<usize>().ok().filter(|index| *index > 0)
+}
+
 fn parse_tui_links_command(line: &str) -> Option<Result<(), String>> {
     let trimmed = line.trim();
     let rest = strip_tui_command_prefix(trimmed, "/links")
@@ -1363,6 +1432,9 @@ pub enum TuiAction {
     },
     Skills {
         command: TuiSkillsCommand,
+    },
+    Note {
+        command: TuiNoteCommand,
     },
     RespondApproval {
         thread_id: String,
@@ -1552,6 +1624,13 @@ const TUI_HELP_COMMANDS: &[TuiHelpCommandInfo] = &[
         aliases: &[],
         usage: "/feedback [bug|feature|security]",
         description: "Show bug, feature, and security feedback targets.",
+    },
+    TuiHelpCommandInfo {
+        category: "Interaction",
+        name: "note",
+        aliases: &[],
+        usage: "/note [add|list|show|edit|remove|clear|path]",
+        description: "Manage persistent workspace notes.",
     },
     TuiHelpCommandInfo {
         category: "Workbench",
@@ -1815,6 +1894,14 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "memory clear",
     "memory edit",
     "memory help",
+    "note ",
+    "note add ",
+    "note list",
+    "note show ",
+    "note edit ",
+    "note remove ",
+    "note clear",
+    "note path",
     "network",
     "network allow ",
     "network deny ",
@@ -1948,6 +2035,14 @@ const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
     "/memory clear",
     "/memory edit",
     "/memory help",
+    "/note ",
+    "/note add ",
+    "/note list",
+    "/note show ",
+    "/note edit ",
+    "/note remove ",
+    "/note clear",
+    "/note path",
     "/stash",
     "/stash list",
     "/stash pop",
@@ -4218,6 +4313,19 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(command) = parse_tui_note_command(&content) {
+                    match command {
+                        Ok(command) => {
+                            self.request_note_command(command);
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some(command) = parse_tui_stash_command(&content) {
                     match command {
                         Ok(command) => self.handle_composer_stash_command(command),
@@ -4729,6 +4837,15 @@ impl TuiApp {
         if let Some(command) = parse_tui_stash_command(command) {
             match command {
                 Ok(command) => self.handle_composer_stash_command(command),
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_note_command(command) {
+            match command {
+                Ok(command) => self.request_note_command(command),
                 Err(message) => {
                     self.status = message;
                 }
@@ -6224,6 +6341,11 @@ impl TuiApp {
     fn request_skills_command(&mut self, command: TuiSkillsCommand) {
         self.pending_actions.push(TuiAction::Skills { command });
         self.status = "skills command queued".to_string();
+    }
+
+    fn request_note_command(&mut self, command: TuiNoteCommand) {
+        self.pending_actions.push(TuiAction::Note { command });
+        self.status = "note command queued".to_string();
     }
 
     fn show_feedback_detail(&mut self, command: TuiFeedbackCommand) {
@@ -12638,6 +12760,68 @@ mod tests {
                 command: TuiMemoryCommand::Help,
             }]
         );
+    }
+
+    #[test]
+    fn command_palette_requests_note_actions() {
+        let mut app = TuiApp::new(Vec::new());
+
+        run_palette_command(&mut app, "note add keep release notes short");
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::Note {
+                command: TuiNoteCommand::Add {
+                    content: "keep release notes short".to_string(),
+                },
+            }]
+        );
+
+        run_palette_command(&mut app, "note list");
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::Note {
+                command: TuiNoteCommand::List,
+            }]
+        );
+
+        run_palette_command(&mut app, "note show 2");
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::Note {
+                command: TuiNoteCommand::Show { index: 2 },
+            }]
+        );
+
+        run_palette_command(&mut app, "note edit 2 updated note");
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::Note {
+                command: TuiNoteCommand::Edit {
+                    index: 2,
+                    content: "updated note".to_string(),
+                },
+            }]
+        );
+
+        run_palette_command(&mut app, "note remove 2");
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::Note {
+                command: TuiNoteCommand::Remove { index: 2 },
+            }]
+        );
+
+        app.composer_focused = true;
+        app.composer = "/note path".to_string();
+        app.composer_cursor = app.composer.len();
+        assert!(app.handle_key(KeyCode::Enter));
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::Note {
+                command: TuiNoteCommand::Path,
+            }]
+        );
+        assert_eq!(app.composer, "");
     }
 
     #[test]
