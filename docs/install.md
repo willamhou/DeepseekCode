@@ -90,6 +90,10 @@ cargo build --release
 - 支持的平台说明
 - 安装与升级说明链接
 
+Cargo registry 分发目前是明确的 source-build/package-only 策略：
+`Cargo.toml` 设置 `publish = false`，release workflow 会跳过 Cargo registry
+发布。只有在确定 crates.io 或私有 registry 归属后才移除该策略。
+
 `dscode` 只作为兼容别名，不作为主 release artifact 名称。
 
 ## Docker 与 npm Wrapper

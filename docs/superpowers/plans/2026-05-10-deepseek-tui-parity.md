@@ -704,18 +704,20 @@ Landed first slice:
 - `Dockerfile` and `.dockerignore` for source-built local Docker images
 - `npm/package.json`, `npm/bin/deepseek.js`, and `npm/README.md` for a Node wrapper that launches packaged target-triple binaries or `DEEPSEEK_BINARY`
 - `docs/install.md` and `docs/release.md` include Docker and npm wrapper verification commands
-- `Cargo.toml` now carries publish metadata (`description`, `readme`, `license-file`, repository/homepage, keywords, categories)
+- `Cargo.toml` now carries package metadata (`description`, `readme`, `license-file`, repository/homepage, keywords, categories) and an explicit `publish = false` Cargo registry policy until crates.io/private registry ownership is decided
 - `.github/workflows/release.yml` defines a release matrix for Linux x64, macOS x64, macOS arm64, and Windows x64, plus packaging checks for Cargo metadata, npm wrapper, npm dry-pack, and Homebrew formula syntax
 - Release matrix archives now include sibling `.sha256` files for published asset verification and Homebrew formula updates
 - Release matrix creates GitHub signed artifact attestations for each archive and checksum file with `actions/attest`
 - `packaging/homebrew/deepseek.rb` provides a Homebrew formula template for macOS arm64/x64 and Linux x64 release assets
 - `packaging/systemd/` and `packaging/launchd/` provide runtime service placeholders; `deepseek agents service` renders workspace-specific systemd/launchd files for `serve --http`, `agents daemon --json`, and `diagnostics --watch --changed`
 - `deepseek update package` includes `SERVICES.md` and packaged service templates under `services/`
+- Cargo registry distribution now has an explicit source-build/package-only
+  decision: the release workflow skips Cargo registry publishing while
+  `Cargo.toml publish = false` is present
 
 Remaining:
 
 - Actual published npm package with uploaded platform binaries
-- Actual Cargo publish or explicit private registry release decision
 - Published Homebrew tap with real release asset SHA-256 values
 
 ## Completion Audit Gate

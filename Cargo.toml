@@ -10,6 +10,7 @@ repository = "https://github.com/willamhou/DeepSeekCode"
 homepage = "https://github.com/willamhou/DeepSeekCode"
 keywords = ["deepseek", "agent", "cli", "tui"]
 categories = ["command-line-utilities", "development-tools"]
+publish = false
 
 [[bin]]
 name = "dscode"

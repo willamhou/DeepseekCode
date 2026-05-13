@@ -270,7 +270,7 @@ jobs:
             org.opencontainers.image.version=${{ steps.docker.outputs.version }}
 
   publish-crates:
-    name: Publish Crates.io Package
+    name: Cargo Registry Policy
     runs-on: ubuntu-latest
     needs:
       - packaging
@@ -289,10 +289,14 @@ jobs:
           version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
           test "v${version}" = "${GITHUB_REF_NAME}"
 
-      - name: Publish Crates.io Package
+      - name: Apply Cargo Registry Policy
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
+          if grep -q '^publish = false' Cargo.toml; then
+            echo "Cargo.toml sets publish = false; DeepSeekCode is source-build/package-only for Cargo registry distribution."
+            exit 0
+          fi
           if [ -z "${CARGO_REGISTRY_TOKEN}" ]; then
             echo "CARGO_REGISTRY_TOKEN is not configured; skipping crates.io publish."
             exit 0

@@ -175,16 +175,19 @@ assets. It also packs platform npm packages from the compiled binaries. Manual
 `workflow_dispatch` runs keep assets as workflow artifacts only. Tag runs also
 publish a GHCR Docker image as `ghcr.io/<owner>/<repo>:<version>`,
 `ghcr.io/<owner>/<repo>:v<version>`, and `ghcr.io/<owner>/<repo>:latest` with
-OCI source, revision, and version labels. Tag runs also attempt `cargo publish`
-after packaging checks and `npm publish` after platform package artifacts are
-available. The crates.io publish step is skipped when the repository secret
-`CARGO_REGISTRY_TOKEN` is not configured. The npm publish step is skipped when
-`NPM_TOKEN` is not configured. The Homebrew tap publish step is skipped unless
+OCI source, revision, and version labels. Tag runs also run the Cargo registry
+policy job after packaging checks and run `npm publish` after platform package
+artifacts are available. Cargo registry distribution is intentionally
+source-build/package-only for now: `Cargo.toml` sets `publish = false`, and the
+Cargo registry workflow job exits successfully when that policy is present.
+Remove that flag only after there is an explicit crates.io or private registry
+ownership decision. The npm publish step is skipped when `NPM_TOKEN` is not
+configured. The Homebrew tap publish step is skipped unless
 `HOMEBREW_TAP_REPOSITORY` and `HOMEBREW_TAP_TOKEN` are configured; when enabled,
 it renders `Formula/deepseek.rb` from the uploaded release checksums and pushes
 it to the tap repository after the GitHub Release assets are published. The
-Cargo and npm publish steps fail if the tag does not match the package version
-they publish.
+npm publish step fails if the tag does not match the package version it
+publishes.
 
 Verify downloaded release artifacts with:
 
