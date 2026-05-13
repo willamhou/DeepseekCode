@@ -169,6 +169,35 @@ fn invoked_binary_name() -> String {
 mod tests {
     use super::*;
     use crate::config::types::AppConfig;
+    use std::fs;
+    use std::path::Path;
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_root(label: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "deepseek-repl-{label}-{}-{nanos}",
+            std::process::id()
+        ))
+    }
+
+    fn run_git(cwd: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[test]
     fn new_starts_with_default_budget_and_empty_transcript() {
@@ -242,5 +271,42 @@ mod tests {
         assert_eq!(label, "REPL turn before: edit the file and run tests");
         let long = repl_turn_snapshot_label(&"x ".repeat(200));
         assert!(long.len() <= "REPL turn before: ".len() + 80);
+    }
+
+    #[test]
+    fn create_turn_snapshot_captures_repl_worktree_state() {
+        let repo = temp_root("turn-snapshot");
+        fs::create_dir_all(&repo).unwrap();
+        run_git(&repo, &["init"]);
+        fs::write(repo.join("src.txt"), "base\n").unwrap();
+        run_git(&repo, &["add", "src.txt"]);
+        run_git(
+            &repo,
+            &[
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "user.name=Test",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+        fs::write(repo.join("src.txt"), "changed before repl turn\n").unwrap();
+
+        let _cwd = crate::util::cwd::CwdGuard::enter(&repo).unwrap();
+        let mut config = AppConfig::default();
+        config.workspace.config_dir = repo.join(".dscode").display().to_string();
+        let repl = Repl::new(config, None);
+        let snapshot_id = repl
+            .create_turn_snapshot("edit src and run tests")
+            .expect("REPL turn snapshot");
+
+        let store = crate::core::rollback::RollbackStore::new(repo.join(".dscode/rollback"));
+        let snapshot = store.load_snapshot(&snapshot_id).unwrap();
+        assert_eq!(snapshot.label, "REPL turn before: edit src and run tests");
+        assert!(snapshot.patch_bytes > 0);
+        assert_eq!(snapshot.runtime_thread_id, None);
+        assert_eq!(snapshot.runtime_turn_id, None);
     }
 }

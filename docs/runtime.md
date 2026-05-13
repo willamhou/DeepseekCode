@@ -1336,8 +1336,10 @@ assistant turn id. TUI-started agent runs also create a pre-run snapshot when
 started from a git worktree and bind it to the running assistant turn as soon as
 the turn exists. REPL prompts also create a pre-turn snapshot when possible and
 expose the latest one through `/restore show last` and `/revert_turn last`.
-`restore show` and `restore revert-turn` accept either the snapshot id or that
-runtime turn id.
+`restore show` and `restore revert-turn` accept snapshot ids, and for snapshots
+bound by `exec`, TUI, or ACP flows they also accept the runtime turn id. REPL
+snapshots are intentionally session-local and use the snapshot id or `last`
+alias rather than a durable runtime turn id.
 
 In local file-backed TUI sessions, the same rollback surface is available from
 the command palette:
@@ -1367,8 +1369,10 @@ Current boundaries are explicit:
 - rollback storage under `.dscode/rollback` is excluded from untracked capture;
 - older snapshots without split patch files restore through the legacy combined
   `diff.patch` path and do not recover staged-index fidelity;
-- automatic turn binding currently covers `deepseek exec` and TUI-started agent
-  runs, not REPL live turns;
+- runtime-turn binding currently covers `deepseek exec`, TUI-started agent
+  runs, and loaded ACP checkpoint flows; REPL live turn snapshots are not bound
+  to durable runtime turns because plain REPL transcripts are not durable
+  runtime threads yet;
 - `deepseek diagnostics --watch`, the generated diagnostics service template,
   agent-loop post-edit diagnostics, and `serve --http` `/v1/diagnostics` reuse
   warmed stdio LSP sessions inside their owning process. Cross-process
