@@ -458,6 +458,12 @@ Landed first slice:
   `git_blame`, `github_issue_context`, `github_pr_context`, and `diagnostics`
 - code-executing MCP side-effect tools exposed only with trusted side effects or
   durable approvals: `run_tests`, `run_shell`
+- DeepSeek-TUI-compatible MCP shell-session tools: read-only
+  `exec_shell_list`, `exec_shell_show`, `exec_shell_wait`, `exec_wait`, and
+  `task_shell_wait` are available by default; mutating `exec_shell`,
+  `task_shell_start`, `exec_shell_interact`, `exec_interact`, and
+  `exec_shell_cancel` are exposed only with trusted side effects or durable
+  `permission_request kind=shell` approvals
 - read-only runtime tools exposed through MCP: `runtime_health`,
   `runtime_list_sessions`, `runtime_list_threads`, `runtime_read_thread`,
   `runtime_list_tasks`, `runtime_read_task`
@@ -575,8 +581,8 @@ Remaining:
 
 - broader long-tail side-effect MCP server surface beyond the current
   `run_tests`/`run_shell`, file write/patch/edit/delete/copy/move,
-  `revert_turn`, GitHub write, runtime task, and runtime automation tools;
-  remaining candidates include shell-session and RLM tools that still need
+  shell-session, `revert_turn`, GitHub write, runtime task, and runtime
+  automation tools; remaining candidates include RLM tools that still need
   explicit MCP safety contracts before exposure
 - full ACP standard tool streaming beyond started/result notifications
 

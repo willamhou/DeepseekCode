@@ -23,6 +23,10 @@ use crate::model::deepseek::DeepSeekClient;
 use crate::model::protocol::{ModelRequest, TokenUsage};
 use crate::tools::apply_patch::ApplyPatchTool;
 use crate::tools::diagnostics::DiagnosticsTool;
+use crate::tools::exec_shell::{
+    ExecShellCancelTool, ExecShellInteractTool, ExecShellListTool, ExecShellShowTool,
+    ExecShellTool, ExecShellWaitTool, TaskShellStartTool, TaskShellWaitTool,
+};
 use crate::tools::file_search::FileSearchTool;
 use crate::tools::file_write::EditFileTool;
 use crate::tools::git_diff::{GitDiffTool, GitStatusTool};
@@ -727,6 +731,17 @@ fn execute_mcp_tool(
         "git_blame" => GitBlameTool.execute(input)?,
         "github_issue_context" => GithubIssueContextTool.execute(input)?,
         "github_pr_context" => GithubPrContextTool.execute(input)?,
+        "exec_shell_list" => ExecShellListTool.execute(input)?,
+        "exec_shell_show" => ExecShellShowTool.execute(input)?,
+        "exec_shell_wait" => ExecShellWaitTool {
+            tool_name: "exec_shell_wait",
+        }
+        .execute(input)?,
+        "exec_wait" => ExecShellWaitTool {
+            tool_name: "exec_wait",
+        }
+        .execute(input)?,
+        "task_shell_wait" => TaskShellWaitTool.execute(input)?,
         "github_comment" => {
             if !mcp_write_tools_enabled(state) {
                 return Err(app_error(
@@ -751,6 +766,38 @@ fn execute_mcp_tool(
                 ));
             }
             return execute_mcp_run_tests(input, state);
+        }
+        "exec_shell" => {
+            if !mcp_side_effect_tools_enabled(state) {
+                return Err(app_error(
+                    "MCP shell-session tool `exec_shell` is disabled; set DSCODE_MCP_ENABLE_SIDE_EFFECTS=1 for trusted direct execution or DSCODE_MCP_ENABLE_DURABLE_APPROVALS=1 to route through runtime approvals",
+                ));
+            }
+            return execute_mcp_shell_tool("exec_shell", input, state);
+        }
+        "task_shell_start" => {
+            if !mcp_side_effect_tools_enabled(state) {
+                return Err(app_error(
+                    "MCP shell-session tool `task_shell_start` is disabled; set DSCODE_MCP_ENABLE_SIDE_EFFECTS=1 for trusted direct execution or DSCODE_MCP_ENABLE_DURABLE_APPROVALS=1 to route through runtime approvals",
+                ));
+            }
+            return execute_mcp_shell_tool("task_shell_start", input, state);
+        }
+        "exec_shell_interact" | "exec_interact" => {
+            if !mcp_side_effect_tools_enabled(state) {
+                return Err(app_error(
+                    "MCP shell-session stdin tool is disabled; set DSCODE_MCP_ENABLE_SIDE_EFFECTS=1 for trusted direct execution or DSCODE_MCP_ENABLE_DURABLE_APPROVALS=1 to route through runtime approvals",
+                ));
+            }
+            return execute_mcp_shell_tool(name, input, state);
+        }
+        "exec_shell_cancel" => {
+            if !mcp_side_effect_tools_enabled(state) {
+                return Err(app_error(
+                    "MCP shell-session cancel tool `exec_shell_cancel` is disabled; set DSCODE_MCP_ENABLE_SIDE_EFFECTS=1 for trusted direct execution or DSCODE_MCP_ENABLE_DURABLE_APPROVALS=1 to route through runtime approvals",
+                ));
+            }
+            return execute_mcp_shell_tool("exec_shell_cancel", input, state);
         }
         "apply_patch" => {
             if !mcp_write_tools_enabled(state) {
@@ -2092,6 +2139,70 @@ fn execute_mcp_run_tests(input: ToolInput, state: &McpStdioState) -> AppResult<S
     Ok(RunTestsTool.execute(input)?.summary)
 }
 
+fn execute_mcp_shell_tool(
+    name: &str,
+    input: ToolInput,
+    state: &McpStdioState,
+) -> AppResult<String> {
+    if matches!(name, "exec_shell" | "task_shell_start") {
+        let Some(command) = input.get("command") else {
+            return Err(app_error(format!("{name} requires a command")));
+        };
+        if !is_safe_shell_command(command) {
+            return Err(app_error(format!("command not allowed: {command}")));
+        }
+    }
+    if let Some(thread_id) = state.approval_thread_id.as_deref() {
+        if state.approval.require_shell_confirmation && !env_flag("DSCODE_AUTO_APPROVE_SHELL") {
+            let approval = state.store.append_permission_request(
+                thread_id,
+                state.approval_turn_id.as_deref(),
+                name.to_string(),
+                "shell".to_string(),
+                mcp_shell_target(name, &input),
+                input.args.clone(),
+            )?;
+            wait_for_mcp_permission_response(state, thread_id, &approval, name)?;
+        }
+    }
+    let output = match name {
+        "exec_shell" => ExecShellTool.execute(input)?,
+        "task_shell_start" => TaskShellStartTool.execute(input)?,
+        "exec_shell_interact" => ExecShellInteractTool {
+            tool_name: "exec_shell_interact",
+        }
+        .execute(input)?,
+        "exec_interact" => ExecShellInteractTool {
+            tool_name: "exec_interact",
+        }
+        .execute(input)?,
+        "exec_shell_cancel" => ExecShellCancelTool.execute(input)?,
+        _ => return Err(app_error(format!("unknown MCP shell-session tool: {name}"))),
+    };
+    Ok(output.summary)
+}
+
+fn mcp_shell_target(name: &str, input: &ToolInput) -> String {
+    if matches!(name, "exec_shell" | "task_shell_start") {
+        return input
+            .get("command")
+            .map(|command| mcp_compact_target(command, 160))
+            .unwrap_or_else(|| name.to_string());
+    }
+    if name == "exec_shell_cancel" && input.get("all").is_some_and(truthy_str) {
+        return "all background shell jobs".to_string();
+    }
+    input
+        .get("task_id")
+        .or_else(|| input.get("id"))
+        .map(|task_id| format!("{name}: {task_id}"))
+        .unwrap_or_else(|| name.to_string())
+}
+
+fn truthy_str(value: &str) -> bool {
+    matches!(value.trim(), "1" | "true" | "TRUE" | "yes" | "on")
+}
+
 fn wait_for_mcp_permission_response(
     state: &McpStdioState,
     thread_id: &str,
@@ -2608,6 +2719,63 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
             ),
         ),
         mcp_tool_definition(
+            "exec_shell_list",
+            "List in-process background shell jobs.",
+            mcp_schema(Vec::new(), &[]),
+        ),
+        mcp_tool_definition(
+            "exec_shell_show",
+            "Show a background shell job snapshot.",
+            mcp_schema(
+                vec![
+                    ("task_id", string_property("Background shell task id.")),
+                    ("id", string_property("Alias for task_id.")),
+                ],
+                &["task_id"],
+            ),
+        ),
+        mcp_tool_definition(
+            "exec_shell_wait",
+            "Wait for or poll a background exec_shell task and return incremental output.",
+            mcp_schema(
+                vec![
+                    ("task_id", string_property("Background shell task id.")),
+                    ("id", string_property("Alias for task_id.")),
+                    ("wait", string_property("Set false to poll once.")),
+                    ("timeout_ms", number_property("Maximum wait milliseconds.")),
+                ],
+                &["task_id"],
+            ),
+        ),
+        mcp_tool_definition(
+            "exec_wait",
+            "Alias for exec_shell_wait.",
+            mcp_schema(
+                vec![
+                    ("task_id", string_property("Background shell task id.")),
+                    ("id", string_property("Alias for task_id.")),
+                    ("wait", string_property("Set false to poll once.")),
+                    ("timeout_ms", number_property("Maximum wait milliseconds.")),
+                ],
+                &["task_id"],
+            ),
+        ),
+        mcp_tool_definition(
+            "task_shell_wait",
+            "DeepSeek-TUI-compatible wait/poll helper for task_shell_start jobs.",
+            mcp_schema(
+                vec![
+                    ("task_id", string_property("Background shell task id.")),
+                    ("id", string_property("Alias for task_id.")),
+                    ("wait", string_property("Set false to poll once.")),
+                    ("timeout_ms", number_property("Maximum wait milliseconds.")),
+                    ("gate", string_property("Optional gate label.")),
+                    ("command", string_property("Optional original command.")),
+                ],
+                &["task_id"],
+            ),
+        ),
+        mcp_tool_definition(
             "diagnostics",
             "Run workspace or path-scoped diagnostics.",
             mcp_schema(
@@ -2623,6 +2791,80 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
         ),
     ];
     if mcp_side_effect_tools_enabled(state) {
+        tools.push(mcp_tool_definition(
+            "exec_shell",
+            "DeepSeek-TUI-compatible shell execution. Use background=true for long-running commands. Requires trusted side effects or durable runtime approvals.",
+            mcp_schema(
+                vec![
+                    ("command", string_property("Allowlisted shell command.")),
+                    ("cwd", string_property("Working directory, default workspace root.")),
+                    ("background", string_property("Set true to run in background.")),
+                    ("stdin", string_property("Optional initial stdin.")),
+                    ("input", string_property("Alias for stdin.")),
+                    ("data", string_property("Alias for stdin.")),
+                ],
+                &["command"],
+            ),
+        ));
+        tools.push(mcp_tool_definition(
+            "task_shell_start",
+            "DeepSeek-TUI-compatible background shell starter. Requires trusted side effects or durable runtime approvals.",
+            mcp_schema(
+                vec![
+                    ("command", string_property("Allowlisted shell command.")),
+                    ("cwd", string_property("Working directory, default workspace root.")),
+                    ("stdin", string_property("Optional initial stdin.")),
+                    ("input", string_property("Alias for stdin.")),
+                    ("timeout_ms", number_property("Compatibility timeout metadata.")),
+                    ("tty", string_property("Accepted compatibility flag.")),
+                ],
+                &["command"],
+            ),
+        ));
+        tools.push(mcp_tool_definition(
+            "exec_shell_interact",
+            "Send stdin to a running background shell job. Requires trusted side effects or durable runtime approvals.",
+            mcp_schema(
+                vec![
+                    ("task_id", string_property("Background shell task id.")),
+                    ("id", string_property("Alias for task_id.")),
+                    ("input", string_property("Input to send.")),
+                    ("stdin", string_property("Alias for input.")),
+                    ("data", string_property("Alias for input.")),
+                    ("close_stdin", string_property("Set true to close stdin.")),
+                    ("timeout_ms", number_property("Wait milliseconds after input.")),
+                ],
+                &["task_id"],
+            ),
+        ));
+        tools.push(mcp_tool_definition(
+            "exec_interact",
+            "Alias for exec_shell_interact. Requires trusted side effects or durable runtime approvals.",
+            mcp_schema(
+                vec![
+                    ("task_id", string_property("Background shell task id.")),
+                    ("id", string_property("Alias for task_id.")),
+                    ("input", string_property("Input to send.")),
+                    ("stdin", string_property("Alias for input.")),
+                    ("data", string_property("Alias for input.")),
+                    ("close_stdin", string_property("Set true to close stdin.")),
+                    ("timeout_ms", number_property("Wait milliseconds after input.")),
+                ],
+                &["task_id"],
+            ),
+        ));
+        tools.push(mcp_tool_definition(
+            "exec_shell_cancel",
+            "Cancel one or all running background shell jobs. Requires trusted side effects or durable runtime approvals.",
+            mcp_schema(
+                vec![
+                    ("task_id", string_property("Background shell task id.")),
+                    ("id", string_property("Alias for task_id.")),
+                    ("all", string_property("Set true to cancel all running jobs.")),
+                ],
+                &[],
+            ),
+        ));
         tools.push(mcp_tool_definition(
             "run_tests",
             "Run a supported test command in the workspace. Requires trusted DSCODE_MCP_ENABLE_SIDE_EFFECTS=1 or durable runtime approvals.",
@@ -6289,7 +6531,7 @@ fn object<const N: usize>(items: [(&str, JsonValue); N]) -> JsonValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::util::json::{json_as_object, json_as_string, parse_root_object};
+    use crate::util::json::{json_as_array, json_as_object, json_as_string, parse_root_object};
     use std::fs;
     use std::io::{Read, Write};
     use std::net::TcpStream;
@@ -6431,6 +6673,33 @@ mod tests {
         })
     }
 
+    fn mcp_response_text(response: &JsonValue) -> String {
+        let result = json_as_object(response)
+            .and_then(|root| root.get("result"))
+            .and_then(json_as_object)
+            .expect("MCP response result object");
+        let content = result
+            .get("content")
+            .and_then(json_as_array)
+            .expect("MCP response content array");
+        content
+            .first()
+            .and_then(json_as_object)
+            .and_then(|item| item.get("text"))
+            .and_then(json_as_string)
+            .expect("MCP response text content")
+            .to_string()
+    }
+
+    fn extract_task_id(text: &str) -> String {
+        text.lines()
+            .find_map(|line| line.strip_prefix("task_id: "))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .expect("task_id line")
+            .to_string()
+    }
+
     fn acp_state(label: &str) -> AcpStdioState {
         let mut config = AppConfig::default();
         config.model.api_key_env = format!("DSCODE_TEST_NO_KEY_{label}");
@@ -6487,10 +6756,20 @@ mod tests {
         assert!(rendered.contains(r#""name":"git_blame""#));
         assert!(rendered.contains(r#""name":"github_issue_context""#));
         assert!(rendered.contains(r#""name":"github_pr_context""#));
+        assert!(rendered.contains(r#""name":"exec_shell_list""#));
+        assert!(rendered.contains(r#""name":"exec_shell_show""#));
+        assert!(rendered.contains(r#""name":"exec_shell_wait""#));
+        assert!(rendered.contains(r#""name":"exec_wait""#));
+        assert!(rendered.contains(r#""name":"task_shell_wait""#));
         assert!(rendered.contains(r#""name":"diagnostics""#));
         assert!(rendered.contains(r#""name":"runtime_list_sessions""#));
         assert!(rendered.contains(r#""name":"runtime_list_agents""#));
         assert!(rendered.contains(r#""name":"runtime_agent_result""#));
+        assert!(!rendered.contains(r#""name":"exec_shell""#));
+        assert!(!rendered.contains(r#""name":"task_shell_start""#));
+        assert!(!rendered.contains(r#""name":"exec_shell_interact""#));
+        assert!(!rendered.contains(r#""name":"exec_interact""#));
+        assert!(!rendered.contains(r#""name":"exec_shell_cancel""#));
         assert!(!rendered.contains(r#""name":"run_shell""#));
         assert!(!rendered.contains(r#""name":"run_tests""#));
     }
@@ -6507,6 +6786,11 @@ mod tests {
 
         assert!(rendered.contains(r#""name":"run_shell""#));
         assert!(rendered.contains(r#""name":"run_tests""#));
+        assert!(rendered.contains(r#""name":"exec_shell""#));
+        assert!(rendered.contains(r#""name":"task_shell_start""#));
+        assert!(rendered.contains(r#""name":"exec_shell_interact""#));
+        assert!(rendered.contains(r#""name":"exec_interact""#));
+        assert!(rendered.contains(r#""name":"exec_shell_cancel""#));
     }
 
     #[test]
@@ -6608,6 +6892,24 @@ mod tests {
     }
 
     #[test]
+    fn mcp_tools_call_rejects_unsafe_shell_session_before_runtime_approval() {
+        let state = mcp_state_with_durable_approvals("mcp-shell-session-unsafe");
+        let thread_id = state.approval_thread_id.clone().unwrap();
+        let response = mcp_response_for_message(
+            r#"{"jsonrpc":"2.0","id":33,"method":"tools/call","params":{"name":"task_shell_start","arguments":{"command":"rm -rf ."}}}"#,
+            &state,
+        )
+        .unwrap();
+        let rendered = json_value_to_string(&response);
+        assert!(rendered.contains("command not allowed: rm -rf ."));
+        assert!(rendered.contains(r#""isError":true"#));
+        let events = state.store.read_events(&thread_id, 0).unwrap();
+        assert!(!events
+            .iter()
+            .any(|event| event.kind == "permission_request"));
+    }
+
+    #[test]
     fn mcp_tools_list_includes_run_shell_when_durable_approvals_enabled() {
         let state = mcp_state_with_durable_approvals("mcp-run-shell-approval-list");
         let response = mcp_response_for_message(
@@ -6652,6 +6954,11 @@ mod tests {
         assert!(!rendered.contains(r#""name":"runtime_close_agent""#));
         assert!(!rendered.contains(r#""name":"runtime_resume_agent""#));
         assert!(!rendered.contains(r#""name":"runtime_send_agent_input""#));
+        assert!(!rendered.contains(r#""name":"exec_shell""#));
+        assert!(!rendered.contains(r#""name":"task_shell_start""#));
+        assert!(!rendered.contains(r#""name":"exec_shell_interact""#));
+        assert!(!rendered.contains(r#""name":"exec_interact""#));
+        assert!(!rendered.contains(r#""name":"exec_shell_cancel""#));
 
         let state = mcp_state_with_side_effects("mcp-apply-patch-side-effects", true);
         let response = mcp_response_for_message(
@@ -6661,6 +6968,11 @@ mod tests {
         .unwrap();
         let rendered = json_value_to_string(&response);
         assert!(rendered.contains(r#""name":"run_shell""#));
+        assert!(rendered.contains(r#""name":"exec_shell""#));
+        assert!(rendered.contains(r#""name":"task_shell_start""#));
+        assert!(rendered.contains(r#""name":"exec_shell_interact""#));
+        assert!(rendered.contains(r#""name":"exec_interact""#));
+        assert!(rendered.contains(r#""name":"exec_shell_cancel""#));
         assert!(!rendered.contains(r#""name":"apply_patch""#));
         assert!(!rendered.contains(r#""name":"write_file""#));
         assert!(!rendered.contains(r#""name":"edit_file""#));
@@ -6713,7 +7025,60 @@ mod tests {
         assert!(rendered.contains(r#""name":"runtime_close_agent""#));
         assert!(rendered.contains(r#""name":"runtime_resume_agent""#));
         assert!(rendered.contains(r#""name":"runtime_send_agent_input""#));
+        assert!(rendered.contains(r#""name":"exec_shell""#));
+        assert!(rendered.contains(r#""name":"task_shell_start""#));
+        assert!(rendered.contains(r#""name":"exec_shell_interact""#));
+        assert!(rendered.contains(r#""name":"exec_interact""#));
+        assert!(rendered.contains(r#""name":"exec_shell_cancel""#));
         assert!(rendered.contains("durable runtime approvals"));
+    }
+
+    #[test]
+    fn mcp_tools_call_starts_waits_and_cancels_shell_session_after_runtime_approval() {
+        let state = mcp_state_with_durable_approvals("mcp-shell-session-approval");
+        let thread_id = state.approval_thread_id.clone().unwrap();
+        let responder =
+            spawn_mcp_permission_responder(state.store.clone(), thread_id.clone(), "approved");
+        let start_request = r#"{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"task_shell_start","arguments":{"command":"pwd"}}}"#;
+        let start_response = mcp_response_for_message(start_request, &state).unwrap();
+        responder.join().unwrap();
+        let start_text = mcp_response_text(&start_response);
+        assert!(start_text.contains("task_id:"));
+        assert!(start_text.contains("meta.task_shell=true"));
+        let task_id = extract_task_id(&start_text);
+
+        let wait_request = format!(
+            r#"{{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{{"name":"task_shell_wait","arguments":{{"task_id":"{}","timeout_ms":5000}}}}}}"#,
+            crate::util::json::json_escape(&task_id)
+        );
+        let wait_response = mcp_response_for_message(&wait_request, &state).unwrap();
+        let wait_text = mcp_response_text(&wait_response);
+        assert!(wait_text.contains("status: completed"));
+        assert!(wait_text.contains("stdout_total_bytes:"));
+
+        let responder =
+            spawn_mcp_permission_responder(state.store.clone(), thread_id.clone(), "approved");
+        let cancel_request = format!(
+            r#"{{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{{"name":"exec_shell_cancel","arguments":{{"task_id":"{}"}}}}}}"#,
+            crate::util::json::json_escape(&task_id)
+        );
+        let cancel_response = mcp_response_for_message(&cancel_request, &state).unwrap();
+        responder.join().unwrap();
+        let cancel_text = mcp_response_text(&cancel_response);
+        assert!(cancel_text.contains("Canceled background shell job"));
+
+        let events = state.store.read_events(&thread_id, 0).unwrap();
+        let shell_request_for = |tool: &str| {
+            events.iter().any(|event| {
+                event.kind == "permission_request"
+                    && json_as_object(&event.payload).is_some_and(|payload| {
+                        payload.get("tool").and_then(json_as_string) == Some(tool)
+                            && payload.get("kind").and_then(json_as_string) == Some("shell")
+                    })
+            })
+        };
+        assert!(shell_request_for("task_shell_start"));
+        assert!(shell_request_for("exec_shell_cancel"));
     }
 
     #[test]

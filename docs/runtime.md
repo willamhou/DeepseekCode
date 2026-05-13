@@ -317,6 +317,16 @@ Exposed tools:
 | `diagnostics` | Run workspace or path-scoped diagnostics |
 | `run_tests` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and runs supported test commands through the existing shell approval path |
 | `run_shell` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and still limited by the existing safe-command allowlist |
+| `exec_shell_list` | List in-process background shell jobs |
+| `exec_shell_show` | Show one in-process background shell job snapshot |
+| `exec_shell_wait` | Wait for or poll one background shell job and return incremental output |
+| `exec_wait` | Alias for `exec_shell_wait` |
+| `task_shell_wait` | DeepSeek-TUI-compatible wait/poll helper for `task_shell_start` jobs |
+| `exec_shell` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and starts foreground/background safe shell commands |
+| `task_shell_start` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and starts background safe shell commands |
+| `exec_shell_interact` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and sends stdin to a background shell job |
+| `exec_interact` | Alias for `exec_shell_interact` |
+| `exec_shell_cancel` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and cancels one or all background shell jobs |
 | `apply_patch` | Hidden by default; exposed only with durable runtime approvals and applies unified diffs through the existing patch validator |
 | `write_file` | Agent-visible write tool; hidden in MCP/ACP by default and exposed there only with durable runtime approvals; writes UTF-8 text to safe relative paths |
 | `edit_file` | Agent-visible write tool for exact search/replace in one UTF-8 file under the workspace |
@@ -374,14 +384,18 @@ Exposed MCP resource templates:
 | `deepseekcode://runtime/threads/{id}` | Durable runtime thread JSON by id |
 | `deepseekcode://runtime/tasks/{id}` | Durable runtime task JSON by id |
 
-`run_shell`, `apply_patch`, `write_file`, `edit_file`, `delete_file`, `copy_file`, and `move_file` are hidden from
-`tools/list` and rejected by `tools/call` unless the MCP server process opts in.
+`run_shell`, `run_tests`, `exec_shell`, `task_shell_start`,
+`exec_shell_interact`, `exec_interact`, `exec_shell_cancel`, `apply_patch`,
+`write_file`, `edit_file`, `delete_file`, `copy_file`, and `move_file` are
+hidden from `tools/list` and rejected by `tools/call` unless the MCP server
+process opts in.
 `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` keeps the trusted direct execution path for
-allowlisted `run_shell` only. `DSCODE_MCP_ENABLE_DURABLE_APPROVALS=1` creates a
-runtime approval thread for that server and routes `run_shell`, `apply_patch`,
-`write_file`, `edit_file`, `delete_file`, `copy_file`, and `move_file` calls through durable `permission_request` /
-`permission_response` events, so the existing TUI approval modal or HTTP
-runtime can approve or deny the call. Operators can also bind an existing
+allowlisted shell/test/shell-session tools. `DSCODE_MCP_ENABLE_DURABLE_APPROVALS=1`
+creates a runtime approval thread for that server and routes shell-session
+starts/stdin/cancel calls through durable `permission_request kind=shell` /
+`permission_response` events alongside the existing `run_shell`, `run_tests`,
+patch, and file-write approval paths, so the existing TUI approval modal or
+HTTP runtime can approve or deny the call. Operators can also bind an existing
 runtime thread with `DSCODE_MCP_APPROVAL_THREAD_ID=<thread-id>`. All modes reuse
 the existing safe-command allowlist, patch scope validation, and workspace path
 checks; they do not expose arbitrary shell, unrestricted file writes, task
@@ -1165,7 +1179,11 @@ Foreground `exec_shell` reuses the existing safe `run_shell` execution path.
 `exec_shell background=true` and `task_shell_start` create in-process background
 jobs, return a `task_id`, and can be polled by `task_shell_wait` or
 `exec_shell_wait`, sent stdin, or cancelled by the companion tools. These
-background jobs are not yet durable across process exits.
+background jobs are not yet durable across process exits. MCP server mode
+exposes `exec_shell_list`, `exec_shell_show`, `exec_shell_wait`, `exec_wait`,
+and `task_shell_wait` as read-only tools by default, while `exec_shell`,
+`task_shell_start`, `exec_shell_interact`, `exec_interact`, and
+`exec_shell_cancel` require trusted side effects or durable runtime approvals.
 
 ### Exec Snapshot TOML
 
