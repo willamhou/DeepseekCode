@@ -23,6 +23,7 @@ use crate::cli::commands::mcp::{
 use crate::config::load::load_or_default;
 use crate::config::types::AppConfig;
 use crate::core::context::TaskContext;
+use crate::core::instructions::init_project_instructions_at;
 use crate::core::loop_runtime::{
     AgentApprovalDecision, AgentApprovalRequest, AgentApprovalResolver, AgentCancelCheck,
     AgentLoop, AgentLoopOptions, AgentUserInputRequest, AgentUserInputResolver,
@@ -601,6 +602,9 @@ fn handle_tui_http_action(
         }
         TuiAction::RenameSession { .. } => {
             app.set_status("session rename requires local file-backed TUI".to_string());
+        }
+        TuiAction::InitProjectInstructions { .. } => {
+            app.set_status("project instructions init requires local file-backed TUI".to_string());
         }
         TuiAction::RespondApproval {
             thread_id,
@@ -1250,6 +1254,10 @@ fn handle_tui_action_with_live(
             let session = store.rename_session(&session_id, title.clone())?;
             app.rename_session_title(&session_id, session.title.clone());
             app.set_status(format!("renamed session {session_id}: {}", session.title));
+        }
+        TuiAction::InitProjectInstructions { workspace } => {
+            let path = init_project_instructions_at(Path::new(&workspace))?;
+            app.set_status(format!("created project instructions: {}", path.display()));
         }
         TuiAction::RespondApproval {
             thread_id,
@@ -3890,6 +3898,25 @@ mod tests {
     }
 
     #[test]
+    fn handle_tui_http_action_rejects_project_init_as_local_only() {
+        let client = RuntimeHttpClient::from_url("http://127.0.0.1:9").unwrap();
+        let mut app = TuiApp::new(Vec::new());
+
+        handle_tui_http_action(
+            &client,
+            &mut app,
+            TuiAction::InitProjectInstructions {
+                workspace: ".".to_string(),
+            },
+        )
+        .unwrap();
+
+        assert!(render_once(&app, 120, 36)
+            .unwrap()
+            .contains("project instructions init requires local file-backed TUI"));
+    }
+
+    #[test]
     fn handle_tui_http_action_cancels_remote_task() {
         let store = temp_store("http-task-cancel-action");
         let session = store
@@ -4332,6 +4359,40 @@ mod tests {
         assert!(render_once(&app, 120, 36)
             .unwrap()
             .contains("title: Focused Work"));
+    }
+
+    #[test]
+    fn handle_tui_action_initializes_project_instructions() {
+        let root = temp_root("project-init");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"project_init_sample\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let store = RuntimeStore::new(root.join("runtime"));
+        let mut app = TuiApp::new(Vec::new());
+
+        handle_tui_action(
+            &store,
+            None,
+            &mut app,
+            TuiAction::InitProjectInstructions {
+                workspace: root.display().to_string(),
+            },
+        )
+        .unwrap();
+
+        let agents = std::fs::read_to_string(root.join("AGENTS.md")).unwrap();
+        assert!(agents.contains("project_init_sample"));
+        assert!(std::fs::read_to_string(root.join(".gitignore"))
+            .unwrap()
+            .contains(".dscode/"));
+        assert!(render_once(&app, 120, 36)
+            .unwrap()
+            .contains("created project instructions"));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

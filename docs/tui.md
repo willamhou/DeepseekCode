@@ -17,6 +17,8 @@ Current surfaces:
   `stash list|pop|clear` / `/stash list|pop|clear` manage parked drafts
 - session rename from the command palette or slash-style composer command with
   `rename <title>` / `/rename <title>`
+- project instruction initialization with `init` / `/init`, creating
+  `AGENTS.md` in the selected session workspace
 - composer and command-palette editing preserve terminal modifier keys, including
   Ctrl-based line, word, and cursor controls
 - task panel with active thread status, runtime item count, item state/type
@@ -226,6 +228,7 @@ Command palette commands currently implemented:
 | `thread next`, `thread prev` | Move between durable threads in the selected session |
 | `thread <id>` | Jump to a durable thread by id, switching sessions if needed |
 | `/name [args]` | Expand a custom markdown slash command from `.dscode/commands/name.md` or the configured user commands dir, then submit it to the active thread |
+| `init`, `/init` | Create project `AGENTS.md` instructions in the selected session workspace |
 | `rename <title>`, `/rename <title>` | Rename the selected durable session and persist the new title |
 | `stash`, `stash list`, `/stash list` | List parked composer drafts in the right-side detail panel |
 | `stash pop`, `/stash pop` | Restore the most recently stashed composer draft |
@@ -318,12 +321,12 @@ discovery in that screen; `Tab` and `Shift+Tab` cycle manager tabs, while `r`
 refreshes the MCP inventory. The manager also keeps a selected-server action
 strip so `n`/`p` can move selection and `e`/`d`/`x`/`t` can enable, disable,
 open a remove confirmation modal, or inspect tools for that server. The shorter
-discovery commands still use the scrollable right-side detail panel. Session
-rename, rollback, memory, composer stash, custom slash commands, and MCP manager
-commands are local-only because they operate on the client's runtime/session
-files, git worktree, project/user MCP config, configured MCP transports,
-`.dscode/tui/composer-stash.json`, custom command markdown files, and user
-memory file; HTTP-runtime TUI
+discovery commands still use the scrollable right-side detail panel. Project
+instruction init, session rename, rollback, memory, composer stash, custom slash
+commands, and MCP manager commands are local-only because they operate on the
+client's runtime/session files, git worktree, project/user MCP config,
+configured MCP transports, `.dscode/tui/composer-stash.json`, custom command
+markdown files, and user memory file; HTTP-runtime TUI
 sessions report that those commands require local file-backed TUI. General
 external command execution is currently limited to the allowlisted local
 background shell path.

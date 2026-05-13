@@ -677,6 +677,17 @@ fn parse_tui_rename_command(line: &str) -> Option<Result<String, String>> {
     Some(Ok(title.to_string()))
 }
 
+fn parse_tui_init_command(line: &str) -> Option<Result<(), String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/init")
+        .or_else(|| strip_tui_command_prefix(trimmed, "init"))?;
+    if rest.trim().is_empty() {
+        Some(Ok(()))
+    } else {
+        Some(Err("usage: init or /init".to_string()))
+    }
+}
+
 fn parse_tui_custom_slash_command(line: &str) -> Option<(String, Vec<String>)> {
     let mut tokens = line.split_whitespace();
     let command = tokens.next()?;
@@ -703,6 +714,9 @@ pub enum TuiAction {
     RenameSession {
         session_id: String,
         title: String,
+    },
+    InitProjectInstructions {
+        workspace: String,
     },
     RespondApproval {
         thread_id: String,
@@ -870,6 +884,7 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "thread filter ",
     "threads filter ",
     "rename ",
+    "init",
     "tasks",
     "task create ",
     "task next",
@@ -3160,6 +3175,19 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(command) = parse_tui_init_command(&content) {
+                    match command {
+                        Ok(()) => {
+                            self.request_project_instructions_init();
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some((command, args)) = parse_tui_custom_slash_command(&content) {
                     if self.request_custom_slash_command(command, args) {
                         self.composer.clear();
@@ -3362,6 +3390,17 @@ impl TuiApp {
             match title {
                 Ok(title) => {
                     self.request_session_rename(title);
+                }
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_init_command(command) {
+            match command {
+                Ok(()) => {
+                    self.request_project_instructions_init();
                 }
                 Err(message) => {
                     self.status = message;
@@ -4594,6 +4633,18 @@ impl TuiApp {
         {
             session.title = title;
         }
+    }
+
+    fn request_project_instructions_init(&mut self) {
+        let workspace = self
+            .selected_session()
+            .map(|session| session.workspace.clone())
+            .unwrap_or_else(|| ".".to_string());
+        self.pending_actions
+            .push(TuiAction::InitProjectInstructions {
+                workspace: workspace.clone(),
+            });
+        self.status = format!("project instructions init queued: {workspace}");
     }
 
     fn handle_composer_stash_command(&mut self, command: TuiComposerStashCommand) {
@@ -8848,6 +8899,43 @@ mod tests {
     }
 
     #[test]
+    fn command_palette_requests_project_instructions_init() {
+        let mut app = TuiApp::with_runtime(
+            vec![TuiSession {
+                id: "session-one".to_string(),
+                title: "One".to_string(),
+                workspace: "/tmp/deepseek-workspace".to_string(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-one".to_string()),
+                thread_count: 1,
+            }],
+            vec![TuiThread {
+                id: "thread-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                title: "First thread".to_string(),
+                mode: "agent".to_string(),
+                status: "active".to_string(),
+                latest_turn_id: None,
+                event_seq: 1,
+            }],
+            Vec::new(),
+        );
+
+        run_palette_command(&mut app, "init");
+
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::InitProjectInstructions {
+                workspace: "/tmp/deepseek-workspace".to_string(),
+            }]
+        );
+        assert_eq!(
+            app.status,
+            "project instructions init queued: /tmp/deepseek-workspace"
+        );
+    }
+
+    #[test]
     fn command_palette_requests_shell_job_actions() {
         let mut app = TuiApp::new(Vec::new());
 
@@ -9355,6 +9443,18 @@ mod tests {
             vec![TuiAction::RenameSession {
                 session_id: "session-one".to_string(),
                 title: "Focused Session".to_string(),
+            }]
+        );
+
+        for ch in "/init".chars() {
+            assert!(app.handle_key(KeyCode::Char(ch)));
+        }
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::InitProjectInstructions {
+                workspace: ".".to_string(),
             }]
         );
 

@@ -1,7 +1,8 @@
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use crate::config::types::WorkspaceConfig;
-use crate::error::AppResult;
+use crate::error::{app_error, AppResult};
 
 const MAX_INSTRUCTION_BYTES: usize = 32 * 1024;
 
@@ -52,6 +53,125 @@ pub fn render_workspace_instructions(files: &[InstructionFile]) -> Option<String
         }
     }
     Some(rendered)
+}
+
+pub fn init_project_instructions_at(workspace: &Path) -> AppResult<PathBuf> {
+    std::fs::create_dir_all(workspace)?;
+    ensure_dscode_gitignored(workspace)?;
+    let path = workspace.join("AGENTS.md");
+    if path.exists() {
+        return Err(app_error(format!(
+            "AGENTS.md already exists: {}",
+            path.display()
+        )));
+    }
+    std::fs::write(&path, render_project_instructions(workspace))?;
+    Ok(path)
+}
+
+fn ensure_dscode_gitignored(workspace: &Path) -> AppResult<()> {
+    if !workspace.join(".git").exists() {
+        return Ok(());
+    }
+    let path = workspace.join(".gitignore");
+    let entry = ".dscode/";
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        if existing.lines().any(|line| {
+            let trimmed = line.trim();
+            trimmed == entry || trimmed == ".dscode"
+        }) {
+            return Ok(());
+        }
+        let mut updated = existing;
+        if !updated.is_empty() && !updated.ends_with('\n') {
+            updated.push('\n');
+        }
+        updated.push_str(entry);
+        updated.push('\n');
+        std::fs::write(path, updated)?;
+        return Ok(());
+    }
+    std::fs::write(path, format!("{entry}\n"))?;
+    Ok(())
+}
+
+fn render_project_instructions(workspace: &Path) -> String {
+    let mut doc = String::new();
+    doc.push_str("# Project Instructions\n\n");
+    doc.push_str("This file provides context for AI coding agents working in this project.\n\n");
+    doc.push_str(&detect_project_instructions(workspace));
+    doc.push_str("\n## Guidelines\n\n");
+    doc.push_str("- Follow existing code style and project conventions.\n");
+    doc.push_str("- Keep changes focused and easy to review.\n");
+    doc.push_str("- Add or update tests when behavior changes.\n");
+    doc.push_str("- Run the relevant formatter, tests, and checks before committing.\n");
+    doc.push_str("\n## Notes\n\n");
+    doc.push_str("<!-- Add project-specific instructions here. -->\n");
+    doc
+}
+
+fn detect_project_instructions(workspace: &Path) -> String {
+    let mut section = String::new();
+    if workspace.join("Cargo.toml").exists() {
+        section.push_str("## Project Type: Rust\n\n");
+        section.push_str("### Common Commands\n\n");
+        section.push_str("- Build: `cargo build`\n");
+        section.push_str("- Test: `cargo test`\n");
+        section.push_str("- Check: `cargo check`\n");
+        section.push_str("- Format: `cargo fmt`\n");
+        section.push_str("- Lint: `cargo clippy`\n");
+        if let Some(name) = read_cargo_package_name(&workspace.join("Cargo.toml")) {
+            let _ = write!(section, "\n### Package\n\n{name}\n");
+        }
+    } else if workspace.join("package.json").exists() {
+        section.push_str("## Project Type: JavaScript / TypeScript\n\n");
+        section.push_str("### Common Commands\n\n");
+        section.push_str("- Install: `npm install`\n");
+        section.push_str("- Test: `npm test`\n");
+        section.push_str("- Build: `npm run build`\n");
+        section.push_str("- Start: `npm start`\n");
+        if workspace.join("next.config.js").exists() || workspace.join("next.config.ts").exists() {
+            section.push_str("\n### Framework\n\nNext.js\n");
+        } else if workspace.join("vite.config.js").exists()
+            || workspace.join("vite.config.ts").exists()
+        {
+            section.push_str("\n### Framework\n\nVite\n");
+        }
+    } else if workspace.join("pyproject.toml").exists() || workspace.join("setup.py").exists() {
+        section.push_str("## Project Type: Python\n\n");
+        section.push_str("### Common Commands\n\n");
+        section.push_str("- Test: `pytest`\n");
+        section.push_str("- Format: `black .`\n");
+        section.push_str("- Lint: `ruff check .`\n");
+    } else if workspace.join("go.mod").exists() {
+        section.push_str("## Project Type: Go\n\n");
+        section.push_str("### Common Commands\n\n");
+        section.push_str("- Build: `go build`\n");
+        section.push_str("- Test: `go test ./...`\n");
+        section.push_str("- Format: `go fmt ./...`\n");
+    } else {
+        section.push_str("## Project Type\n\n");
+        section.push_str("Unknown. Add the project's build, test, and lint commands below.\n");
+    }
+    section
+}
+
+fn read_cargo_package_name(path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let mut in_package = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_package = trimmed == "[package]";
+            continue;
+        }
+        if in_package && trimmed.starts_with("name") {
+            let value = trimmed.strip_prefix("name")?.trim_start();
+            let value = value.strip_prefix('=')?.trim();
+            return Some(value.trim_matches('"').to_string());
+        }
+    }
+    None
 }
 
 fn read_instruction_file(path: PathBuf) -> AppResult<InstructionFile> {
@@ -126,6 +246,42 @@ mod tests {
             "deepseek-instructions-{name}-{}-{suffix}",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn init_project_instructions_creates_agents_and_gitignore() {
+        let root = temp_root("init-project");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::write(root.join(".gitignore"), "target").unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        let path = init_project_instructions_at(&root).unwrap();
+
+        assert_eq!(path, root.join("AGENTS.md"));
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("Project Type: Rust"));
+        assert!(content.contains("sample"));
+        let gitignore = std::fs::read_to_string(root.join(".gitignore")).unwrap();
+        assert!(gitignore.contains("target\n.dscode/\n"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn init_project_instructions_refuses_existing_agents_file() {
+        let root = temp_root("init-existing");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("AGENTS.md"), "existing").unwrap();
+
+        let error = init_project_instructions_at(&root).unwrap_err();
+
+        assert!(error.to_string().contains("AGENTS.md already exists"));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
