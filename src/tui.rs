@@ -88,6 +88,79 @@ impl TuiMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TuiTheme {
+    Dark,
+    Light,
+    Grayscale,
+    System,
+}
+
+impl TuiTheme {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Dark => "Dark",
+            Self::Light => "Light",
+            Self::Grayscale => "Grayscale",
+            Self::System => "System",
+        }
+    }
+
+    fn command_name(self) -> &'static str {
+        match self {
+            Self::Dark => "dark",
+            Self::Light => "light",
+            Self::Grayscale => "grayscale",
+            Self::System => "system",
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            Self::Dark => Self::Light,
+            Self::Light => Self::Grayscale,
+            Self::Grayscale => Self::System,
+            Self::System => Self::Dark,
+        }
+    }
+
+    fn from_command_arg(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "dark" => Some(Self::Dark),
+            "light" => Some(Self::Light),
+            "grayscale" | "gray" | "grey" => Some(Self::Grayscale),
+            "system" => Some(Self::System),
+            _ => None,
+        }
+    }
+
+    fn accent_color(self) -> Color {
+        match self {
+            Self::Dark => Color::Cyan,
+            Self::Light => Color::Blue,
+            Self::Grayscale => Color::White,
+            Self::System => Color::Green,
+        }
+    }
+
+    fn hint_color(self) -> Color {
+        match self {
+            Self::Dark => Color::Yellow,
+            Self::Light => Color::Blue,
+            Self::Grayscale => Color::Gray,
+            Self::System => Color::Yellow,
+        }
+    }
+
+    fn label_color(self) -> Color {
+        match self {
+            Self::Light => Color::Black,
+            Self::Grayscale => Color::Gray,
+            _ => Color::Gray,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TuiSession {
     pub id: String,
@@ -497,6 +570,7 @@ pub enum TuiMcpDetailKind {
     Mode,
     Help,
     Settings,
+    Theme,
     Rollback,
     Reasoning,
     ComposerStash,
@@ -527,6 +601,7 @@ impl TuiMcpDetailKind {
             Self::Mode => "mode",
             Self::Help => "help",
             Self::Settings => "settings",
+            Self::Theme => "theme",
             Self::Rollback => "rollback",
             Self::Reasoning => "reasoning",
             Self::ComposerStash => "stash",
@@ -557,6 +632,7 @@ impl TuiMcpDetailKind {
             Self::Mode => "Mode",
             Self::Help => "Help",
             Self::Settings => "Settings",
+            Self::Theme => "Theme",
             Self::Rollback => "Rollback",
             Self::Reasoning => "Reasoning",
             Self::ComposerStash => "Composer Stash",
@@ -587,6 +663,7 @@ impl TuiMcpDetailKind {
             Self::Mode => Self::Manager,
             Self::Help => Self::Manager,
             Self::Settings => Self::Manager,
+            Self::Theme => Self::Manager,
             Self::Rollback => Self::Manager,
             Self::Reasoning => Self::Manager,
             Self::ComposerStash => Self::Manager,
@@ -617,6 +694,7 @@ impl TuiMcpDetailKind {
             Self::Mode => Self::Manager,
             Self::Help => Self::Manager,
             Self::Settings => Self::Manager,
+            Self::Theme => Self::Manager,
             Self::Rollback => Self::Manager,
             Self::Reasoning => Self::Manager,
             Self::ComposerStash => Self::Manager,
@@ -770,6 +848,13 @@ pub enum TuiModeCommand {
 pub enum TuiHelpCommand {
     Show,
     Topic(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TuiThemeCommand {
+    Show,
+    Cycle,
+    Set(TuiTheme),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -933,6 +1018,28 @@ fn parse_tui_mode_command(line: &str) -> Option<Result<TuiModeCommand, String>> 
         },
         _ => Some(Err(
             "usage: mode [agent|plan|yolo|1|2|3] or /mode [agent|plan|yolo|1|2|3]".to_string(),
+        )),
+    }
+}
+
+fn parse_tui_theme_command(line: &str) -> Option<Result<TuiThemeCommand, String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/theme")
+        .or_else(|| strip_tui_command_prefix(trimmed, "theme"))?;
+    let args = rest.split_whitespace().collect::<Vec<_>>();
+    match args.as_slice() {
+        [] => Some(Ok(TuiThemeCommand::Cycle)),
+        ["show" | "list" | "help" | "--help" | "-h"] => Some(Ok(TuiThemeCommand::Show)),
+        [value] => match TuiTheme::from_command_arg(value) {
+            Some(theme) => Some(Ok(TuiThemeCommand::Set(theme))),
+            None => Some(Err(
+                "usage: theme [dark|light|grayscale|system] or /theme [dark|light|grayscale|system]"
+                    .to_string(),
+            )),
+        },
+        _ => Some(Err(
+            "usage: theme [dark|light|grayscale|system] or /theme [dark|light|grayscale|system]"
+                .to_string(),
         )),
     }
 }
@@ -1373,6 +1480,13 @@ const TUI_HELP_COMMANDS: &[TuiHelpCommandInfo] = &[
         description: "Show TUI and workspace configuration entry points.",
     },
     TuiHelpCommandInfo {
+        category: "Workbench",
+        name: "theme",
+        aliases: &[],
+        usage: "/theme [dark|light|grayscale|system]",
+        description: "Show, cycle, or switch the local TUI theme.",
+    },
+    TuiHelpCommandInfo {
         category: "Runtime",
         name: "status",
         aliases: &[],
@@ -1528,6 +1642,12 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "mode 1",
     "mode 2",
     "mode 3",
+    "theme",
+    "theme show",
+    "theme dark",
+    "theme light",
+    "theme grayscale",
+    "theme system",
     "plan",
     "agent",
     "yolo",
@@ -1730,6 +1850,12 @@ const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
     "/mode 1",
     "/mode 2",
     "/mode 3",
+    "/theme",
+    "/theme show",
+    "/theme dark",
+    "/theme light",
+    "/theme grayscale",
+    "/theme system",
     "/model",
     "/model auto",
     "/model deepseek-v4-flash",
@@ -1906,6 +2032,7 @@ fn composer_stash_preview(text: &str, max_chars: usize) -> String {
 #[derive(Debug, Clone)]
 pub struct TuiApp {
     mode: TuiMode,
+    theme: TuiTheme,
     sessions: Vec<TuiSession>,
     threads: Vec<TuiThread>,
     items: Vec<TuiItem>,
@@ -2069,6 +2196,7 @@ impl TuiApp {
         };
         let mut app = Self {
             mode: TuiMode::Plan,
+            theme: TuiTheme::Dark,
             sessions,
             threads,
             items,
@@ -4043,6 +4171,19 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(command) = parse_tui_theme_command(&content) {
+                    match command {
+                        Ok(command) => {
+                            self.handle_theme_command(command);
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some(command) = parse_tui_model_command(&content) {
                     match command {
                         Ok(command) => {
@@ -4471,6 +4612,17 @@ impl TuiApp {
             match command {
                 Ok(command) => {
                     self.handle_mode_command(command);
+                }
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_theme_command(command) {
+            match command {
+                Ok(command) => {
+                    self.handle_theme_command(command);
                 }
                 Err(message) => {
                     self.status = message;
@@ -5920,6 +6072,7 @@ impl TuiApp {
         let _ = writeln!(detail, "=====================");
         let _ = writeln!(detail);
         push_status_row(&mut detail, "Mode:", self.mode.title());
+        push_status_row(&mut detail, "Theme:", self.theme.title());
         match self.selected_session() {
             Some(session) => {
                 push_status_row(&mut detail, "Workspace:", &session.workspace);
@@ -5939,6 +6092,7 @@ impl TuiApp {
         let _ = writeln!(detail, "Config Commands");
         let _ = writeln!(detail, "---------------");
         let _ = writeln!(detail, "- /mode [agent|plan|yolo|1|2|3]");
+        let _ = writeln!(detail, "- /theme [dark|light|grayscale|system]");
         let _ = writeln!(detail, "- /model [name|list]");
         let _ = writeln!(detail, "- /provider [name [model]|list]");
         let _ = writeln!(detail, "- /network [list|allow|deny|remove|default]");
@@ -5979,6 +6133,61 @@ impl TuiApp {
         let _ = writeln!(
             detail,
             "Settings are edited through focused commands so local file writes stay explicit."
+        );
+        detail
+    }
+
+    fn handle_theme_command(&mut self, command: TuiThemeCommand) {
+        match command {
+            TuiThemeCommand::Show => self.show_theme_detail(),
+            TuiThemeCommand::Cycle => {
+                self.theme = self.theme.next();
+                self.show_theme_detail();
+                self.status = format!("theme switched: {}", self.theme.title());
+            }
+            TuiThemeCommand::Set(theme) => {
+                self.theme = theme;
+                self.show_theme_detail();
+                self.status = format!("theme switched: {}", self.theme.title());
+            }
+        }
+    }
+
+    fn show_theme_detail(&mut self) {
+        let detail = self.render_theme_detail();
+        self.set_mcp_detail(TuiMcpDetailKind::Theme, detail);
+        self.status = "theme options shown".to_string();
+    }
+
+    fn render_theme_detail(&self) -> String {
+        let mut detail = String::new();
+        let _ = writeln!(detail, "DeepSeekCode Theme");
+        let _ = writeln!(detail, "==================");
+        let _ = writeln!(detail);
+        push_status_row(&mut detail, "Current:", self.theme.title());
+        push_status_row(&mut detail, "Command:", self.theme.command_name());
+        let _ = writeln!(detail);
+        let _ = writeln!(detail, "Commands");
+        let _ = writeln!(detail, "--------");
+        let _ = writeln!(detail, "- /theme             Cycle to the next theme");
+        let _ = writeln!(detail, "- /theme show        Show this panel");
+        let _ = writeln!(
+            detail,
+            "- /theme dark        Cyan accents on terminal defaults"
+        );
+        let _ = writeln!(
+            detail,
+            "- /theme light       Blue accents for light terminals"
+        );
+        let _ = writeln!(detail, "- /theme grayscale   Neutral monochrome accents");
+        let _ = writeln!(
+            detail,
+            "- /theme system      Terminal-default color assumptions"
+        );
+        let _ = writeln!(detail);
+        let _ = writeln!(
+            detail,
+            "The theme is local to the running TUI session; persistent color settings remain a separate config task."
         );
         detail
     }
@@ -9006,7 +9215,7 @@ fn draw_tabs(frame: &mut Frame, app: &TuiApp, area: Rect) {
         .select(app.mode.index())
         .highlight_style(
             Style::default()
-                .fg(Color::Cyan)
+                .fg(app.theme.accent_color())
                 .add_modifier(Modifier::BOLD),
         )
         .block(
@@ -9033,8 +9242,18 @@ fn draw_sidebar(frame: &mut Frame, app: &TuiApp, area: Rect) {
     let session = app.sessions.get(app.selected_session);
     let mut lines = vec![
         Line::from(vec![
-            Span::styled("Mode: ", Style::default().fg(Color::Gray)),
-            Span::styled(app.mode.title(), Style::default().fg(Color::Green)),
+            Span::styled("Mode: ", Style::default().fg(app.theme.label_color())),
+            Span::styled(
+                app.mode.title(),
+                Style::default().fg(app.theme.accent_color()),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Theme: ", Style::default().fg(app.theme.label_color())),
+            Span::styled(
+                app.theme.title(),
+                Style::default().fg(app.theme.hint_color()),
+            ),
         ]),
         Line::from(""),
         Line::from("Runtime session"),
@@ -9317,19 +9536,19 @@ fn filter_mcp_manager_detail(detail: &str, filter: &str) -> String {
 
 fn draw_status(frame: &mut Frame, app: &TuiApp, area: Rect) {
     let status = Paragraph::new(vec![Line::from(vec![
-        Span::styled("Status: ", Style::default().fg(Color::Gray)),
+        Span::styled("Status: ", Style::default().fg(app.theme.label_color())),
         Span::raw(app.status.as_str()),
         Span::raw(" | "),
-        Span::styled("Palette", Style::default().fg(Color::Yellow)),
+        Span::styled("Palette", Style::default().fg(app.theme.hint_color())),
         Span::raw(" : "),
-        Span::styled("Sessions", Style::default().fg(Color::Yellow)),
+        Span::styled("Sessions", Style::default().fg(app.theme.hint_color())),
         Span::raw(" s "),
-        Span::styled("Threads", Style::default().fg(Color::Yellow)),
+        Span::styled("Threads", Style::default().fg(app.theme.hint_color())),
         Span::raw(" t "),
-        Span::styled("Approval", Style::default().fg(Color::Yellow)),
+        Span::styled("Approval", Style::default().fg(app.theme.hint_color())),
         Span::raw(" !"),
         Span::raw(" "),
-        Span::styled("Cancel", Style::default().fg(Color::Yellow)),
+        Span::styled("Cancel", Style::default().fg(app.theme.hint_color())),
         Span::raw(" c"),
     ])])
     .block(Block::default().borders(Borders::ALL).title("Command Bar"));
@@ -9430,7 +9649,7 @@ fn draw_command_palette(frame: &mut Frame, app: &TuiApp) {
         Line::from("Examples: mode agent | task pause | shell cargo test | revert turn last"),
         Line::from(""),
         Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
+            Span::styled("> ", Style::default().fg(app.theme.accent_color())),
             Span::raw(command_query),
         ]),
     ])
@@ -9852,6 +10071,35 @@ mod tests {
 
         assert_eq!(app.mode, TuiMode::Yolo);
         assert_eq!(app.status, "mode set: YOLO");
+        assert_eq!(app.composer, "");
+    }
+
+    #[test]
+    fn theme_command_switches_and_renders_theme_state() {
+        let mut app = TuiApp::new(Vec::new());
+
+        run_palette_command(&mut app, "/theme show");
+
+        assert_eq!(app.status, "theme options shown");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("theme detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Theme);
+        assert!(detail.contains("DeepSeekCode Theme"));
+        assert!(detail.contains("Current:"));
+
+        run_palette_command(&mut app, "theme light");
+
+        assert_eq!(app.theme, TuiTheme::Light);
+        assert_eq!(app.status, "theme switched: Light");
+        let output = render_once(&app, 120, 36).unwrap();
+        assert!(output.contains("Theme: Light"));
+
+        app.composer_focused = true;
+        app.composer = "/theme grayscale".to_string();
+        app.composer_cursor = app.composer.len();
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert_eq!(app.theme, TuiTheme::Grayscale);
+        assert_eq!(app.status, "theme switched: Grayscale");
         assert_eq!(app.composer, "");
     }
 
