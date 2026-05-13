@@ -484,6 +484,7 @@ pub enum TuiMcpDetailKind {
     Skills,
     Feedback,
     Links,
+    Home,
     Rollback,
     Reasoning,
     ComposerStash,
@@ -510,6 +511,7 @@ impl TuiMcpDetailKind {
             Self::Skills => "skills",
             Self::Feedback => "feedback",
             Self::Links => "links",
+            Self::Home => "home",
             Self::Rollback => "rollback",
             Self::Reasoning => "reasoning",
             Self::ComposerStash => "stash",
@@ -536,6 +538,7 @@ impl TuiMcpDetailKind {
             Self::Skills => "Skills",
             Self::Feedback => "Feedback",
             Self::Links => "Links",
+            Self::Home => "Home",
             Self::Rollback => "Rollback",
             Self::Reasoning => "Reasoning",
             Self::ComposerStash => "Composer Stash",
@@ -562,6 +565,7 @@ impl TuiMcpDetailKind {
             Self::Skills => Self::Manager,
             Self::Feedback => Self::Manager,
             Self::Links => Self::Manager,
+            Self::Home => Self::Manager,
             Self::Rollback => Self::Manager,
             Self::Reasoning => Self::Manager,
             Self::ComposerStash => Self::Manager,
@@ -588,6 +592,7 @@ impl TuiMcpDetailKind {
             Self::Skills => Self::Manager,
             Self::Feedback => Self::Manager,
             Self::Links => Self::Manager,
+            Self::Home => Self::Manager,
             Self::Rollback => Self::Manager,
             Self::Reasoning => Self::Manager,
             Self::ComposerStash => Self::Manager,
@@ -983,6 +988,23 @@ fn parse_tui_links_command(line: &str) -> Option<Result<(), String>> {
     }
 }
 
+fn parse_tui_home_command(line: &str) -> Option<Result<(), String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/home")
+        .or_else(|| strip_tui_command_prefix(trimmed, "home"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "/stats"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "stats"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "/overview"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "overview"))?;
+    let args = rest.split_whitespace().collect::<Vec<_>>();
+    match args.as_slice() {
+        [] | ["help" | "--help" | "-h"] => Some(Ok(())),
+        _ => Some(Err(
+            "usage: home, stats, overview, /home, /stats, or /overview".to_string(),
+        )),
+    }
+}
+
 fn strip_tui_command_prefix<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
     let rest = value.strip_prefix(prefix)?;
     if rest.is_empty() || rest.starts_with(char::is_whitespace) {
@@ -1307,6 +1329,9 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "links",
     "dashboard",
     "api",
+    "home",
+    "stats",
+    "overview",
     "automations",
     "automation trigger",
     "compact",
@@ -1420,6 +1445,9 @@ const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
     "/links",
     "/dashboard",
     "/api",
+    "/home",
+    "/stats",
+    "/overview",
     "/rename ",
     "/init",
 ];
@@ -3751,6 +3779,19 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(command) = parse_tui_home_command(&content) {
+                    match command {
+                        Ok(()) => {
+                            self.show_home_detail();
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some(title) = parse_tui_rename_command(&content) {
                     match title {
                         Ok(title) => {
@@ -4121,6 +4162,17 @@ impl TuiApp {
             match command {
                 Ok(()) => {
                     self.show_links_detail();
+                }
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_home_command(command) {
+            match command {
+                Ok(()) => {
+                    self.show_home_detail();
                 }
                 Err(message) => {
                     self.status = message;
@@ -5447,10 +5499,128 @@ impl TuiApp {
         self.status = "links shown".to_string();
     }
 
+    fn show_home_detail(&mut self) {
+        let detail = self.render_home_detail();
+        self.set_mcp_detail(TuiMcpDetailKind::Home, detail);
+        self.status = "home dashboard shown".to_string();
+    }
+
     fn show_status_detail(&mut self) {
         let detail = self.render_status_detail();
         self.set_mcp_detail(TuiMcpDetailKind::Status, detail);
         self.status = "status detail refreshed".to_string();
+    }
+
+    fn render_home_detail(&self) -> String {
+        let mut detail = String::new();
+        let _ = writeln!(detail, "DeepSeekCode Home");
+        let _ = writeln!(detail, "=================");
+        let _ = writeln!(detail);
+        push_status_row(&mut detail, "Version:", env!("CARGO_PKG_VERSION"));
+        push_status_row(&mut detail, "Mode:", self.mode.title());
+        match self.selected_session() {
+            Some(session) => {
+                push_status_row(&mut detail, "Workspace:", &session.workspace);
+                push_status_row(
+                    &mut detail,
+                    "Session:",
+                    &format!("{} [{}]", session.title, session.status),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Session threads:",
+                    &session.thread_count.to_string(),
+                );
+            }
+            None => {
+                push_status_row(&mut detail, "Workspace:", ".");
+                push_status_row(&mut detail, "Session:", "none selected");
+            }
+        }
+        match self.active_thread() {
+            Some(thread) => {
+                push_status_row(
+                    &mut detail,
+                    "Thread:",
+                    &format!("{} [{}]", thread.title, thread.status),
+                );
+                push_status_row(&mut detail, "Thread mode:", &thread.mode);
+            }
+            None => {
+                push_status_row(&mut detail, "Thread:", "none selected");
+            }
+        }
+        let items = self.active_thread_items();
+        let tasks = self.active_thread_tasks();
+        let automations = self.active_thread_automations();
+        push_status_row(
+            &mut detail,
+            "Transcript:",
+            &format!("{} item(s)", items.len()),
+        );
+        push_status_row(&mut detail, "Tasks:", &format!("{} active", tasks.len()));
+        push_status_row(
+            &mut detail,
+            "Automations:",
+            &format!("{} active", automations.len()),
+        );
+        let active_thread_id = self.selected_thread_id.as_deref();
+        let pending_approvals = self
+            .approvals
+            .iter()
+            .filter(|approval| {
+                approval.is_pending() && Some(approval.thread_id.as_str()) == active_thread_id
+            })
+            .count();
+        let pending_user_inputs = self
+            .user_inputs
+            .iter()
+            .filter(|request| {
+                request.is_pending() && Some(request.thread_id.as_str()) == active_thread_id
+            })
+            .count();
+        push_status_row(
+            &mut detail,
+            "Pending:",
+            &format!("{pending_approvals} approval(s), {pending_user_inputs} input(s)"),
+        );
+        if let Some(summary) = self.active_usage_summary() {
+            push_status_row(
+                &mut detail,
+                "Tokens:",
+                &format!(
+                    "{} total, {} latest",
+                    summary.total_tokens, summary.latest_total_tokens
+                ),
+            );
+            push_status_row(
+                &mut detail,
+                "Context:",
+                &format!(
+                    "{} remaining / {}",
+                    summary.context_remaining_tokens, summary.context_strategy
+                ),
+            );
+            let cost = summary
+                .estimated_total_cost_microusd
+                .map(format_microusd)
+                .unwrap_or_else(|| "unpriced model".to_string());
+            push_status_row(&mut detail, "Approx cost:", &cost);
+        } else {
+            push_status_row(&mut detail, "Usage:", "no active-thread usage records");
+        }
+        let _ = writeln!(detail);
+        let _ = writeln!(detail, "Quick actions");
+        let _ = writeln!(detail, "-------------");
+        let _ = writeln!(detail, "- /links       Repository and DeepSeek API links");
+        let _ = writeln!(detail, "- /skills      Configured skill registry");
+        let _ = writeln!(detail, "- /provider    Provider preset and model config");
+        let _ = writeln!(detail, "- /status      Full runtime status");
+        let _ = writeln!(detail, "- /tokens      Token and context telemetry");
+        let _ = writeln!(detail, "- /mcp manager MCP server inventory");
+        let _ = writeln!(detail);
+        let _ = writeln!(detail, "Aliases: home, stats, overview");
+        detail
     }
 
     fn render_status_detail(&self) -> String {
@@ -11018,6 +11188,88 @@ mod tests {
         let (kind, detail) = app.mcp_detail.as_ref().expect("composer links detail");
         assert_eq!(*kind, TuiMcpDetailKind::Links);
         assert!(detail.contains("Aliases: links, dashboard, api"));
+    }
+
+    #[test]
+    fn home_command_renders_runtime_dashboard() {
+        let mut app = TuiApp::with_runtime_usage_tasks_and_approvals(
+            vec![TuiSession {
+                id: "session-one".to_string(),
+                title: "One".to_string(),
+                workspace: "/tmp/deepseek-home".to_string(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-one".to_string()),
+                thread_count: 1,
+            }],
+            vec![TuiThread {
+                id: "thread-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                title: "First thread".to_string(),
+                mode: "agent".to_string(),
+                status: "running".to_string(),
+                latest_turn_id: Some("turn-one".to_string()),
+                event_seq: 7,
+            }],
+            vec![TuiItem {
+                id: "item-one".to_string(),
+                thread_id: "thread-one".to_string(),
+                turn_id: Some("turn-one".to_string()),
+                index: 0,
+                item_type: "message".to_string(),
+                role: Some("user".to_string()),
+                content: "hello".to_string(),
+                status: "completed".to_string(),
+            }],
+            vec![TuiTaskRecord {
+                id: "task-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                thread_id: Some("thread-one".to_string()),
+                parent_task_id: None,
+                kind: "agent".to_string(),
+                status: "running".to_string(),
+                summary: "test task".to_string(),
+                updated_at: "epoch".to_string(),
+            }],
+            vec![TuiUsageSummary {
+                thread_id: "thread-one".to_string(),
+                record_count: 1,
+                prompt_tokens: 10,
+                completion_tokens: 5,
+                total_tokens: 15,
+                latest_prompt_tokens: 10,
+                latest_completion_tokens: 5,
+                latest_total_tokens: 15,
+                prompt_cache_hit_tokens: 3,
+                prompt_cache_miss_tokens: 7,
+                estimated_input_cost_microusd: Some(1),
+                estimated_output_cost_microusd: Some(2),
+                estimated_total_cost_microusd: Some(3),
+                context_remaining_tokens: TUI_CONTEXT_WINDOW_TOKENS - 15,
+                context_strategy: "normal".to_string(),
+            }],
+            Vec::new(),
+        );
+
+        run_palette_command(&mut app, "overview");
+
+        assert_eq!(app.status, "home dashboard shown");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("home detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Home);
+        assert!(detail.contains("DeepSeekCode Home"));
+        assert!(detail.contains("/tmp/deepseek-home"));
+        assert!(detail.contains("15 total, 15 latest"));
+        assert!(detail.contains("/links"));
+        assert!(detail.contains("Aliases: home, stats, overview"));
+
+        app.composer_focused = true;
+        app.composer = "/stats".to_string();
+        app.composer_cursor = app.composer.len();
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert_eq!(app.status, "home dashboard shown");
+        assert_eq!(app.composer, "");
+        let (kind, _) = app.mcp_detail.as_ref().expect("composer home detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Home);
     }
 
     #[test]

@@ -20,6 +20,8 @@ Current surfaces:
   `feedback bug|feature|security`
 - repository and DeepSeek API links with `links` / `/links` plus
   `dashboard` / `/dashboard` and `api` / `/api` aliases
+- home dashboard with `home` / `/home` plus `stats` / `/stats` and
+  `overview` / `/overview` aliases
 - composer draft stash: `Ctrl+S` parks the current draft, and
   `stash list|pop|clear` / `/stash list|pop|clear` manage parked drafts
 - session rename from the command palette or slash-style composer command with
@@ -303,6 +305,7 @@ Command palette commands currently implemented:
 | `feedback`, `/feedback` | Show DeepSeekCode feedback targets in the right-side detail panel |
 | `feedback bug|feature|security`, `/feedback bug|feature|security` | Show GitHub issue or security-policy links for the selected feedback type |
 | `links`, `/links`, `dashboard`, `/dashboard`, `api`, `/api` | Show DeepSeekCode repository/docs links and DeepSeek platform/API docs in the right-side detail panel |
+| `home`, `/home`, `stats`, `/stats`, `overview`, `/overview` | Show a compact runtime dashboard with session/thread, task, usage, pending input, and quick-action links |
 | `automations`, `automation` | Show active-thread automation count in the status bar |
 | `automation trigger`, `automation run` | Trigger the first active automation in the current thread |
 | `automation trigger <id> [prompt]` | Trigger one current-thread automation with an optional prompt override |
