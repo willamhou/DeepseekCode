@@ -5754,30 +5754,16 @@ mod tests {
 
     #[test]
     fn deepseek_body_contains_tool_choice_auto() {
-        // NEW-2: pin tool_choice="auto" against future PR drift.
-        // Inspect the source file directly to confirm the literal is present.
-        // We expect at least two matches (format string + this assertion); if
-        // the format string is removed we will see exactly one match, which
-        // still trips a follow-up safety check below.
-        let source = include_str!("deepseek.rs");
-        let openai_lit = r#""\"tool_choice\":\"auto\","#;
-        let openai_parallel_lit = r#""\"parallel_tool_calls\":false,"#;
-        let anthropic_lit = r#""\"tool_choice\":{{\"type\":\"auto\"}},"#;
-        let openai_count = source.matches(openai_lit).count();
-        let openai_parallel_count = source.matches(openai_parallel_lit).count();
-        let anthropic_count = source.matches(anthropic_lit).count();
-        assert!(
-            openai_count >= 2,
-            "OpenAI body must include tool_choice auto (count={openai_count})"
-        );
-        assert!(
-            openai_parallel_count >= 2,
-            "OpenAI body must disable parallel tool calls (count={openai_parallel_count})"
-        );
-        assert!(
-            anthropic_count >= 2,
-            "Anthropic body must include tool_choice auto (count={anthropic_count})"
-        );
+        let names = vec!["read_file".to_string()];
+
+        let openai = openai_tool_fields(&names, ReasoningTier::Off);
+        assert!(openai.contains("\"tool_choice\":\"auto\""));
+        assert!(openai.contains("\"parallel_tool_calls\":false"));
+        assert!(openai.contains("\"tools\":["));
+
+        let anthropic = anthropic_tool_fields(&names, ReasoningTier::Off);
+        assert!(anthropic.contains("\"tool_choice\":{\"type\":\"auto\"}"));
+        assert!(anthropic.contains("\"tools\":["));
     }
 
     #[test]
