@@ -346,6 +346,7 @@ Exposed tools:
 | `rlm_process_sessions` | List or inspect persisted `rlm_process` durable model-session summaries, optionally including live daemon manifests, without running a child model |
 | `rlm_process_events` | Replay live `rlm_process` daemon event logs by cursor without running a child model |
 | `rlm_process_cancel` | Hidden by default; exposed with durable runtime approvals, and cancels queued pending live `rlm_process` daemon turns |
+| `rlm_process_run_next` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and claims/runs one queued live `rlm_process` daemon turn |
 | `rlm_python_session` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and writes `.dscode/rlm-python` helper state |
 | `rlm` | Hidden by default; exposed with trusted `DSCODE_MCP_ENABLE_SIDE_EFFECTS=1` or durable runtime approvals, and runs bounded model-backed RLM child analysis |
 | `rlm_query` | Alias for `rlm` |
@@ -1413,8 +1414,12 @@ future worker can recover and execute queued turns after the CLI exits.
 live turn, marks the payload cancelled when present, appends `turn_cancelled`,
 and refreshes `queued_turns`; `all=true` cancels every queued pending turn in
 that live session. It does not cancel a turn already claimed by a future worker.
-Live worker claiming, model delta streaming, active worker cancellation, and
-completion recording remain future work.
+`rlm_process_run_next session_id=<id>` is the first non-daemon worker bridge: it
+claims the oldest queued payload, writes `turn_started`, runs the bounded child
+model flow, then records `turn_completed` or `turn_failed`; `dry_run=true`
+renders the selected payload without claiming it. Constant background service
+packaging, model delta streaming, active worker cancellation, and recovery
+remain future work.
 `rlm_process_events session_id=<id> cursor=<seq>` replays parsed
 `.dscode/rlm-daemon/<session_id>/events.jsonl` records with `seq` greater than
 the cursor and returns `next_cursor` for clients that want deterministic live
@@ -1429,6 +1434,9 @@ and read-only `rlm_process_events` by default. Stateful
 durable runtime approvals because it writes `.dscode/rlm-python` state.
 `rlm_process_cancel` is hidden by default and requires durable runtime approvals
 because it updates runtime task status and writes live RLM daemon event logs.
+`rlm_process_run_next` is hidden by default and requires trusted side effects or
+durable runtime approvals because it can spend model tokens and updates runtime
+state.
 Model-running child-agent RLM tools (`rlm`, `rlm_query`, `llm_query`,
 `rlm_process`, `rlm_batch`, `rlm_query_batched`, and `llm_query_batched`) are
 also hidden by default and require trusted side effects or durable

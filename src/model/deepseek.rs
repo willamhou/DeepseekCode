@@ -3483,6 +3483,12 @@ const TOOL_SPECS: &[StaticToolSpec] = &[
         required_json: r#"["session_id"]"#,
     },
     StaticToolSpec {
+        name: "rlm_process_run_next",
+        description: "Claim and run the next queued live RLM daemon turn from its persisted payload. Use dry_run=true to inspect the selected payload and rendered task without claiming it.",
+        properties_json: r#"{"session_id":{"type":"string","description":"Live RLM session id."},"task_id":{"type":"string","description":"Optional runtime task id for a specific queued turn."},"turn_id":{"type":"string","description":"Alias for task_id."},"id":{"type":"string","description":"Alias for task_id."},"dry_run":{"type":"string","description":"Set true/1/yes/on to load the payload and render the child task without claiming or running it."}}"#,
+        required_json: r#"["session_id"]"#,
+    },
+    StaticToolSpec {
         name: "rlm_batch",
         description: "Run batched bounded RLM-style child analyses over shared context. Use for several independent classification, extraction, comparison, or critique questions.",
         properties_json: r#"{"context":{"type":"string","description":"Shared long text, extracted data, or notes for all child analyses."},"questions":{"type":"string","description":"JSON array of up to 16 question strings, or objects with question plus optional context and strategy."},"strategy":{"type":"string","description":"Optional default strategy label such as synthesize, classify, compare, critique, or extract."},"steps":{"type":"string","description":"Optional child step budget per question as a positive integer up to 12."}}"#,
@@ -5160,6 +5166,7 @@ mod tests {
             "rlm_process_sessions".to_string(),
             "rlm_process_events".to_string(),
             "rlm_process_cancel".to_string(),
+            "rlm_process_run_next".to_string(),
             "rlm_batch".to_string(),
             "rlm_query_batched".to_string(),
             "llm_query_batched".to_string(),
@@ -5177,6 +5184,7 @@ mod tests {
         assert!(openai.contains("\"name\":\"rlm_process_sessions\""));
         assert!(openai.contains("\"name\":\"rlm_process_events\""));
         assert!(openai.contains("\"name\":\"rlm_process_cancel\""));
+        assert!(openai.contains("\"name\":\"rlm_process_run_next\""));
         assert!(openai.contains("\"name\":\"rlm_batch\""));
         assert!(openai.contains("\"name\":\"rlm_query_batched\""));
         assert!(openai.contains("\"name\":\"llm_query_batched\""));
@@ -5191,8 +5199,10 @@ mod tests {
         assert!(openai.contains("\"include_live\""));
         assert!(openai.contains("\"after_seq\""));
         assert!(openai.contains("\"turn_id\""));
+        assert!(openai.contains("\"dry_run\""));
         assert!(openai.contains("enqueue a live RLM daemon turn"));
         assert!(openai.contains("queued pending live RLM daemon turns"));
+        assert!(openai.contains("persisted payload"));
         assert!(openai.contains("\"overlap\""));
         assert!(openai.contains("\"include_text\""));
         assert!(openai.contains("\"map_limit\""));
@@ -5213,6 +5223,7 @@ mod tests {
             "rlm_process_sessions".to_string(),
             "rlm_process_events".to_string(),
             "rlm_process_cancel".to_string(),
+            "rlm_process_run_next".to_string(),
             "rlm_batch".to_string(),
             "rlm_query_batched".to_string(),
             "llm_query_batched".to_string(),
@@ -5230,6 +5241,7 @@ mod tests {
         assert!(anthropic.contains("\"name\":\"rlm_process_sessions\""));
         assert!(anthropic.contains("\"name\":\"rlm_process_events\""));
         assert!(anthropic.contains("\"name\":\"rlm_process_cancel\""));
+        assert!(anthropic.contains("\"name\":\"rlm_process_run_next\""));
         assert!(anthropic.contains("\"name\":\"rlm_batch\""));
         assert!(anthropic.contains("\"name\":\"rlm_query_batched\""));
         assert!(anthropic.contains("\"name\":\"llm_query_batched\""));

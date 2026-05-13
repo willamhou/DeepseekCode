@@ -853,6 +853,19 @@ struct RlmModelSessionTurn {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct RlmLiveTurnPayload {
+    session_id: String,
+    runtime_thread_id: String,
+    task_id: String,
+    status: String,
+    task: String,
+    steps: String,
+    model: String,
+    workspace: String,
+    input: RlmProcessInput,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct RlmChunk {
     index: usize,
     start: usize,
@@ -1091,6 +1104,11 @@ pub struct RlmLiveEventsTool {
 
 pub struct RlmLiveCancelTool {
     pub config: AppConfig,
+}
+
+pub struct RlmLiveRunNextTool {
+    pub config: AppConfig,
+    pub parent_depth: usize,
 }
 
 impl Tool for RlmPythonSessionsTool {
@@ -1482,7 +1500,7 @@ impl Tool for RlmLiveCancelTool {
         let thread = store.load_thread(&runtime_thread_id)?;
         let candidates = if let Some(task_id) = target_task_id {
             let task = store.load_task(task_id)?;
-            ensure_cancellable_live_rlm_task(&task, &runtime_thread_id)?;
+            ensure_pending_live_rlm_task(&task, &runtime_thread_id)?;
             vec![task]
         } else {
             store
@@ -1559,6 +1577,238 @@ impl Tool for RlmLiveCancelTool {
                 ("cancelled".to_string(), JsonValue::Array(cancelled)),
             ]))),
         })
+    }
+}
+
+impl Tool for RlmLiveRunNextTool {
+    fn name(&self) -> &str {
+        "rlm_process_run_next"
+    }
+
+    fn execute(&self, input: ToolInput) -> AppResult<ToolOutput> {
+        let session_id = input
+            .get("session_id")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| tool_failure("rlm_process_run_next requires non-empty `session_id`"))?;
+        validate_rlm_model_session_id(session_id)?;
+        let target_task_id = input
+            .get("task_id")
+            .or_else(|| input.get("turn_id"))
+            .or_else(|| input.get("id"))
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let dry_run = parse_bool_arg(input.get("dry_run"));
+        let manifest_path = rlm_live_session_manifest_path(&self.config, session_id);
+        let manifest = read_rlm_live_session_manifest(&manifest_path, session_id)?;
+        let runtime_thread_id = rlm_live_manifest_string_field(&manifest, "runtime_thread_id")
+            .ok_or_else(|| {
+                tool_failure("rlm_process_run_next live manifest is missing runtime_thread_id")
+            })?;
+        let store = rlm_runtime_store(&self.config);
+        let thread = store.load_thread(&runtime_thread_id)?;
+        let task = match target_task_id {
+            Some(task_id) => {
+                let task = store.load_task(task_id)?;
+                ensure_pending_live_rlm_task(&task, &runtime_thread_id)?;
+                Some(task)
+            }
+            None => oldest_pending_live_rlm_task(&store, &runtime_thread_id)?,
+        };
+        let Some(task) = task else {
+            return Ok(ToolOutput {
+                summary: json_value_to_string(&JsonValue::Object(BTreeMap::from([
+                    (
+                        "session_id".to_string(),
+                        JsonValue::String(session_id.to_string()),
+                    ),
+                    (
+                        "runtime_thread_id".to_string(),
+                        JsonValue::String(runtime_thread_id),
+                    ),
+                    ("status".to_string(), JsonValue::String("idle".to_string())),
+                    (
+                        "queued_turns".to_string(),
+                        JsonValue::Number("0".to_string()),
+                    ),
+                ]))),
+            });
+        };
+        let payload = read_rlm_live_session_turn_payload(&self.config, session_id, &task.id)?;
+        if payload.runtime_thread_id != runtime_thread_id {
+            return Err(tool_failure(format!(
+                "rlm_process_run_next payload for task {} points at thread `{}` instead of `{runtime_thread_id}`",
+                task.id, payload.runtime_thread_id
+            )));
+        }
+        if payload.status != "queued" {
+            return Err(tool_failure(format!(
+                "rlm_process_run_next payload for task {} is `{}` instead of `queued`",
+                task.id, payload.status
+            )));
+        }
+        let child_task = render_rlm_process_task_with_session(&payload.task, &payload.input, None);
+        if dry_run {
+            return Ok(ToolOutput {
+                summary: json_value_to_string(&JsonValue::Object(BTreeMap::from([
+                    (
+                        "session_id".to_string(),
+                        JsonValue::String(payload.session_id),
+                    ),
+                    (
+                        "runtime_thread_id".to_string(),
+                        JsonValue::String(payload.runtime_thread_id),
+                    ),
+                    ("task_id".to_string(), JsonValue::String(payload.task_id)),
+                    ("dry_run".to_string(), JsonValue::Bool(true)),
+                    (
+                        "payload_status".to_string(),
+                        JsonValue::String(payload.status),
+                    ),
+                    ("task".to_string(), JsonValue::String(payload.task)),
+                    ("steps".to_string(), JsonValue::String(payload.steps)),
+                    ("rendered_task".to_string(), JsonValue::String(child_task)),
+                ]))),
+            });
+        }
+
+        let claimed = store.claim_task(&task.id, "rlm_process_run_next".to_string())?;
+        update_rlm_live_session_turn_payload_status(
+            &self.config,
+            session_id,
+            &claimed.id,
+            "running",
+            Vec::new(),
+        )?;
+        let queued_turns = count_pending_live_rlm_tasks(&store, &runtime_thread_id)?;
+        write_rlm_live_session_manifest(
+            &self.config,
+            session_id,
+            "running",
+            &runtime_thread_id,
+            thread.session_id.as_deref(),
+            Some(&claimed.id),
+            queued_turns,
+            &payload.model,
+            &payload.workspace,
+            rlm_live_manifest_string_field(&manifest, "created_at").as_deref(),
+        )?;
+        append_rlm_live_session_event(
+            &self.config,
+            session_id,
+            "turn_started",
+            &runtime_thread_id,
+            &claimed.id,
+            &payload.task,
+            &payload.input.label,
+        )?;
+        let child_input = ToolInput::new()
+            .with_arg("task", child_task)
+            .with_arg("steps", payload.steps.clone());
+        let output = DispatchSubagentTool {
+            config: self.config.clone(),
+            parent_depth: self.parent_depth,
+        }
+        .execute(child_input);
+        match output {
+            Ok(output) => {
+                store.update_task(&claimed.id, "completed".to_string(), output.summary.clone())?;
+                update_rlm_live_session_turn_payload_status(
+                    &self.config,
+                    session_id,
+                    &claimed.id,
+                    "completed",
+                    vec![(
+                        "result_summary".to_string(),
+                        JsonValue::String(output.summary.clone()),
+                    )],
+                )?;
+                let queued_turns = count_pending_live_rlm_tasks(&store, &runtime_thread_id)?;
+                write_rlm_live_session_manifest(
+                    &self.config,
+                    session_id,
+                    "idle",
+                    &runtime_thread_id,
+                    thread.session_id.as_deref(),
+                    None,
+                    queued_turns,
+                    &payload.model,
+                    &payload.workspace,
+                    rlm_live_manifest_string_field(&manifest, "created_at").as_deref(),
+                )?;
+                append_rlm_live_session_event(
+                    &self.config,
+                    session_id,
+                    "turn_completed",
+                    &runtime_thread_id,
+                    &claimed.id,
+                    &payload.task,
+                    "completed",
+                )?;
+                Ok(ToolOutput {
+                    summary: json_value_to_string(&JsonValue::Object(BTreeMap::from([
+                        (
+                            "session_id".to_string(),
+                            JsonValue::String(session_id.to_string()),
+                        ),
+                        (
+                            "runtime_thread_id".to_string(),
+                            JsonValue::String(runtime_thread_id),
+                        ),
+                        ("task_id".to_string(), JsonValue::String(claimed.id)),
+                        (
+                            "status".to_string(),
+                            JsonValue::String("completed".to_string()),
+                        ),
+                        (
+                            "queued_turns".to_string(),
+                            JsonValue::Number(queued_turns.to_string()),
+                        ),
+                        (
+                            "result_summary".to_string(),
+                            JsonValue::String(output.summary),
+                        ),
+                    ]))),
+                })
+            }
+            Err(error) => {
+                let message = error.to_string();
+                let _ = store.update_task(&claimed.id, "failed".to_string(), message.clone());
+                let _ = update_rlm_live_session_turn_payload_status(
+                    &self.config,
+                    session_id,
+                    &claimed.id,
+                    "failed",
+                    vec![("error".to_string(), JsonValue::String(message.clone()))],
+                );
+                let queued_turns = count_pending_live_rlm_tasks(&store, &runtime_thread_id)?;
+                let _ = write_rlm_live_session_manifest(
+                    &self.config,
+                    session_id,
+                    "error",
+                    &runtime_thread_id,
+                    thread.session_id.as_deref(),
+                    None,
+                    queued_turns,
+                    &payload.model,
+                    &payload.workspace,
+                    rlm_live_manifest_string_field(&manifest, "created_at").as_deref(),
+                );
+                let _ = append_rlm_live_session_event(
+                    &self.config,
+                    session_id,
+                    "turn_failed",
+                    &runtime_thread_id,
+                    &claimed.id,
+                    &payload.task,
+                    &message,
+                );
+                Err(tool_failure(format!(
+                    "rlm_process_run_next task {} failed: {message}",
+                    claimed.id
+                )))
+            }
+        }
     }
 }
 
@@ -2191,11 +2441,112 @@ fn write_rlm_live_session_turn_payload(
     Ok(())
 }
 
+fn read_rlm_live_session_turn_payload(
+    config: &AppConfig,
+    session_id: &str,
+    task_id: &str,
+) -> AppResult<RlmLiveTurnPayload> {
+    let path = rlm_live_session_turn_payload_path(config, session_id, task_id);
+    let content = fs::read_to_string(&path)
+        .map_err(|error| tool_failure(format!("rlm live turn payload read failed: {error}")))?;
+    let value = parse_json_value(&content)
+        .map_err(|error| tool_failure(format!("rlm live turn payload invalid JSON: {error}")))?;
+    parse_rlm_live_turn_payload(&value, session_id, task_id)
+}
+
+fn parse_rlm_live_turn_payload(
+    value: &JsonValue,
+    expected_session_id: &str,
+    expected_task_id: &str,
+) -> AppResult<RlmLiveTurnPayload> {
+    let JsonValue::Object(root) = value else {
+        return Err(tool_failure("rlm live turn payload must be a JSON object"));
+    };
+    let session_id = required_json_string(root, "session_id", "rlm live turn payload")?;
+    if session_id != expected_session_id {
+        return Err(tool_failure(format!(
+            "rlm live turn payload session_id `{session_id}` does not match `{expected_session_id}`"
+        )));
+    }
+    let task_id = required_json_string(root, "task_id", "rlm live turn payload")?;
+    if task_id != expected_task_id {
+        return Err(tool_failure(format!(
+            "rlm live turn payload task_id `{task_id}` does not match `{expected_task_id}`"
+        )));
+    }
+    let input_root = match root.get("input") {
+        Some(JsonValue::Object(input)) => input,
+        _ => {
+            return Err(tool_failure(
+                "rlm live turn payload requires object field `input`",
+            ))
+        }
+    };
+    Ok(RlmLiveTurnPayload {
+        session_id: session_id.to_string(),
+        runtime_thread_id: required_json_string(
+            root,
+            "runtime_thread_id",
+            "rlm live turn payload",
+        )?
+        .to_string(),
+        task_id: task_id.to_string(),
+        status: required_json_string(root, "status", "rlm live turn payload")?.to_string(),
+        task: required_json_string(root, "task", "rlm live turn payload")?.to_string(),
+        steps: required_json_string(root, "steps", "rlm live turn payload")?.to_string(),
+        model: required_json_string(root, "model", "rlm live turn payload")?.to_string(),
+        workspace: required_json_string(root, "workspace", "rlm live turn payload")?.to_string(),
+        input: RlmProcessInput {
+            label: required_json_string(input_root, "label", "rlm live turn payload input")?
+                .to_string(),
+            content: required_json_string(input_root, "content", "rlm live turn payload input")?
+                .to_string(),
+            char_count: input_root
+                .get("char_count")
+                .and_then(json_as_u64)
+                .unwrap_or(0) as usize,
+            line_count: input_root
+                .get("line_count")
+                .and_then(json_as_u64)
+                .unwrap_or(0) as usize,
+        },
+    })
+}
+
+fn required_json_string<'a>(
+    root: &'a BTreeMap<String, JsonValue>,
+    key: &str,
+    context: &str,
+) -> AppResult<&'a str> {
+    root.get(key)
+        .and_then(json_as_string)
+        .ok_or_else(|| tool_failure(format!("{context} requires string field `{key}`")))
+}
+
 fn mark_rlm_live_session_turn_payload_cancelled(
     config: &AppConfig,
     session_id: &str,
     task_id: &str,
     reason: &str,
+) -> AppResult<()> {
+    update_rlm_live_session_turn_payload_status(
+        config,
+        session_id,
+        task_id,
+        "cancelled",
+        vec![(
+            "cancel_reason".to_string(),
+            JsonValue::String(reason.to_string()),
+        )],
+    )
+}
+
+fn update_rlm_live_session_turn_payload_status(
+    config: &AppConfig,
+    session_id: &str,
+    task_id: &str,
+    status: &str,
+    extra_fields: Vec<(String, JsonValue)>,
 ) -> AppResult<()> {
     let path = rlm_live_session_turn_payload_path(config, session_id, task_id);
     if !path.exists() {
@@ -2209,16 +2560,12 @@ fn mark_rlm_live_session_turn_payload_cancelled(
         return Err(tool_failure("rlm live turn payload must be a JSON object"));
     };
     let now = rlm_epoch_label();
-    root.insert(
-        "status".to_string(),
-        JsonValue::String("cancelled".to_string()),
-    );
+    root.insert("status".to_string(), JsonValue::String(status.to_string()));
     root.insert("updated_at".to_string(), JsonValue::String(now.clone()));
-    root.insert("cancelled_at".to_string(), JsonValue::String(now));
-    root.insert(
-        "cancel_reason".to_string(),
-        JsonValue::String(reason.to_string()),
-    );
+    root.insert(format!("{status}_at"), JsonValue::String(now));
+    for (key, value) in extra_fields {
+        root.insert(key, value);
+    }
     fs::write(path, json_value_to_string(&JsonValue::Object(root)))
         .map_err(|error| tool_failure(format!("rlm live turn payload write failed: {error}")))?;
     Ok(())
@@ -2296,22 +2643,22 @@ fn append_rlm_live_session_cancel_event(
     Ok(())
 }
 
-fn ensure_cancellable_live_rlm_task(task: &TaskRecord, runtime_thread_id: &str) -> AppResult<()> {
+fn ensure_pending_live_rlm_task(task: &TaskRecord, runtime_thread_id: &str) -> AppResult<()> {
     if task.thread_id.as_deref() != Some(runtime_thread_id) {
         return Err(tool_failure(format!(
-            "rlm_process_cancel task {} does not belong to live session thread {runtime_thread_id}",
+            "live RLM task {} does not belong to live session thread {runtime_thread_id}",
             task.id
         )));
     }
     if task.kind != "rlm_process" {
         return Err(tool_failure(format!(
-            "rlm_process_cancel task {} has kind `{}` instead of `rlm_process`",
+            "live RLM task {} has kind `{}` instead of `rlm_process`",
             task.id, task.kind
         )));
     }
     if task.status != "pending" {
         return Err(tool_failure(format!(
-            "rlm_process_cancel only cancels queued pending turns; task {} is `{}`",
+            "live RLM controls only target queued pending turns; task {} is `{}`",
             task.id, task.status
         )));
     }
@@ -2331,6 +2678,23 @@ fn count_pending_live_rlm_tasks(store: &RuntimeStore, runtime_thread_id: &str) -
         .filter(|task| is_pending_live_rlm_task(task, runtime_thread_id))
         .count();
     Ok(count as u64)
+}
+
+fn oldest_pending_live_rlm_task(
+    store: &RuntimeStore,
+    runtime_thread_id: &str,
+) -> AppResult<Option<TaskRecord>> {
+    let mut tasks = store
+        .list_tasks(None, Some(runtime_thread_id), MAX_RLM_LIVE_TASK_LIST)?
+        .into_iter()
+        .filter(|task| is_pending_live_rlm_task(task, runtime_thread_id))
+        .collect::<Vec<_>>();
+    tasks.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok(tasks.into_iter().next())
 }
 
 fn rlm_live_cancelled_task_json(task: &TaskRecord, original_summary: &str) -> JsonValue {
@@ -4047,6 +4411,70 @@ mod tests {
             .execute(ToolInput::new().with_arg("session_id", "cancel.1"))
             .unwrap_err();
         assert!(err.to_string().contains("task_id"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rlm_process_run_next_dry_run_loads_oldest_payload() {
+        let cwd = std::env::current_dir().unwrap();
+        let root = cwd.join("target").join(format!(
+            "dscode-rlm-live-run-next-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let mut config = AppConfig::default();
+        config.workspace.config_dir = root.join(".dscode").display().to_string();
+        let rlm = RlmTool {
+            tool_name: "rlm_process",
+            config: config.clone(),
+            parent_depth: 0,
+        };
+        let first = rlm
+            .execute(
+                ToolInput::new()
+                    .with_arg("task", "first worker turn")
+                    .with_arg("content", "alpha worker payload")
+                    .with_arg("session_id", "run.next")
+                    .with_arg("steps", "3")
+                    .with_arg("live", "true"),
+            )
+            .unwrap();
+        let first_turn = meta_value(&first.summary, "meta.rlm_turn_id").unwrap();
+        let second = rlm
+            .execute(
+                ToolInput::new()
+                    .with_arg("task", "second worker turn")
+                    .with_arg("content", "beta worker payload")
+                    .with_arg("session_id", "run.next")
+                    .with_arg("live", "true"),
+            )
+            .unwrap();
+        let second_turn = meta_value(&second.summary, "meta.rlm_turn_id").unwrap();
+
+        let output = RlmLiveRunNextTool {
+            config: config.clone(),
+            parent_depth: 0,
+        }
+        .execute(
+            ToolInput::new()
+                .with_arg("session_id", "run.next")
+                .with_arg("dry_run", "true"),
+        )
+        .unwrap();
+
+        assert!(output.summary.contains(r#""dry_run":true"#));
+        assert!(output.summary.contains(&first_turn));
+        assert!(!output.summary.contains(&second_turn));
+        assert!(output.summary.contains("first worker turn"));
+        assert!(output.summary.contains("alpha worker payload"));
+        assert!(output.summary.contains(r#""steps":"3""#));
+        let store = rlm_runtime_store(&config);
+        assert_eq!(store.load_task(&first_turn).unwrap().status, "pending");
+        let payload = read_rlm_live_session_turn_payload(&config, "run.next", &first_turn).unwrap();
+        assert_eq!(payload.status, "queued");
         let _ = fs::remove_dir_all(root);
     }
 

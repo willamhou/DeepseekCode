@@ -44,7 +44,6 @@ depending on the original CLI process.
 
 ## Remaining Gap
 
-The payload is not yet consumed by a live worker. The next slice should claim a
-pending runtime task, load this payload, run the bounded model-backed
-`rlm_process` flow, append start/completion events, and update the live
-manifest.
+`rlm_process_run_next` now consumes this payload for a single queued turn. The
+remaining gap is a resident daemon loop with streaming deltas, active
+cancellation, restart recovery, and lifecycle commands.

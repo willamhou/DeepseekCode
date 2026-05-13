@@ -46,9 +46,9 @@ use crate::tools::recall_archive::RecallArchiveTool;
 use crate::tools::revert_turn::RevertTurnTool;
 use crate::tools::review::{PrReviewCommentPlanTool, ReviewTool};
 use crate::tools::rlm::{
-    RlmBatchTool, RlmChunkPlanTool, RlmLiveCancelTool, RlmLiveEventsTool, RlmMapReducePlanTool,
-    RlmModelSessionsTool, RlmPythonSessionTool, RlmPythonSessionsTool, RlmPythonTool,
-    RlmRecursivePlanTool, RlmTool,
+    RlmBatchTool, RlmChunkPlanTool, RlmLiveCancelTool, RlmLiveEventsTool, RlmLiveRunNextTool,
+    RlmMapReducePlanTool, RlmModelSessionsTool, RlmPythonSessionTool, RlmPythonSessionsTool,
+    RlmPythonTool, RlmRecursivePlanTool, RlmTool,
 };
 use crate::tools::run_shell::{is_safe_shell_command, RunShellTool};
 use crate::tools::run_tests::{render_run_tests_command, RunTestsTool};
@@ -869,6 +869,9 @@ fn execute_mcp_tool(
         }
         "rlm_process" => {
             return execute_mcp_model_rlm_tool("rlm_process", input, state);
+        }
+        "rlm_process_run_next" => {
+            return execute_mcp_model_rlm_tool("rlm_process_run_next", input, state);
         }
         "rlm_batch" => {
             return execute_mcp_model_rlm_tool("rlm_batch", input, state);
@@ -2451,6 +2454,11 @@ fn execute_mcp_model_rlm_tool(
             parent_depth: 0,
         }
         .execute(input)?,
+        "rlm_process_run_next" => RlmLiveRunNextTool {
+            config: state.config.clone(),
+            parent_depth: 0,
+        }
+        .execute(input)?,
         "rlm_batch" | "rlm_query_batched" | "llm_query_batched" => RlmBatchTool {
             tool_name: name,
             config: state.config.clone(),
@@ -2536,6 +2544,7 @@ fn mcp_model_rlm_target(name: &str, input: &ToolInput) -> String {
         .get("task")
         .or_else(|| input.get("question"))
         .or_else(|| input.get("context"))
+        .or_else(|| input.get("session_id"))
         .map(|target| format!("{name}: {}", mcp_compact_target(target, 160)))
         .unwrap_or_else(|| name.to_string())
 }
@@ -3653,6 +3662,20 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
                 ),
             ));
         }
+        tools.push(mcp_tool_definition(
+            "rlm_process_run_next",
+            "Claim and run the next queued live RLM daemon turn from its persisted payload. Requires trusted side effects or durable MCP approval because it can spend model tokens and updates runtime state.",
+            mcp_schema(
+                vec![
+                    ("session_id", string_property("Live RLM session id.")),
+                    ("task_id", string_property("Optional runtime task id for a specific queued turn.")),
+                    ("turn_id", string_property("Alias for task_id.")),
+                    ("id", string_property("Alias for task_id.")),
+                    ("dry_run", string_property("Set true to inspect without claiming or running.")),
+                ],
+                &["session_id"],
+            ),
+        ));
         for name in ["rlm_batch", "rlm_query_batched", "llm_query_batched"] {
             tools.push(mcp_tool_definition(
                 name,
@@ -5811,6 +5834,7 @@ fn acp_tool_kind(name: &str) -> &'static str {
         | "exec_shell_wait"
         | "exec_wait"
         | "rlm_process_cancel"
+        | "rlm_process_run_next"
         | "rlm_python"
         | "rlm_python_session" => "execute",
         "rlm"
@@ -8286,6 +8310,7 @@ mod tests {
         assert!(!rendered.contains(r#""name":"exec_shell_cancel""#));
         assert!(!rendered.contains(r#""name":"rlm_python_session""#));
         assert!(!rendered.contains(r#""name":"rlm_process_cancel""#));
+        assert!(!rendered.contains(r#""name":"rlm_process_run_next""#));
         assert!(!rendered.contains(r#""name":"rlm""#));
         assert!(!rendered.contains(r#""name":"rlm_query""#));
         assert!(!rendered.contains(r#""name":"llm_query""#));
@@ -8319,6 +8344,7 @@ mod tests {
         assert!(rendered.contains(r#""name":"exec_shell_cancel""#));
         assert!(rendered.contains(r#""name":"rlm_python_session""#));
         assert!(!rendered.contains(r#""name":"rlm_process_cancel""#));
+        assert!(rendered.contains(r#""name":"rlm_process_run_next""#));
         assert!(rendered.contains(r#""name":"rlm""#));
         assert!(rendered.contains(r#""name":"rlm_query""#));
         assert!(rendered.contains(r#""name":"llm_query""#));
@@ -8911,6 +8937,7 @@ shell_allowlist = ["cargo test"]
         assert!(!rendered.contains(r#""name":"rlm_query""#));
         assert!(!rendered.contains(r#""name":"llm_query""#));
         assert!(!rendered.contains(r#""name":"rlm_process""#));
+        assert!(!rendered.contains(r#""name":"rlm_process_run_next""#));
         assert!(!rendered.contains(r#""name":"rlm_batch""#));
         assert!(!rendered.contains(r#""name":"rlm_query_batched""#));
         assert!(!rendered.contains(r#""name":"llm_query_batched""#));
@@ -8933,6 +8960,7 @@ shell_allowlist = ["cargo test"]
         assert!(rendered.contains(r#""name":"rlm_query""#));
         assert!(rendered.contains(r#""name":"llm_query""#));
         assert!(rendered.contains(r#""name":"rlm_process""#));
+        assert!(rendered.contains(r#""name":"rlm_process_run_next""#));
         assert!(rendered.contains(r#""name":"rlm_batch""#));
         assert!(rendered.contains(r#""name":"rlm_query_batched""#));
         assert!(rendered.contains(r#""name":"llm_query_batched""#));
@@ -9004,6 +9032,7 @@ shell_allowlist = ["cargo test"]
         assert!(rendered.contains(r#""name":"rlm_query""#));
         assert!(rendered.contains(r#""name":"llm_query""#));
         assert!(rendered.contains(r#""name":"rlm_process""#));
+        assert!(rendered.contains(r#""name":"rlm_process_run_next""#));
         assert!(rendered.contains(r#""name":"rlm_batch""#));
         assert!(rendered.contains(r#""name":"rlm_query_batched""#));
         assert!(rendered.contains(r#""name":"llm_query_batched""#));
@@ -10215,6 +10244,7 @@ shell_allowlist = ["cargo test"]
         assert!(!rendered.contains(r#""name":"image_analyze""#));
         assert!(!rendered.contains(r#""name":"rlm_python_session""#));
         assert!(!rendered.contains(r#""name":"rlm_process_cancel""#));
+        assert!(!rendered.contains(r#""name":"rlm_process_run_next""#));
         assert!(!rendered.contains(r#""name":"apply_patch""#));
         assert!(!rendered.contains(r#""name":"write_file""#));
         assert!(!rendered.contains(r#""name":"edit_file""#));
