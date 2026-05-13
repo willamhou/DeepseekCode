@@ -37,6 +37,7 @@ use crate::tools::github::{
     GithubCloseIssueTool, GithubCommentTool, GithubIssueContextTool, GithubPrContextTool,
 };
 use crate::tools::list_files::{ListDirTool, ListFilesTool};
+use crate::tools::notify::NotifyTool;
 use crate::tools::project_map::ProjectMapTool;
 use crate::tools::read_file::ReadFileTool;
 use crate::tools::recall_archive::RecallArchiveTool;
@@ -49,9 +50,11 @@ use crate::tools::rlm::{
 use crate::tools::run_shell::{is_safe_shell_command, RunShellTool};
 use crate::tools::run_tests::{render_run_tests_command, RunTestsTool};
 use crate::tools::search_text::{GrepFilesTool, SearchTextTool};
+use crate::tools::skill::LoadSkillTool;
 use crate::tools::tool_output::RetrieveToolResultTool;
 use crate::tools::tool_search::{ToolSearchMode, ToolSearchTool};
 use crate::tools::types::{Tool, ToolInput};
+use crate::tools::user_input::RequestUserInputTool;
 use crate::tools::validate_data::ValidateDataTool;
 use crate::tools::web::{FetchUrlTool, FinanceTool, WebRunTool, WebSearchTool};
 use crate::ui::stream::NoopStreamEvents;
@@ -763,6 +766,9 @@ fn execute_mcp_tool(
             mode: ToolSearchMode::Bm25,
         }
         .execute(input)?,
+        "load_skill" => LoadSkillTool::new(state.config.clone()).execute(input)?,
+        "request_user_input" => RequestUserInputTool.execute(input)?,
+        "notify" => NotifyTool.execute(input)?,
         "exec_shell_list" => ExecShellListTool.execute(input)?,
         "exec_shell_show" => ExecShellShowTool.execute(input)?,
         "exec_shell_wait" => ExecShellWaitTool {
@@ -3011,6 +3017,36 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
             ),
         ),
         mcp_tool_definition(
+            "load_skill",
+            "Load a configured TOML skill by name with policy, references, and suggested steps.",
+            mcp_schema(
+                vec![("name", string_property("Skill name to load."))],
+                &["name"],
+            ),
+        ),
+        mcp_tool_definition(
+            "request_user_input",
+            "Render a DeepSeek-TUI-style request for 1-3 user questions so an MCP/ACP client can ask and continue with the answer.",
+            mcp_schema(
+                vec![(
+                    "questions",
+                    string_property("JSON array of 1-3 question objects with header, id, question, and 2-3 options."),
+                )],
+                &["questions"],
+            ),
+        ),
+        mcp_tool_definition(
+            "notify",
+            "Fire a single terminal attention signal and return a bounded confirmation.",
+            mcp_schema(
+                vec![
+                    ("title", string_property("Notification title.")),
+                    ("body", string_property("Optional notification body.")),
+                ],
+                &["title"],
+            ),
+        ),
+        mcp_tool_definition(
             "exec_shell_list",
             "List in-process background shell jobs.",
             mcp_schema(Vec::new(), &[]),
@@ -4931,6 +4967,7 @@ fn acp_tool_kind(name: &str) -> &'static str {
         | "runtime_agent_result"
         | "review"
         | "recall_archive"
+        | "load_skill"
         | "image_ocr" => "read",
         "write_file" | "edit_file" | "fim_edit" | "apply_patch" | "revert_turn" => "edit",
         "delete_file" => "delete",
@@ -7373,6 +7410,9 @@ mod tests {
         assert!(rendered.contains(r#""name":"recall_archive""#));
         assert!(rendered.contains(r#""name":"tool_search_tool_regex""#));
         assert!(rendered.contains(r#""name":"tool_search_tool_bm25""#));
+        assert!(rendered.contains(r#""name":"load_skill""#));
+        assert!(rendered.contains(r#""name":"request_user_input""#));
+        assert!(rendered.contains(r#""name":"notify""#));
         assert!(rendered.contains(r#""name":"exec_shell_list""#));
         assert!(rendered.contains(r#""name":"exec_shell_show""#));
         assert!(rendered.contains(r#""name":"exec_shell_wait""#));
@@ -7401,6 +7441,7 @@ mod tests {
         assert!(!rendered.contains(r#""name":"llm_query_batched""#));
         assert!(!rendered.contains(r#""name":"run_shell""#));
         assert!(!rendered.contains(r#""name":"run_tests""#));
+        assert!(!rendered.contains(r#""name":"image_analyze""#));
     }
 
     #[test]
@@ -7590,6 +7631,60 @@ mod tests {
         let tool_search_text = mcp_response_text(&tool_search_response);
         assert!(tool_search_text.contains(r#""tool":"tool_search_tool_bm25""#));
         assert!(tool_search_text.contains(r#""tool_name":"finance""#));
+    }
+
+    #[test]
+    fn mcp_tools_call_executes_interactive_helper_tools() {
+        let mut state = mcp_state("mcp-interactive-helpers");
+        let skill_dir = state.workspace.join("skills");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("triage.toml"),
+            r#"name = "triage"
+description = "Triage code changes"
+allowed_tools = ["read_file"]
+system_append = "Focus on concrete evidence."
+suggested_steps = ["Read context", "Summarize risks"]
+triggers = ["triage"]
+references = ["docs/runtime.md"]
+
+[policy]
+require_write_confirmation = true
+require_shell_confirmation = true
+shell_allowlist = ["cargo test"]
+"#,
+        )
+        .unwrap();
+        state.config.workspace.user_skills_dir = skill_dir.display().to_string();
+
+        let skill_response = mcp_response_for_message(
+            r#"{"jsonrpc":"2.0","id":44,"method":"tools/call","params":{"name":"load_skill","arguments":{"name":"triage"}}}"#,
+            &state,
+        )
+        .unwrap();
+        let skill_text = mcp_response_text(&skill_response);
+        assert!(skill_text.contains("# Skill: triage"));
+        assert!(skill_text.contains("Focus on concrete evidence."));
+
+        let input_response = mcp_response_for_message(
+            r#"{"jsonrpc":"2.0","id":45,"method":"tools/call","params":{"name":"request_user_input","arguments":{"questions":[{"header":"Mode","id":"mode","question":"Which mode?","options":[{"label":"Plan","description":"Draft first."},{"label":"Apply","description":"Implement now."}]}]}}}"#,
+            &state,
+        )
+        .unwrap();
+        let input_text = mcp_response_text(&input_response);
+        assert!(input_text.contains("meta.user_input_required=true"));
+        assert!(input_text.contains("[mode] Mode"));
+        assert!(input_text.contains("- Plan: Draft first."));
+
+        std::env::set_var("DSCODE_NOTIFY", "off");
+        let notify_response = mcp_response_for_message(
+            r#"{"jsonrpc":"2.0","id":46,"method":"tools/call","params":{"name":"notify","arguments":{"title":"done","body":"tests pass"}}}"#,
+            &state,
+        )
+        .unwrap();
+        std::env::remove_var("DSCODE_NOTIFY");
+        let notify_text = mcp_response_text(&notify_response);
+        assert!(notify_text.contains("notified: done - tests pass"));
     }
 
     #[test]
@@ -9049,6 +9144,9 @@ mod tests {
         assert!(rendered.contains(r#""name":"fetch_url""#));
         assert!(rendered.contains(r#""name":"pandoc_convert""#));
         assert!(rendered.contains(r#""name":"image_ocr""#));
+        assert!(rendered.contains(r#""name":"load_skill""#));
+        assert!(rendered.contains(r#""name":"request_user_input""#));
+        assert!(rendered.contains(r#""name":"notify""#));
         assert!(rendered.contains(r#""name":"git_status""#));
         assert!(rendered.contains(r#""name":"project_map""#));
         assert!(rendered.contains(r#""name":"validate_data""#));

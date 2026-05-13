@@ -302,7 +302,6 @@ Exposed tools:
 | `finance` | Fetch a live stock, ETF, index, or crypto quote |
 | `pandoc_convert` | Convert workspace documents via local `pandoc` |
 | `image_ocr` | Extract text from workspace images via local `tesseract` |
-| `image_analyze` | Analyze workspace images through an OpenAI-compatible vision model |
 | `git_status` | Show concise git status for the workspace |
 | `git_diff` | Show working-tree or staged diff, optionally scoped by path/context |
 | `project_map` | Render a high-level tree, summary, and key files |
@@ -311,6 +310,7 @@ Exposed tools:
 | `git_show` | Show one commit/ref with patch |
 | `git_blame` | Read blame for a file and line range |
 | `load_skill` | Load a configured TOML skill by name with policy, references, suggested steps, and system prompt context |
+| `request_user_input` | Validate and render a DeepSeek-TUI-style user-input request for MCP/ACP clients to surface |
 | `notify` | Fire a single terminal attention signal for long-running task completion or user attention |
 | `github_issue_context` | Read GitHub issue metadata, body, labels, assignees, and optional comments through `gh` |
 | `github_pr_context` | Read GitHub PR metadata, comments, reviews, checks, files, and optional patch diff through `gh` |
@@ -374,6 +374,11 @@ Exposed tools:
 | `runtime_close_agent` | Hidden by default; exposed only with durable runtime approvals and closes a durable runtime sub-agent task |
 | `runtime_resume_agent` | Hidden by default; exposed only with durable runtime approvals and resumes or forks a durable runtime sub-agent task |
 | `runtime_send_agent_input` | Hidden by default; exposed only with durable runtime approvals and appends input plus a follow-up sub-agent task |
+
+`image_analyze` remains agent-visible but is intentionally not exposed through
+MCP/ACP yet because it can spend model tokens and make network calls to an
+external vision API. `note` and `remember` are also kept out of default
+MCP/ACP because they append durable note or memory files.
 
 Exposed MCP prompts:
 

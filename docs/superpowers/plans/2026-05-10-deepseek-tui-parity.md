@@ -483,7 +483,8 @@ Landed first slice:
   `github_issue_context`, `github_pr_context`, and `diagnostics`; local
   read-only helpers exposed through MCP:
   `review`, `recall_archive`, `tool_search_tool_regex`, and
-  `tool_search_tool_bm25`
+  `tool_search_tool_bm25`; interactive/local helpers exposed through MCP:
+  `load_skill`, `request_user_input`, and `notify`
 - code-executing MCP side-effect tools exposed only with trusted side effects or
   durable approvals: `run_tests`, `run_shell`
 - DeepSeek-TUI-compatible MCP shell-session tools: read-only
@@ -586,6 +587,9 @@ Landed first slice:
 - MCP and ACP tool bridges now expose `image_ocr` and `pandoc_convert`; inline
   `pandoc_convert` is available by default, while `output_path` conversion
   requires durable write approvals
+- MCP and ACP tool bridges now expose interactive/local helpers `load_skill`,
+  `request_user_input`, and `notify`, while keeping durable memory writes and
+  external vision-model calls out of the default MCP surface
 - ACP loaded-session tool calls now create an assistant runtime turn with
   `tool_call` and `tool_result` items, and side-effect permission requests are
   linked to that same turn for auditability

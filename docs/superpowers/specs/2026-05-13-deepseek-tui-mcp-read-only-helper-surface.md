@@ -42,3 +42,7 @@ available through `serve --mcp` or ACP's inherited `session/tools/list` bridge:
 - ACP inherits the same read-only tools through the session-scoped MCP adapter,
   and ACP tool update kind mapping categorizes review/recall as read and tool
   search as search.
+
+Follow-up interactive helper work now exposes `request_user_input` and
+`notify`; durable `note` / `remember` writes and semantic child-agent review
+remain separate safety contracts.
