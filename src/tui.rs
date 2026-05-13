@@ -438,6 +438,7 @@ pub enum TuiMcpDetailKind {
     Health,
     Shell,
     Memory,
+    Rollback,
 }
 
 impl TuiMcpDetailKind {
@@ -451,6 +452,7 @@ impl TuiMcpDetailKind {
             Self::Health => "health",
             Self::Shell => "shell",
             Self::Memory => "memory",
+            Self::Rollback => "rollback",
         }
     }
 
@@ -464,6 +466,7 @@ impl TuiMcpDetailKind {
             Self::Health => "MCP Health",
             Self::Shell => "Shell Jobs",
             Self::Memory => "Memory",
+            Self::Rollback => "Rollback",
         }
     }
 
@@ -477,6 +480,7 @@ impl TuiMcpDetailKind {
             Self::Health => Self::Manager,
             Self::Shell => Self::Manager,
             Self::Memory => Self::Manager,
+            Self::Rollback => Self::Manager,
         }
     }
 
@@ -490,6 +494,7 @@ impl TuiMcpDetailKind {
             Self::Health => Self::ResourceTemplates,
             Self::Shell => Self::Manager,
             Self::Memory => Self::Manager,
+            Self::Rollback => Self::Manager,
         }
     }
 }
@@ -5385,8 +5390,8 @@ fn draw_sidebar(frame: &mut Frame, app: &TuiApp, area: Rect) {
         lines.push(Line::from("PgUp/PgDn: scroll MCP manager"));
         lines.push(Line::from("Esc: close MCP manager"));
     } else if app.mcp_detail.is_some() {
-        lines.push(Line::from("PgUp/PgDn: scroll MCP detail"));
-        lines.push(Line::from("Esc: close MCP detail"));
+        lines.push(Line::from("PgUp/PgDn: scroll detail"));
+        lines.push(Line::from("Esc: close detail"));
     } else {
         lines.push(Line::from("PgUp/PgDn: scroll"));
     }

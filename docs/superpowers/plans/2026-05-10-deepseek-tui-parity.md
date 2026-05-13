@@ -388,6 +388,10 @@ Landed first slice:
 - Applied restores preserve the snapshot staged-index versus unstaged-worktree split for new split-patch snapshots
 - `deepseek exec` creates a pre-run rollback snapshot in git worktrees and binds it to the successful assistant runtime turn id; restore/show accept either snapshot id or bound turn id
 - TUI-started agent runs create a pre-run rollback snapshot in git worktrees and bind it to the running assistant turn id as soon as the durable turn exists
+- TUI rollback commands now render list/show/revert results in the scrollable
+  right-side rollback detail panel, including snapshot metadata, untracked
+  file/symlink counts, bounded patch previews, dry-run plans, and applied
+  changed-file lists
 - REPL live prompts create pre-turn rollback snapshots in git worktrees, record
   the latest snapshot id for `/restore show last` and `/revert_turn last`, and
   print the rollback hint after tool-using turns
@@ -395,7 +399,7 @@ Landed first slice:
 Remaining:
 
 - side-git/worktree snapshot strategy for directory and special-file fidelity
-- richer restore UX in the future TUI
+- rollback confirmation modal / diff hunk browsing in the future TUI
 
 ### Phase G: Subagent/RLM
 

@@ -88,7 +88,8 @@ Current surfaces:
   palette: `restore snapshot [label]`, `restore list [limit]`,
   `restore show <snapshot-id|turn-id|last>`, and
   `revert turn <snapshot-id|turn-id|last> [--apply]`; `last` resolves to the
-  active thread's latest durable turn id
+  active thread's latest durable turn id, and list/show/revert results render a
+  scrollable right-side rollback detail panel with patch or restore-plan context
 - `diagnostics [--changed|paths...]` runs through the local diagnostics runner
   in file-backed TUI sessions and through `POST /v1/diagnostics` in HTTP
   runtime TUI sessions, so remote runtime mode can reuse the runtime process'
@@ -253,9 +254,9 @@ Command palette commands currently implemented:
 | `diagnostics`, `diagnostics <paths...>` | Run local workspace or path-scoped diagnostics and summarize the result in the status bar |
 | `diagnostics --changed`, `diag changed` | Run diagnostics against git changed files |
 | `restore snapshot [label]` | Create a local rollback snapshot from the current git worktree |
-| `restore list [limit]` | Summarize recent local rollback snapshots in the status bar |
-| `restore show <id|last>` | Summarize one rollback snapshot or runtime-turn-bound snapshot |
-| `revert turn <id|last> [--apply]` | Dry-run or apply a local rollback snapshot |
+| `restore list [limit]` | Show recent local rollback snapshots in the right-side detail panel |
+| `restore show <id|last>` | Show one rollback snapshot or runtime-turn-bound snapshot with patch preview |
+| `revert turn <id|last> [--apply]` | Dry-run or apply a local rollback snapshot and show the restore plan |
 | `approval` | Open the approval modal |
 | `cancel`, `stop` | Cancel the active running assistant turn |
 

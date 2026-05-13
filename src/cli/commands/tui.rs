@@ -28,7 +28,7 @@ use crate::core::loop_runtime::{
     AgentUserInputResponse, RunResult, SharedAgentApprovalResolver, SharedAgentCancelCheck,
     SharedAgentUserInputResolver, ToolEvent,
 };
-use crate::core::rollback::RollbackStore;
+use crate::core::rollback::{RestorePlan, RollbackStore, SnapshotRecord};
 use crate::core::runtime::{
     json_object, parse_automation_record, parse_item_record, parse_runtime_event,
     parse_session_record, parse_task_record, parse_thread_record, parse_usage_record, RuntimeEvent,
@@ -1100,6 +1100,7 @@ fn mcp_detail_summary(
         TuiMcpDetailKind::Health => validate_servers_summary(config),
         TuiMcpDetailKind::Shell => Err(app_error("shell details are not MCP details")),
         TuiMcpDetailKind::Memory => Err(app_error("memory details are not MCP details")),
+        TuiMcpDetailKind::Rollback => Err(app_error("rollback details are not MCP details")),
     }
 }
 
@@ -1450,11 +1451,15 @@ fn handle_tui_action_with_live(
                 }) {
                 Ok(snapshot) => {
                     app.set_status(format!(
-                        "created rollback snapshot {} (patch_bytes={}, untracked_files={})",
+                        "created rollback snapshot {} (patch_bytes={}, untracked_entries={})",
                         snapshot.id,
                         snapshot.patch_bytes,
-                        snapshot.untracked_files.len()
+                        snapshot.untracked_files.len() + snapshot.untracked_symlinks.len()
                     ));
+                    app.set_mcp_detail(
+                        TuiMcpDetailKind::Rollback,
+                        render_rollback_snapshot_detail(&snapshot, None),
+                    );
                 }
                 Err(error) => {
                     app.set_status(format!("rollback snapshot failed: {error}"));
@@ -1468,6 +1473,10 @@ fn handle_tui_action_with_live(
             match rollback_store.list_snapshots(limit) {
                 Ok(snapshots) if snapshots.is_empty() => {
                     app.set_status("no rollback snapshots".to_string());
+                    app.set_mcp_detail(
+                        TuiMcpDetailKind::Rollback,
+                        "Rollback snapshots\n\nNo local rollback snapshots found.",
+                    );
                 }
                 Ok(snapshots) => {
                     let latest = &snapshots[0];
@@ -1478,6 +1487,10 @@ fn handle_tui_action_with_live(
                         latest.runtime_turn_id.as_deref().unwrap_or("-"),
                         runtime_summary(&latest.label)
                     ));
+                    app.set_mcp_detail(
+                        TuiMcpDetailKind::Rollback,
+                        render_rollback_snapshot_list(&snapshots),
+                    );
                 }
                 Err(error) => {
                     app.set_status(format!("rollback list failed: {error}"));
@@ -1490,14 +1503,19 @@ fn handle_tui_action_with_live(
             };
             match rollback_store.load_snapshot_or_turn(&id) {
                 Ok(snapshot) => {
+                    let patch = rollback_store.snapshot_patch(&snapshot.id).ok();
                     app.set_status(format!(
-                        "rollback snapshot {} patch={} staged={} unstaged={} untracked={}",
+                        "rollback snapshot {} patch={} staged={} unstaged={} untracked_entries={}",
                         snapshot.id,
                         snapshot.patch_bytes,
                         snapshot.staged_patch_bytes,
                         snapshot.unstaged_patch_bytes,
-                        snapshot.untracked_files.len()
+                        snapshot.untracked_files.len() + snapshot.untracked_symlinks.len()
                     ));
+                    app.set_mcp_detail(
+                        TuiMcpDetailKind::Rollback,
+                        render_rollback_snapshot_detail(&snapshot, patch.as_deref()),
+                    );
                 }
                 Err(error) => {
                     app.set_status(format!("rollback show failed for {id}: {error}"));
@@ -1515,12 +1533,20 @@ fn handle_tui_action_with_live(
                         plan.snapshot_id,
                         plan.changed_files.len()
                     ));
+                    app.set_mcp_detail(
+                        TuiMcpDetailKind::Rollback,
+                        render_rollback_restore_plan(&plan),
+                    );
                 }
                 Ok(plan) => {
                     app.set_status(format!(
                         "dry-run rollback {} current_patch={} snapshot_patch={}; add --apply to restore",
                         plan.snapshot_id, plan.current_patch_bytes, plan.patch_bytes
                     ));
+                    app.set_mcp_detail(
+                        TuiMcpDetailKind::Rollback,
+                        render_rollback_restore_plan(&plan),
+                    );
                 }
                 Err(error) => {
                     app.set_status(format!("rollback failed for {id}: {error}"));
@@ -1951,6 +1977,148 @@ fn rollback_store_for_config(
     Some(RollbackStore::new(
         PathBuf::from(&config.workspace.config_dir).join("rollback"),
     ))
+}
+
+fn render_rollback_snapshot_list(snapshots: &[SnapshotRecord]) -> String {
+    let mut detail = String::new();
+    detail.push_str("Rollback snapshots\n");
+    detail.push_str(&format!("count: {}\n\n", snapshots.len()));
+    for snapshot in snapshots {
+        detail.push_str(&format!("{}\n", snapshot.id));
+        detail.push_str(&format!("  label: {}\n", snapshot.label));
+        detail.push_str(&format!("  created: {}\n", snapshot.created_at));
+        detail.push_str(&format!(
+            "  turn: {}\n",
+            snapshot.runtime_turn_id.as_deref().unwrap_or("-")
+        ));
+        detail.push_str(&format!(
+            "  patch bytes: {} (staged {}, unstaged {})\n",
+            snapshot.patch_bytes, snapshot.staged_patch_bytes, snapshot.unstaged_patch_bytes
+        ));
+        detail.push_str(&format!(
+            "  untracked: files {}, symlinks {}\n\n",
+            snapshot.untracked_files.len(),
+            snapshot.untracked_symlinks.len()
+        ));
+    }
+    detail
+}
+
+fn render_rollback_snapshot_detail(snapshot: &SnapshotRecord, patch: Option<&str>) -> String {
+    let mut detail = String::new();
+    detail.push_str("Rollback snapshot\n");
+    detail.push_str(&format!("id: {}\n", snapshot.id));
+    detail.push_str(&format!("label: {}\n", snapshot.label));
+    detail.push_str(&format!("created: {}\n", snapshot.created_at));
+    detail.push_str(&format!("workspace: {}\n", snapshot.workspace));
+    detail.push_str(&format!("git root: {}\n", snapshot.git_root));
+    detail.push_str(&format!("git head: {}\n", snapshot.git_head));
+    detail.push_str(&format!(
+        "runtime thread: {}\n",
+        snapshot.runtime_thread_id.as_deref().unwrap_or("-")
+    ));
+    detail.push_str(&format!(
+        "runtime turn: {}\n",
+        snapshot.runtime_turn_id.as_deref().unwrap_or("-")
+    ));
+    detail.push_str(&format!("status bytes: {}\n", snapshot.status_bytes));
+    detail.push_str(&format!("patch bytes: {}\n", snapshot.patch_bytes));
+    detail.push_str(&format!(
+        "staged patch bytes: {}\n",
+        snapshot.staged_patch_bytes
+    ));
+    detail.push_str(&format!(
+        "unstaged patch bytes: {}\n",
+        snapshot.unstaged_patch_bytes
+    ));
+    detail.push_str(&format!("untracked bytes: {}\n", snapshot.untracked_bytes));
+    detail.push_str(&format!(
+        "untracked files: {}\n",
+        snapshot.untracked_files.len()
+    ));
+    for file in snapshot.untracked_files.iter().take(20) {
+        detail.push_str(&format!("  - {file}\n"));
+    }
+    if snapshot.untracked_files.len() > 20 {
+        detail.push_str(&format!(
+            "  - ... {} more\n",
+            snapshot.untracked_files.len() - 20
+        ));
+    }
+    detail.push_str(&format!(
+        "untracked symlinks: {}\n",
+        snapshot.untracked_symlinks.len()
+    ));
+    for link in snapshot.untracked_symlinks.iter().take(20) {
+        detail.push_str(&format!("  - {} -> {}\n", link.path, link.target));
+    }
+    if snapshot.untracked_symlinks.len() > 20 {
+        detail.push_str(&format!(
+            "  - ... {} more\n",
+            snapshot.untracked_symlinks.len() - 20
+        ));
+    }
+    if let Some(patch) = patch {
+        detail.push_str("\nPatch preview:\n");
+        detail.push_str(&rollback_patch_preview(patch, 80));
+    }
+    detail
+}
+
+fn render_rollback_restore_plan(plan: &RestorePlan) -> String {
+    let mut detail = String::new();
+    detail.push_str("Rollback restore plan\n");
+    detail.push_str(&format!("snapshot: {}\n", plan.snapshot_id));
+    detail.push_str(&format!(
+        "mode: {}\n",
+        if plan.applied { "applied" } else { "dry-run" }
+    ));
+    detail.push_str(&format!("git root: {}\n", plan.git_root));
+    detail.push_str(&format!("git head: {}\n", plan.git_head));
+    detail.push_str(&format!("snapshot patch bytes: {}\n", plan.patch_bytes));
+    detail.push_str(&format!(
+        "staged patch bytes: {}\n",
+        plan.staged_patch_bytes
+    ));
+    detail.push_str(&format!(
+        "unstaged patch bytes: {}\n",
+        plan.unstaged_patch_bytes
+    ));
+    detail.push_str(&format!(
+        "current patch bytes: {}\n",
+        plan.current_patch_bytes
+    ));
+    if plan.applied {
+        detail.push_str(&format!("changed files: {}\n", plan.changed_files.len()));
+        for file in plan.changed_files.iter().take(40) {
+            detail.push_str(&format!("  - {file}\n"));
+        }
+        if plan.changed_files.len() > 40 {
+            detail.push_str(&format!("  - ... {} more\n", plan.changed_files.len() - 40));
+        }
+    } else {
+        detail.push_str("\nDry-run only. Re-run `revert turn <id> --apply` to restore files.\n");
+    }
+    detail
+}
+
+fn rollback_patch_preview(patch: &str, max_lines: usize) -> String {
+    if patch.trim().is_empty() {
+        return "(empty patch)\n".to_string();
+    }
+    let mut out = String::new();
+    for line in patch.lines().take(max_lines) {
+        out.push_str(line);
+        out.push('\n');
+    }
+    let total_lines = patch.lines().count();
+    if total_lines > max_lines {
+        out.push_str(&format!(
+            "... {} more patch lines omitted\n",
+            total_lines - max_lines
+        ));
+    }
+    out
 }
 
 fn start_tui_agent_run(
@@ -3821,6 +3989,9 @@ mod tests {
         assert!(render_once(&app, 160, 48)
             .unwrap()
             .contains("rollback snapshots=1"));
+        assert!(render_once(&app, 160, 48)
+            .unwrap()
+            .contains("Rollback snapshots"));
 
         handle_tui_action(
             &store,
@@ -3834,6 +4005,9 @@ mod tests {
         assert!(render_once(&app, 160, 48)
             .unwrap()
             .contains(snapshot.id.as_str()));
+        let rendered = render_once(&app, 160, 48).unwrap();
+        assert!(rendered.contains("Patch preview"));
+        assert!(rendered.contains("src.txt"));
 
         handle_tui_action(
             &store,
@@ -3849,6 +4023,7 @@ mod tests {
         assert!(render_once(&app, 160, 48)
             .unwrap()
             .contains("dry-run rollback"));
+        assert!(render_once(&app, 160, 48).unwrap().contains("Dry-run only"));
 
         handle_tui_action(
             &store,
@@ -3867,6 +4042,9 @@ mod tests {
         assert!(render_once(&app, 160, 48)
             .unwrap()
             .contains("restored rollback"));
+        assert!(render_once(&app, 160, 48)
+            .unwrap()
+            .contains("changed files: 1"));
     }
 
     #[test]
