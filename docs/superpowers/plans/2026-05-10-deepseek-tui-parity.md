@@ -553,9 +553,9 @@ Landed first slice:
   `tool_call` and `tool_result` items, and side-effect permission requests are
   linked to that same turn for auditability
 - ACP `session/tools/call` now emits `session/update` notifications for
-  `tool_call_update` and `tool_result_update` before the final JSON-RPC result;
-  loaded-session updates include runtime turn/item ids to align ACP clients with
-  durable runtime audit records
+  standard `tool_call` and `tool_call_update` payloads before the final JSON-RPC
+  result; loaded-session updates include runtime turn/item ids under
+  `_meta.runtime` to align ACP clients with durable runtime audit records
 - `deepseek serve --acp --workspace <path>` starts ACP from an explicit
   workspace
 - `deepseek mcp add/get/remove/enable/disable/validate` covers common MCP
@@ -591,7 +591,8 @@ Remaining:
 
 - audit the remaining DeepSeek-TUI MCP long tail after the shell-session and
   RLM exposure slices
-- full ACP standard tool streaming beyond started/result notifications
+- true long-running ACP tool output streaming beyond synchronous
+  `tool_call_update` completion payloads
 
 ### Phase H: Packaging
 

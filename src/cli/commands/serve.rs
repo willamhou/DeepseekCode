@@ -3,6 +3,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -58,6 +59,7 @@ use crate::util::json::{
 
 const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 const ACP_PROTOCOL_VERSION: u64 = 1;
+static ACP_TOOL_CALL_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn env_flag(name: &str) -> bool {
     matches!(
@@ -4050,14 +4052,27 @@ fn acp_session_tools_call_responses(
 ) -> Result<Vec<JsonValue>, (i64, String)> {
     let session_id = acp_session_id_from_params(params)?;
     let name = acp_tool_name_from_params(params)?;
+    let arguments = match params.get("arguments") {
+        Some(value) => json_as_object(value)
+            .ok_or_else(|| (-32602, "arguments must be an object".to_string()))?
+            .clone(),
+        None => BTreeMap::new(),
+    };
+    let tool_call_id = acp_next_tool_call_id();
     let outcome = acp_session_tools_call(params, state)?;
     let mut responses = vec![acp_session_tool_call_update(
         session_id,
         name,
-        outcome.turn_id.as_deref(),
-        outcome.call_item_id.as_deref(),
+        &tool_call_id,
+        &arguments,
+        &outcome,
     )];
-    responses.push(acp_session_tool_result_update(session_id, name, &outcome));
+    responses.push(acp_session_tool_result_update(
+        session_id,
+        name,
+        &tool_call_id,
+        &outcome,
+    ));
     responses.push(jsonrpc_success_response_without_id(outcome.result));
     Ok(responses)
 }
@@ -4518,42 +4533,47 @@ fn acp_session_update(session_id: &str, text: String) -> JsonValue {
     ])
 }
 
+fn acp_next_tool_call_id() -> String {
+    let id = ACP_TOOL_CALL_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
+    format!("tool_call_{id}")
+}
+
 fn acp_session_tool_call_update(
     session_id: &str,
     name: &str,
-    turn_id: Option<&str>,
-    call_item_id: Option<&str>,
+    tool_call_id: &str,
+    arguments: &BTreeMap<String, JsonValue>,
+    outcome: &AcpToolCallOutcome,
 ) -> JsonValue {
-    let mut tool_call = BTreeMap::new();
-    tool_call.insert("name".to_string(), JsonValue::String(name.to_string()));
-    tool_call.insert(
-        "status".to_string(),
-        JsonValue::String("running".to_string()),
+    let mut update = BTreeMap::new();
+    update.insert(
+        "sessionUpdate".to_string(),
+        JsonValue::String("tool_call".to_string()),
     );
-    if let Some(turn_id) = turn_id {
-        tool_call.insert("turnId".to_string(), JsonValue::String(turn_id.to_string()));
+    update.insert(
+        "toolCallId".to_string(),
+        JsonValue::String(tool_call_id.to_string()),
+    );
+    update.insert("title".to_string(), JsonValue::String(acp_tool_title(name)));
+    update.insert(
+        "kind".to_string(),
+        JsonValue::String(acp_tool_kind(name).to_string()),
+    );
+    update.insert(
+        "status".to_string(),
+        JsonValue::String("in_progress".to_string()),
+    );
+    update.insert("rawInput".to_string(), JsonValue::Object(arguments.clone()));
+    if let Some(meta) = acp_tool_runtime_meta(outcome) {
+        update.insert("_meta".to_string(), meta);
     }
-    if let Some(call_item_id) = call_item_id {
-        tool_call.insert(
-            "callItemId".to_string(),
-            JsonValue::String(call_item_id.to_string()),
-        );
-    }
-    acp_structured_session_update(
-        session_id,
-        object([
-            (
-                "sessionUpdate",
-                JsonValue::String("tool_call_update".to_string()),
-            ),
-            ("toolCall", JsonValue::Object(tool_call)),
-        ]),
-    )
+    acp_structured_session_update(session_id, JsonValue::Object(update))
 }
 
 fn acp_session_tool_result_update(
     session_id: &str,
     name: &str,
+    tool_call_id: &str,
     outcome: &AcpToolCallOutcome,
 ) -> JsonValue {
     let status = if outcome.is_error {
@@ -4561,36 +4581,131 @@ fn acp_session_tool_result_update(
     } else {
         "completed"
     };
-    let mut tool_result = BTreeMap::new();
-    tool_result.insert("name".to_string(), JsonValue::String(name.to_string()));
-    tool_result.insert("status".to_string(), JsonValue::String(status.to_string()));
-    tool_result.insert("isError".to_string(), JsonValue::Bool(outcome.is_error));
-    tool_result.insert("text".to_string(), JsonValue::String(outcome.text.clone()));
+    let mut update = BTreeMap::new();
+    update.insert(
+        "sessionUpdate".to_string(),
+        JsonValue::String("tool_call_update".to_string()),
+    );
+    update.insert(
+        "toolCallId".to_string(),
+        JsonValue::String(tool_call_id.to_string()),
+    );
+    update.insert("status".to_string(), JsonValue::String(status.to_string()));
+    update.insert(
+        "content".to_string(),
+        JsonValue::Array(vec![object([
+            ("type", JsonValue::String("content".to_string())),
+            (
+                "content",
+                object([
+                    ("type", JsonValue::String("text".to_string())),
+                    ("text", JsonValue::String(outcome.text.clone())),
+                ]),
+            ),
+        ])]),
+    );
+    update.insert(
+        "rawOutput".to_string(),
+        object([
+            ("text", JsonValue::String(outcome.text.clone())),
+            ("isError", JsonValue::Bool(outcome.is_error)),
+            ("tool", JsonValue::String(name.to_string())),
+        ]),
+    );
+    if let Some(meta) = acp_tool_runtime_meta(outcome) {
+        update.insert("_meta".to_string(), meta);
+    }
+    acp_structured_session_update(session_id, JsonValue::Object(update))
+}
+
+fn acp_tool_title(name: &str) -> String {
+    match name {
+        "read_file" => "Reading file".to_string(),
+        "write_file" | "edit_file" | "fim_edit" | "apply_patch" => "Editing workspace".to_string(),
+        "delete_file" => "Deleting file".to_string(),
+        "copy_file" | "move_file" => "Moving workspace files".to_string(),
+        "run_shell" | "run_tests" | "exec_shell" | "task_shell_start" => {
+            "Running command".to_string()
+        }
+        _ => format!("Running {name}"),
+    }
+}
+
+fn acp_tool_kind(name: &str) -> &'static str {
+    match name {
+        "read_file"
+        | "retrieve_tool_result"
+        | "list_files"
+        | "list_dir"
+        | "git_status"
+        | "git_diff"
+        | "git_log"
+        | "git_show"
+        | "git_blame"
+        | "github_issue_context"
+        | "github_pr_context"
+        | "runtime_health"
+        | "runtime_list_sessions"
+        | "runtime_list_threads"
+        | "runtime_read_thread"
+        | "runtime_list_tasks"
+        | "runtime_read_task"
+        | "runtime_list_agents"
+        | "runtime_agent_result" => "read",
+        "write_file" | "edit_file" | "fim_edit" | "apply_patch" | "revert_turn" => "edit",
+        "delete_file" => "delete",
+        "copy_file" | "move_file" => "move",
+        "search_text" | "grep_files" | "file_search" | "web_search" => "search",
+        "fetch_url" | "finance" => "fetch",
+        "run_shell"
+        | "run_tests"
+        | "exec_shell"
+        | "task_shell_start"
+        | "exec_shell_interact"
+        | "exec_interact"
+        | "exec_shell_cancel"
+        | "task_shell_wait"
+        | "exec_shell_wait"
+        | "exec_wait"
+        | "rlm_python"
+        | "rlm_python_session" => "execute",
+        "rlm"
+        | "rlm_query"
+        | "llm_query"
+        | "rlm_process"
+        | "rlm_batch"
+        | "rlm_query_batched"
+        | "llm_query_batched"
+        | "rlm_chunk_plan"
+        | "rlm_map_reduce_plan" => "think",
+        _ => "other",
+    }
+}
+
+fn acp_tool_runtime_meta(outcome: &AcpToolCallOutcome) -> Option<JsonValue> {
+    if outcome.turn_id.is_none()
+        && outcome.call_item_id.is_none()
+        && outcome.result_item_id.is_none()
+    {
+        return None;
+    }
+    let mut runtime = BTreeMap::new();
     if let Some(turn_id) = outcome.turn_id.as_deref() {
-        tool_result.insert("turnId".to_string(), JsonValue::String(turn_id.to_string()));
+        runtime.insert("turnId".to_string(), JsonValue::String(turn_id.to_string()));
     }
     if let Some(call_item_id) = outcome.call_item_id.as_deref() {
-        tool_result.insert(
+        runtime.insert(
             "callItemId".to_string(),
             JsonValue::String(call_item_id.to_string()),
         );
     }
     if let Some(result_item_id) = outcome.result_item_id.as_deref() {
-        tool_result.insert(
+        runtime.insert(
             "resultItemId".to_string(),
             JsonValue::String(result_item_id.to_string()),
         );
     }
-    acp_structured_session_update(
-        session_id,
-        object([
-            (
-                "sessionUpdate",
-                JsonValue::String("tool_result_update".to_string()),
-            ),
-            ("toolResult", JsonValue::Object(tool_result)),
-        ]),
-    )
+    Some(object([("runtime", JsonValue::Object(runtime))]))
 }
 
 fn acp_structured_session_update(session_id: &str, update: JsonValue) -> JsonValue {
@@ -8615,9 +8730,17 @@ mod tests {
         let rendered = json_value_to_string(&responses[2]);
 
         assert!(call_update.contains(r#""method":"session/update""#));
-        assert!(call_update.contains(r#""sessionUpdate":"tool_call_update""#));
-        assert!(call_update.contains(r#""name":"read_file""#));
-        assert!(result_update.contains(r#""sessionUpdate":"tool_result_update""#));
+        assert!(call_update.contains(r#""sessionUpdate":"tool_call""#));
+        assert!(call_update.contains(r#""toolCallId":"tool_call_"#));
+        assert!(call_update.contains(r#""title":"Reading file""#));
+        assert!(call_update.contains(r#""kind":"read""#));
+        assert!(call_update.contains(r#""status":"in_progress""#));
+        assert!(call_update.contains(r#""rawInput""#));
+        assert!(result_update.contains(r#""sessionUpdate":"tool_call_update""#));
+        assert!(result_update.contains(r#""toolCallId":"tool_call_"#));
+        assert!(result_update.contains(r#""status":"completed""#));
+        assert!(result_update.contains(r#""content":[{"#));
+        assert!(result_update.contains(r#""rawOutput""#));
         assert!(result_update.contains("hello acp tool"));
         assert!(result_update.contains(r#""isError":false"#));
         assert!(rendered.contains(r#""id":23"#));
@@ -8696,8 +8819,13 @@ mod tests {
         let call_update = json_value_to_string(&call_responses[0]);
         let result_update = json_value_to_string(&call_responses[1]);
 
-        assert!(call_update.contains(r#""sessionUpdate":"tool_call_update""#));
-        assert!(result_update.contains(r#""sessionUpdate":"tool_result_update""#));
+        assert!(call_update.contains(r#""sessionUpdate":"tool_call""#));
+        assert!(call_update.contains(r#""title":"Editing workspace""#));
+        assert!(call_update.contains(r#""kind":"edit""#));
+        assert!(call_update.contains(r#""status":"in_progress""#));
+        assert!(result_update.contains(r#""sessionUpdate":"tool_call_update""#));
+        assert!(result_update.contains(r#""status":"completed""#));
+        assert!(result_update.contains(r#""rawOutput""#));
         assert!(rendered_call.contains("Wrote 9 bytes to out.txt"));
         assert!(rendered_call.contains(r#""isError":false"#));
         assert!(rendered_call.contains(r#""id":26"#));

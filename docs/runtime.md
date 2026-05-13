@@ -477,19 +477,22 @@ loaded from a runtime thread, and they reuse that thread's durable permission
 events before mutating the workspace. Loaded-session tool calls also create an
 assistant turn with `tool_call` and `tool_result` runtime items; side-effect
 permission requests are linked to that same turn for auditability. ACP
-`session/tools/call` now emits `session/update` notifications for
-`tool_call_update` and `tool_result_update` before the final JSON-RPC result;
-loaded-session updates include the runtime turn/item ids so clients can align
-incremental UI state with the durable audit trail.
+`session/tools/call` now emits standard-shaped `session/update` notifications
+before the final JSON-RPC result: an initial `sessionUpdate: "tool_call"` with
+`toolCallId`, title, kind, status, and `rawInput`, followed by
+`sessionUpdate: "tool_call_update"` with the matching `toolCallId`, final
+status, text content, and `rawOutput`. Loaded-session updates include the
+runtime turn/item ids under `_meta.runtime` so clients can align incremental UI
+state with the durable audit trail.
 
 ```bash
 deepseek serve --acp
 deepseek serve --acp --workspace /path/to/workspace
 ```
 
-Full ACP standard tool streaming remains future work. Use `serve --http` for
-the durable runtime API and `serve --mcp` when another client needs
-DeepSeekCode's tools as MCP tools.
+True long-running ACP tool output streaming remains future work. Use
+`serve --http` for the durable runtime API and `serve --mcp` when another
+client needs DeepSeekCode's tools as MCP tools.
 
 ## Durable Runtime v1
 
