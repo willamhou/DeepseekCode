@@ -31,6 +31,9 @@ comments on changed PR files.
   comment tasks to it before considering top-level PR comments. Failed or
   denied inline comment attempts reuse the existing PR comment failure recovery
   path by rebuilding the comment plan with the previous error recorded.
+- `.dscode/benchmarks.txt` includes
+  `fixture-pr-inline-comment-failure-recovery-plan`, a seeded no-write fixture
+  for failed inline comment recovery.
 - `src/tools/registry.rs` and `src/cli/commands/serve.rs` register the tool,
   preserve write approval prompts, and keep MCP/ACP exposure hidden unless
   durable runtime approvals are enabled.
@@ -42,11 +45,13 @@ comments on changed PR files.
 - `/home/willamhou/.cargo/bin/cargo test github_pr_review_comment --lib`
 - `/home/willamhou/.cargo/bin/cargo test inline_pr_review --lib`
 - `/home/willamhou/.cargo/bin/cargo test pr_review_comment_plan --lib`
+- `/home/willamhou/.cargo/bin/cargo test benchmark --lib`
 - `/home/willamhou/.cargo/bin/cargo test mcp_tools_call_executes_github_pr_review_comment_after_runtime_approval --lib`
 - `/home/willamhou/.cargo/bin/cargo fmt --check`
 - `git diff --check`
 
 ## Remaining
 
-Live remote PR posting fixtures are still needed to strengthen end-to-end
-confidence against real GitHub permissions and API responses.
+Real remote PR posting fixtures are still needed to strengthen end-to-end
+confidence against GitHub permissions and API responses; those require an
+external test repository and explicit write authorization.

@@ -33,13 +33,17 @@ after write failures without blindly repeating GitHub mutations.
   `retry_reason` input aliases to `pr_review_comment_plan`.
 - Added unit coverage for failed-post replanning and retry-plan completion.
 - Added seeded benchmark fixtures for the failure-recovery route.
+- Added a seeded inline review-comment failure fixture that covers a failed
+  `github_pr_review_comment` attempt and verifies the rebuilt
+  `pr_review_comment_plan` carries `comment_error` plus
+  `previous_comment_error`.
 
 ## Verification
 
 - `/home/willamhou/.cargo/bin/cargo test pr_comment --lib`
 - `/home/willamhou/.cargo/bin/cargo test pr_review_comment_plan --lib`
+- `/home/willamhou/.cargo/bin/cargo test benchmark --lib`
 
-Live GitHub posting fixtures and policy-specific UI retry prompts remain future
-work. A later inline PR review-comment slice added line-level posting through
-`github_pr_review_comment` and reuses this recovery path after denied inline
-comment attempts.
+Real GitHub posting fixtures and policy-specific UI retry prompts remain future
+work because they require an external test repository plus explicit write
+authorization.

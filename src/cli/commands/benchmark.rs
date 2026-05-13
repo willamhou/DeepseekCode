@@ -2574,6 +2574,40 @@ seed_observations = "search_text:failed:no matches || recovery_hint:ok:after=sea
     }
 
     #[test]
+    fn default_manifest_includes_inline_comment_failure_recovery_fixture() {
+        let cases = parse_manifest(include_str!("../../../.dscode/benchmarks.txt")).unwrap();
+        let case = cases
+            .iter()
+            .find(|case| case.name == "fixture-pr-inline-comment-failure-recovery-plan")
+            .expect("default manifest should include inline failure recovery");
+
+        assert_eq!(case.expect_tool.as_deref(), Some("pr_review_comment_plan"));
+        assert_eq!(
+            case.expect_tool_input_contains,
+            Some(ToolInputExpectation {
+                tool_name: "pr_review_comment_plan".to_string(),
+                key: "comment_error".to_string(),
+                needle: "line is not part of the diff".to_string(),
+            })
+        );
+        assert_eq!(
+            case.expect_tool_output_contains,
+            Some(ToolOutputExpectation {
+                tool_name: "pr_review_comment_plan".to_string(),
+                needle: "previous_comment_error".to_string(),
+            })
+        );
+        assert!(case.seed_observations.iter().any(|observation| {
+            observation.tool_name == "github_pr_review_comment"
+                && matches!(
+                    observation.status,
+                    crate::model::protocol::ObservationStatus::Failed
+                )
+                && observation.summary.contains("line is not part of the diff")
+        }));
+    }
+
+    #[test]
     fn unquote_decodes_newline_escapes() {
         assert_eq!(unquote("\"a\\nb\""), "a\nb");
         assert_eq!(unquote("\"x\\\\y\""), "x\\y");

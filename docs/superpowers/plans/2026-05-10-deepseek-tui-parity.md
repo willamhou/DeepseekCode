@@ -504,7 +504,12 @@ Remaining:
   context includes a head commit SHA and findings have `path` + `line`, and the
   offline planner routes explicit inline/line/file/diff comment requests to that
   guarded tool
-- Remaining: stronger live end-to-end remote PR retry fixtures
+- Seeded inline PR review-comment retry fixture now exists:
+  `fixture-pr-inline-comment-failure-recovery-plan` covers failed
+  `github_pr_review_comment` recovery back into `pr_review_comment_plan` with
+  the previous API/policy error preserved in the next plan input and output
+- Remaining: real GitHub permission/API live fixtures for remote PR retry,
+  which require an external test repository and explicit write authorization
 
 ### Phase G2: MCP Server Mode
 
