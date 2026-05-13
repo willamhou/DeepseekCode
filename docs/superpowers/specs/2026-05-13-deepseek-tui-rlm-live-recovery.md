@@ -16,7 +16,8 @@ payloads, and live event log.
 ## Behavior
 
 - Add `rlm_process_recover`.
-- Require `session_id`.
+- Require `session_id`, unless `all=true` scans all live sessions.
+- Accept `limit` for `all=true`, defaulting to 20 and clamped to 1-100.
 - Read `.dscode/rlm-daemon/<session_id>/manifest.json`.
 - Inspect the manifest `active_turn_id`, linked runtime `rlm_process` tasks,
   and persisted turn payloads under `turns/`.
@@ -30,6 +31,8 @@ payloads, and live event log.
   - append `turn_recovered`
 - `mode=fail` marks interrupted candidates failed instead.
 - `dry_run=true` reports selected actions without mutating state.
+- `all=true` returns per-session recovery summaries and continues past
+  per-session errors.
 
 ## MCP/ACP
 
@@ -43,6 +46,9 @@ payloads, and live event log.
 - `rlm_process_recover_requeues_interrupted_active_turn` verifies dry-run
   preview, requeue recovery, manifest active-turn clearing, queued-turn refresh,
   payload status recovery, and `turn_recovered` event replay.
+- `rlm_process_recover_all_scans_live_sessions` verifies workspace-wide
+  manifest scanning, per-session recovery, aggregate recovered counts, and
+  `limit` parsing.
 - Regression commands:
   - `cargo test rlm_process --lib`
   - `cargo test build_tool_specs_include_rlm --lib`
@@ -55,5 +61,5 @@ payloads, and live event log.
 ## Remaining Gap
 
 DeepSeekCode still needs a resident live RLM daemon loop, streaming delta events,
-active worker cancellation, broader restart scanning across all live sessions,
-and supervisor/CLI lifecycle commands.
+active worker cancellation, stale daemon pid ownership checks, and supervisor
+or CLI lifecycle commands.

@@ -4057,12 +4057,14 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
             "Recover interrupted live RLM daemon turns by requeueing or failing stale running turns. Requires durable runtime approvals.",
             mcp_schema(
                 vec![
-                    ("session_id", string_property("Live RLM session id.")),
+                    ("session_id", string_property("Live RLM session id. Optional when all=true.")),
+                    ("all", string_property("Set true to scan all live RLM sessions.")),
+                    ("limit", string_property("Maximum live sessions to scan when all=true.")),
                     ("mode", string_property("Recovery mode: requeue or fail. Defaults to requeue.")),
                     ("dry_run", string_property("Set true to preview recovery actions without mutating state.")),
                     ("reason", string_property("Optional recovery reason.")),
                 ],
-                &["session_id"],
+                &[],
             ),
         ));
         tools.push(mcp_tool_definition(

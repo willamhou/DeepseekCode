@@ -527,7 +527,8 @@ Remaining:
   resident daemon lands; `rlm_process_drain` repeats that worker path for a
   bounded FIFO batch so queued sessions can be drained without service
   packaging yet; `rlm_process_recover` can requeue or fail interrupted
-  `running` live turns for one session and records `turn_recovered`
+  `running` live turns for one session or all live manifests and records
+  `turn_recovered`
 - Review remote PR context signals now exist: `review` parses
   `github_pr_context` JSON to report requested changes, failing/cancelled status
   checks, and missing `include_diff=true` context before optional semantic

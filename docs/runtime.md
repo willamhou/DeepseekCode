@@ -1426,14 +1426,16 @@ default `mode=requeue` makes recoverable interrupted turns pending/queued again,
 clears stale `active_turn_id`, refreshes `queued_turns`, and appends
 `turn_recovered`; `mode=fail` marks interrupted turns failed instead, and
 `dry_run=true` previews the recovery actions without mutating state.
+`rlm_process_recover all=true` scans all live session manifests up to `limit`,
+so a restarted supervisor can repair interrupted turns across the workspace.
 `rlm_process_run_next session_id=<id>` is the first non-daemon worker bridge: it
 claims the oldest queued payload, writes `turn_started`, runs the bounded child
 model flow, then records `turn_completed` or `turn_failed`; `dry_run=true`
 renders the selected payload without claiming it. `rlm_process_drain` repeats
 that single-step worker path for up to `max_turns` queued payloads in FIFO
 order, with `dry_run=true` for a non-mutating batch preview. Constant background
-service packaging, model delta streaming, active worker cancellation, and
-broader all-session restart scanning remain future work.
+service packaging, model delta streaming, active worker cancellation, and stale
+daemon pid ownership checks remain future work.
 `rlm_process_events session_id=<id> cursor=<seq>` replays parsed
 `.dscode/rlm-daemon/<session_id>/events.jsonl` records with `seq` greater than
 the cursor and returns `next_cursor` for clients that want deterministic live

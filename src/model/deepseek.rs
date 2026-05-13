@@ -3490,9 +3490,9 @@ const TOOL_SPECS: &[StaticToolSpec] = &[
     },
     StaticToolSpec {
         name: "rlm_process_recover",
-        description: "Recover interrupted live RLM daemon turns for a session. Use mode=requeue to make stale running turns pending again, or mode=fail to mark them failed. Use dry_run=true to preview actions.",
-        properties_json: r#"{"session_id":{"type":"string","description":"Live RLM session id."},"mode":{"type":"string","description":"Recovery mode: requeue or fail. Defaults to requeue."},"dry_run":{"type":"string","description":"Set true/1/yes/on to preview recovery actions without mutating state."},"reason":{"type":"string","description":"Optional recovery reason stored in turn_recovered events."}}"#,
-        required_json: r#"["session_id"]"#,
+        description: "Recover interrupted live RLM daemon turns for a session, or scan all live sessions with all=true. Use mode=requeue to make stale running turns pending again, or mode=fail to mark them failed. Use dry_run=true to preview actions.",
+        properties_json: r#"{"session_id":{"type":"string","description":"Live RLM session id. Optional when all=true."},"all":{"type":"string","description":"Set true/1/yes/on to scan all live RLM sessions."},"limit":{"type":"string","description":"Maximum live sessions to scan when all=true, clamped to 1-100 and defaulting to 20."},"mode":{"type":"string","description":"Recovery mode: requeue or fail. Defaults to requeue."},"dry_run":{"type":"string","description":"Set true/1/yes/on to preview recovery actions without mutating state."},"reason":{"type":"string","description":"Optional recovery reason stored in turn_recovered events."}}"#,
+        required_json: r#"[]"#,
     },
     StaticToolSpec {
         name: "rlm_process_run_next",
@@ -5228,6 +5228,7 @@ mod tests {
         assert!(openai.contains("\"dry_run\""));
         assert!(openai.contains("\"max_turns\""));
         assert!(openai.contains("\"mode\""));
+        assert!(openai.contains("\"all\""));
         assert!(openai.contains("enqueue a live RLM daemon turn"));
         assert!(openai.contains("queued pending live RLM daemon turns"));
         assert!(openai.contains("interrupted live RLM daemon turns"));

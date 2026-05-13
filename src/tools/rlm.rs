@@ -1990,14 +1990,13 @@ impl Tool for RlmLiveRecoverTool {
     }
 
     fn execute(&self, input: ToolInput) -> AppResult<ToolOutput> {
+        let mode = parse_rlm_live_recovery_mode(input.get("mode"))?;
+        let dry_run = parse_bool_arg(input.get("dry_run"));
+        let recover_all = parse_bool_arg(input.get("all"));
         let session_id = input
             .get("session_id")
             .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| tool_failure("rlm_process_recover requires non-empty `session_id`"))?;
-        validate_rlm_model_session_id(session_id)?;
-        let mode = parse_rlm_live_recovery_mode(input.get("mode"))?;
-        let dry_run = parse_bool_arg(input.get("dry_run"));
+            .filter(|value| !value.is_empty());
         let reason = input
             .get("reason")
             .map(str::trim)
@@ -2005,6 +2004,77 @@ impl Tool for RlmLiveRecoverTool {
             .unwrap_or("recovered interrupted live RLM worker")
             .to_string();
 
+        if recover_all && session_id.is_none() {
+            let limit = parse_rlm_live_recover_limit(input.get("limit"))?;
+            let mut sessions = Vec::new();
+            let mut errors = Vec::new();
+            let mut recovered_total = 0u64;
+            let mut scanned_count = 0usize;
+            for (session_id, _path) in list_rlm_live_session_manifest_entries(&self.config)?
+                .into_iter()
+                .take(limit)
+            {
+                scanned_count += 1;
+                let dry_run_value = if dry_run { "true" } else { "false" };
+                let recover_input = ToolInput::new()
+                    .with_arg("session_id", session_id.clone())
+                    .with_arg("mode", mode.as_str())
+                    .with_arg("dry_run", dry_run_value)
+                    .with_arg("reason", reason.clone());
+                match self.execute(recover_input) {
+                    Ok(output) => match parse_json_value(&output.summary) {
+                        Ok(value) => {
+                            if let JsonValue::Object(root) = &value {
+                                recovered_total += root
+                                    .get("recovered_count")
+                                    .and_then(json_as_u64)
+                                    .unwrap_or(0);
+                            }
+                            sessions.push(value);
+                        }
+                        Err(error) => errors.push(JsonValue::Object(BTreeMap::from([
+                            (
+                                "session_id".to_string(),
+                                JsonValue::String(session_id.clone()),
+                            ),
+                            (
+                                "error".to_string(),
+                                JsonValue::String(format!("invalid recovery output JSON: {error}")),
+                            ),
+                        ]))),
+                    },
+                    Err(error) => errors.push(JsonValue::Object(BTreeMap::from([
+                        ("session_id".to_string(), JsonValue::String(session_id)),
+                        ("error".to_string(), JsonValue::String(error.to_string())),
+                    ]))),
+                }
+            }
+            return Ok(ToolOutput {
+                summary: json_value_to_string(&JsonValue::Object(BTreeMap::from([
+                    ("all".to_string(), JsonValue::Bool(true)),
+                    ("dry_run".to_string(), JsonValue::Bool(dry_run)),
+                    (
+                        "mode".to_string(),
+                        JsonValue::String(mode.as_str().to_string()),
+                    ),
+                    (
+                        "scanned_count".to_string(),
+                        JsonValue::Number(scanned_count.to_string()),
+                    ),
+                    (
+                        "recovered_count".to_string(),
+                        JsonValue::Number(recovered_total.to_string()),
+                    ),
+                    ("sessions".to_string(), JsonValue::Array(sessions)),
+                    ("errors".to_string(), JsonValue::Array(errors)),
+                    ("limit".to_string(), JsonValue::Number(limit.to_string())),
+                ]))),
+            });
+        }
+
+        let session_id = session_id
+            .ok_or_else(|| tool_failure("rlm_process_recover requires non-empty `session_id`"))?;
+        validate_rlm_model_session_id(session_id)?;
         let manifest_path = rlm_live_session_manifest_path(&self.config, session_id);
         let manifest = read_rlm_live_session_manifest(&manifest_path, session_id)?;
         let runtime_thread_id = rlm_live_manifest_string_field(&manifest, "runtime_thread_id")
@@ -4093,6 +4163,16 @@ fn parse_rlm_live_recovery_mode(raw: Option<&str>) -> AppResult<RlmLiveRecoveryM
     }
 }
 
+fn parse_rlm_live_recover_limit(raw: Option<&str>) -> AppResult<usize> {
+    let limit = match raw.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => value
+            .parse::<usize>()
+            .map_err(|_| tool_failure("rlm_process_recover limit must be a positive integer"))?,
+        None => 20,
+    };
+    Ok(limit.clamp(1, 100))
+}
+
 fn push_unique_string(values: &mut Vec<String>, value: &str) {
     if !values.iter().any(|existing| existing == value) {
         values.push(value.to_string());
@@ -5521,6 +5601,97 @@ mod tests {
             RlmLiveRecoveryMode::Fail
         );
         assert!(parse_rlm_live_recovery_mode(Some("unknown")).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rlm_process_recover_all_scans_live_sessions() {
+        let cwd = std::env::current_dir().unwrap();
+        let root = cwd.join("target").join(format!(
+            "dscode-rlm-live-recover-all-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let mut config = AppConfig::default();
+        config.workspace.config_dir = root.join(".dscode").display().to_string();
+        let rlm = RlmTool {
+            tool_name: "rlm_process",
+            config: config.clone(),
+            parent_depth: 0,
+        };
+        let make_running_turn = |session_id: &str, task: &str| -> String {
+            let queued = rlm
+                .execute(
+                    ToolInput::new()
+                        .with_arg("task", task)
+                        .with_arg("content", format!("payload for {task}"))
+                        .with_arg("session_id", session_id)
+                        .with_arg("live", "true"),
+                )
+                .unwrap();
+            let turn_id = meta_value(&queued.summary, "meta.rlm_turn_id").unwrap();
+            let manifest_path = rlm_live_session_manifest_path(&config, session_id);
+            let manifest = read_rlm_live_session_manifest(&manifest_path, session_id).unwrap();
+            let runtime_thread_id =
+                rlm_live_manifest_string_field(&manifest, "runtime_thread_id").unwrap();
+            let runtime_session_id =
+                rlm_live_manifest_string_field(&manifest, "runtime_session_id");
+            let store = rlm_runtime_store(&config);
+            store
+                .claim_task(&turn_id, format!("test-recovery-worker-{session_id}"))
+                .unwrap();
+            update_rlm_live_session_turn_payload_status(
+                &config,
+                session_id,
+                &turn_id,
+                "running",
+                Vec::new(),
+            )
+            .unwrap();
+            let payload =
+                read_rlm_live_session_turn_payload(&config, session_id, &turn_id).unwrap();
+            write_rlm_live_session_manifest(
+                &config,
+                session_id,
+                "running",
+                &runtime_thread_id,
+                runtime_session_id.as_deref(),
+                Some(&turn_id),
+                0,
+                &payload.model,
+                &payload.workspace,
+                rlm_live_manifest_string_field(&manifest, "created_at").as_deref(),
+            )
+            .unwrap();
+            turn_id
+        };
+        let first_turn = make_running_turn("recover.all.1", "first recover all turn");
+        let second_turn = make_running_turn("recover.all.2", "second recover all turn");
+
+        let output = RlmLiveRecoverTool {
+            config: config.clone(),
+        }
+        .execute(
+            ToolInput::new()
+                .with_arg("all", "true")
+                .with_arg("limit", "10")
+                .with_arg("reason", "daemon restart"),
+        )
+        .unwrap();
+        assert!(output.summary.contains(r#""all":true"#));
+        assert!(output.summary.contains(r#""scanned_count":2"#));
+        assert!(output.summary.contains(r#""recovered_count":2"#));
+        assert!(output.summary.contains("recover.all.1"));
+        assert!(output.summary.contains("recover.all.2"));
+        let store = rlm_runtime_store(&config);
+        assert_eq!(store.load_task(&first_turn).unwrap().status, "pending");
+        assert_eq!(store.load_task(&second_turn).unwrap().status, "pending");
+        assert_eq!(parse_rlm_live_recover_limit(Some("0")).unwrap(), 1);
+        assert_eq!(parse_rlm_live_recover_limit(Some("1000")).unwrap(), 100);
+        assert!(parse_rlm_live_recover_limit(Some("bad")).is_err());
         let _ = fs::remove_dir_all(root);
     }
 
