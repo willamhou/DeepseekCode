@@ -26,6 +26,16 @@ gate already used elsewhere is serial test execution.
 - Changed the npm artifact directory setup from a single-line `run:` command to
   a block scalar so the JavaScript object literal `recursive: true` is not
   parsed as YAML structure by GitHub Actions.
+- Fixed the first real release workflow run failures:
+  - Windows compilation no longer imports Unix-only `OpenOptionsExt`.
+  - Rollback and workspace-trust path comparisons now tolerate macOS
+    `/var` -> `/private/var` canonicalization.
+  - Unix socket tests use shorter temporary paths to stay below platform socket
+    path limits.
+  - TUI export/hooks assertions inspect stored detail text instead of depending
+    on viewport truncation of long macOS paths.
+  - Docker image builds copy `CHANGELOG.md`, which is required by the TUI
+    changelog view.
 - Updated `docs/release.md` to use the same serial test command in the local
   release gate.
 
@@ -44,6 +54,15 @@ gate already used elsewhere is serial test execution.
 - `git diff --check`
 - `rg -n '^\s*run: .*: ' .github/workflows/release.yml` returned no matches
   after the workflow YAML fix.
+- Focused release-run regression tests:
+  - `cargo test snapshot_restore_round_trip --lib -- --test-threads=1`
+  - `cargo test tools::apply_patch::tests --lib -- --test-threads=1`
+  - `cargo test add_remove_and_mode_are_scoped_per_workspace --lib -- --test-threads=1`
+  - `cargo test exec_shell_supervisor_status_probes_read_only_protocol_methods --lib -- --test-threads=1`
+  - `cargo test handle_tui_action_exports_thread_markdown --lib -- --test-threads=1`
+  - `cargo test handle_tui_action_renders_hooks_inventory --lib -- --test-threads=1`
+- `docker build -t deepseek-code:ci .`
+- `docker run --rm deepseek-code:ci version`
 - Local Homebrew formula syntax smoke was not run because `ruby` is not
   installed in this workspace image; the GitHub-hosted release runner still
   performs `ruby -c packaging/homebrew/deepseek.rb`.

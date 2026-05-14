@@ -1014,6 +1014,9 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        std::env::temp_dir().join(format!("dscode_patch_test_{nanos}"))
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::temp_dir());
+        base.join(format!("dscode_patch_test_{nanos}"))
     }
 }

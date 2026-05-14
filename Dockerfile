@@ -2,7 +2,7 @@ FROM rust:1-bookworm AS build
 
 WORKDIR /workspace
 COPY Cargo.toml Cargo.lock ./
-COPY README.md LICENSE ./
+COPY README.md CHANGELOG.md LICENSE ./
 COPY packaging ./packaging
 COPY src ./src
 

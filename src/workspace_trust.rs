@@ -69,7 +69,7 @@ impl WorkspaceTrust {
         if self.trust_mode {
             return true;
         }
-        let normalized = normalize_existing_or_lexical(candidate);
+        let normalized = resolve_candidate_path(candidate);
         self.paths
             .iter()
             .any(|trusted| normalized.starts_with(trusted))
@@ -361,7 +361,10 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!(
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::temp_dir());
+        base.join(format!(
             "deepseek-workspace-trust-{label}-{}-{nanos}",
             std::process::id()
         ))

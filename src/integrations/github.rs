@@ -370,12 +370,14 @@ pub fn post_pr_comment(repo: &str, number: u64, body: &str) -> AppResult<()> {
         .unwrap_or_default()
         .as_nanos();
     path.push(format!("dscode_pr_comment_{stamp}.md"));
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut file = std::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(&path)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&path)?;
     file.write_all(body.as_bytes())?;
     file.flush()?;
     drop(file);

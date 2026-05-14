@@ -740,12 +740,14 @@ fn filter_snapshot_storage_files(
 }
 
 fn store_root_relative_prefix(git_root: &Path, store_root: &Path) -> Option<String> {
+    let git_root = fs::canonicalize(git_root).unwrap_or_else(|_| git_root.to_path_buf());
     let store_root = if store_root.is_absolute() {
         store_root.to_path_buf()
     } else {
         git_root.join(store_root)
     };
-    let relative = store_root.strip_prefix(git_root).ok()?;
+    let store_root = fs::canonicalize(&store_root).unwrap_or(store_root);
+    let relative = store_root.strip_prefix(&git_root).ok()?;
     let mut parts = Vec::new();
     for component in relative.components() {
         match component {
@@ -763,7 +765,7 @@ fn capture_untracked_entries_to_snapshot(
     files: &[String],
 ) -> AppResult<(Vec<String>, Vec<UntrackedSymlinkRecord>, u64)> {
     let mut captured_files = Vec::new();
-    let mut captured_symlinks = Vec::new();
+    let mut captured_symlinks: Vec<UntrackedSymlinkRecord> = Vec::new();
     let mut total_bytes = 0;
     for file in files {
         let relative = safe_relative_path(file)?;
@@ -1773,10 +1775,25 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!(
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::temp_dir());
+        base.join(format!(
             "deepseek-rollback-{label}-{}-{nanos}",
             std::process::id()
         ))
+    }
+
+    #[cfg(unix)]
+    fn short_temp_root(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = PathBuf::from("/tmp")
+            .canonicalize()
+            .unwrap_or_else(|_| PathBuf::from("/tmp"));
+        base.join(format!("dsrc-{label}-{}-{nanos}", std::process::id()))
     }
 
     fn run_git(cwd: &Path, args: &[&str]) {
@@ -2213,7 +2230,7 @@ mod tests {
         use std::os::unix::fs::FileTypeExt;
         use std::os::unix::net::UnixListener;
 
-        let repo = temp_root("socket");
+        let repo = short_temp_root("socket");
         fs::create_dir_all(&repo).unwrap();
         run_git(&repo, &["init"]);
         fs::write(repo.join("src.txt"), "base\n").unwrap();

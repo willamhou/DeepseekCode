@@ -11034,9 +11034,9 @@ shell_allowlist = ["git diff"]
         assert!(markdown.contains("hello from user"));
         assert!(markdown.contains("**Assistant:**"));
         assert!(markdown.contains("hello from assistant"));
-        let output = render_once(&app, 160, 48).unwrap();
-        assert!(output.contains("Export complete"));
-        assert!(output.contains("exports/chat.md"));
+        let (_, detail) = app.mcp_detail_for_test().expect("export detail");
+        assert!(detail.contains("Export complete"));
+        assert!(detail.contains("exports/chat.md"));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -11667,14 +11667,15 @@ shell_allowlist = ["git diff"]
             },
         )
         .unwrap();
-        let output = render_once(&app, 160, 48).unwrap();
-        assert!(output.contains("Hooks"));
-        assert!(output.contains("Enabled: true"));
-        assert!(output.contains("Timeout: 1234 ms"));
-        assert!(output.contains("pre_tool_use"));
-        assert!(output.contains("10-block"));
-        assert!(output.contains("shell_env"));
-        assert!(output.contains("10-env"));
+        let (kind, detail) = app.mcp_detail_for_test().expect("hooks detail");
+        assert_eq!(kind, TuiMcpDetailKind::Hooks);
+        assert!(detail.contains("Hooks"));
+        assert!(detail.contains("Enabled: true"));
+        assert!(detail.contains("Timeout: 1234 ms"));
+        assert!(detail.contains("pre_tool_use"));
+        assert!(detail.contains("10-block"));
+        assert!(detail.contains("shell_env"));
+        assert!(detail.contains("10-env"));
 
         handle_tui_action(
             &store,
@@ -11685,11 +11686,12 @@ shell_allowlist = ["git diff"]
             },
         )
         .unwrap();
-        let output = render_once(&app, 160, 48).unwrap();
-        assert!(output.contains("Hook Events"));
-        assert!(output.contains("user_prompt_submit"));
-        assert!(output.contains("permission_request"));
-        assert!(output.contains("shell_env"));
+        let (kind, detail) = app.mcp_detail_for_test().expect("hook events detail");
+        assert_eq!(kind, TuiMcpDetailKind::Hooks);
+        assert!(detail.contains("Hook Events"));
+        assert!(detail.contains("user_prompt_submit"));
+        assert!(detail.contains("permission_request"));
+        assert!(detail.contains("shell_env"));
 
         let _ = fs::remove_dir_all(root);
     }

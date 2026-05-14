@@ -3582,7 +3582,10 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("dsh-{}-{nanos}", std::process::id()));
+        let base = PathBuf::from("/tmp")
+            .canonicalize()
+            .unwrap_or_else(|_| PathBuf::from("/tmp"));
+        let root = base.join(format!("dsh-{}-{nanos}", std::process::id()));
         fs::create_dir_all(&root).unwrap();
         let cwd = root.display().to_string();
         let state_dir = shell_supervisor_state_dir(&cwd);
