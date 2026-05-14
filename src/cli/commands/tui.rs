@@ -780,6 +780,9 @@ fn handle_tui_http_action(
         TuiAction::ClearConversation { .. } => {
             app.set_status("clear conversation requires local file-backed TUI".to_string());
         }
+        TuiAction::ShowDiff { .. } => {
+            app.set_status("diff commands require local file-backed TUI".to_string());
+        }
         TuiAction::Hooks { .. } => {
             app.set_status("hooks commands require local file-backed TUI".to_string());
         }
@@ -1210,6 +1213,7 @@ fn mcp_detail_summary(
         TuiMcpDetailKind::Tokens => Err(app_error("token details are not MCP details")),
         TuiMcpDetailKind::Cost => Err(app_error("cost details are not MCP details")),
         TuiMcpDetailKind::Cache => Err(app_error("cache details are not MCP details")),
+        TuiMcpDetailKind::Diff => Err(app_error("diff details are not MCP details")),
         TuiMcpDetailKind::Clear => Err(app_error("clear details are not MCP details")),
         TuiMcpDetailKind::Model => Err(app_error("model details are not MCP details")),
         TuiMcpDetailKind::Provider => Err(app_error("provider details are not MCP details")),
@@ -1861,6 +1865,9 @@ fn handle_tui_action_with_live(
                 &session_id,
                 previous_thread_id.as_deref(),
             )?;
+        }
+        TuiAction::ShowDiff { workspace } => {
+            run_tui_diff_command(app, Path::new(&workspace));
         }
         TuiAction::Hooks { command } => {
             run_tui_hooks_command(app, config, command);
@@ -3023,6 +3030,94 @@ fn run_tui_clear_conversation(
         thread.id
     ));
     Ok(())
+}
+
+fn run_tui_diff_command(app: &mut TuiApp, workspace: &Path) {
+    match render_tui_diff_detail(workspace) {
+        Ok(detail) => {
+            let no_changes = detail.contains("No changes since session start");
+            app.set_mcp_detail(TuiMcpDetailKind::Diff, detail);
+            app.set_status(if no_changes {
+                "no diff changes".to_string()
+            } else {
+                "diff shown".to_string()
+            });
+        }
+        Err(error) => {
+            app.set_status(format!("diff failed: {error}"));
+            app.set_mcp_detail(
+                TuiMcpDetailKind::Diff,
+                format!(
+                    "Diff failed\n\nWorkspace: {}\nError: {error}",
+                    workspace.display()
+                ),
+            );
+        }
+    }
+}
+
+fn render_tui_diff_detail(workspace: &Path) -> AppResult<String> {
+    let names = git_diff_output(workspace, &["diff", "--name-only"])?;
+    let stat = git_diff_output(workspace, &["diff", "--stat"])?;
+    let files = names
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+
+    let mut detail = String::new();
+    let _ = writeln!(detail, "DeepSeekCode Diff");
+    let _ = writeln!(detail, "=================");
+    let _ = writeln!(detail);
+    let _ = writeln!(detail, "Workspace: {}", workspace.display());
+    let _ = writeln!(detail);
+
+    if files.is_empty() {
+        let _ = writeln!(detail, "No changes since session start");
+        return Ok(detail);
+    }
+
+    let renamed_count = files.iter().filter(|file| file.contains(" -> ")).count();
+    if renamed_count > 0 {
+        let _ = writeln!(
+            detail,
+            "Changed files ({}, {} renamed):",
+            files.len(),
+            renamed_count
+        );
+    } else {
+        let _ = writeln!(detail, "Changed files ({}):", files.len());
+    }
+    for file in &files {
+        let _ = writeln!(detail, "{file}");
+    }
+
+    let stat = stat.trim();
+    if !stat.is_empty() {
+        let _ = writeln!(detail);
+        let _ = writeln!(detail, "Stat");
+        let _ = writeln!(detail, "----");
+        let _ = writeln!(detail, "{stat}");
+    }
+    Ok(detail)
+}
+
+fn git_diff_output(workspace: &Path, args: &[&str]) -> AppResult<String> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(workspace)
+        .output()
+        .map_err(|error| app_error(format!("could not invoke git: {error}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let command = args.join(" ");
+        return Err(app_error(if stderr.is_empty() {
+            format!("git {command} failed")
+        } else {
+            format!("git {command} failed: {stderr}")
+        }));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 fn html_escape(value: &str) -> String {
@@ -5373,6 +5468,25 @@ description = "Review pull requests."
     }
 
     #[test]
+    fn handle_tui_http_action_rejects_diff_commands_as_local_only() {
+        let client = RuntimeHttpClient::from_url("http://127.0.0.1:9").unwrap();
+        let mut app = TuiApp::new(Vec::new());
+
+        handle_tui_http_action(
+            &client,
+            &mut app,
+            TuiAction::ShowDiff {
+                workspace: ".".to_string(),
+            },
+        )
+        .unwrap();
+
+        assert!(render_once(&app, 120, 36)
+            .unwrap()
+            .contains("diff commands require local file-backed TUI"));
+    }
+
+    #[test]
     fn handle_tui_http_action_rejects_session_rename_as_local_only() {
         let client = RuntimeHttpClient::from_url("http://127.0.0.1:9").unwrap();
         let mut app = TuiApp::new(Vec::new());
@@ -7213,6 +7327,41 @@ shell_allowlist = ["git diff"]
         assert!(output.contains("New conversation"));
         assert!(!output.contains("old transcript"));
         assert!(output.contains("cleared conversation; new active thread"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn handle_tui_action_renders_workspace_diff() {
+        let root = temp_root("diff-action");
+        fs::create_dir_all(&root).unwrap();
+        run_git(&root, &["init"]);
+        run_git(&root, &["config", "user.email", "test@example.com"]);
+        run_git(&root, &["config", "user.name", "Deepseek Test"]);
+        fs::write(root.join("src.txt"), "before\n").unwrap();
+        run_git(&root, &["add", "src.txt"]);
+        run_git(&root, &["commit", "-m", "initial"]);
+        fs::write(root.join("src.txt"), "before\nafter\n").unwrap();
+
+        let store = RuntimeStore::new(root.join(".dscode/runtime"));
+        let mut app = TuiApp::new(Vec::new());
+
+        handle_tui_action(
+            &store,
+            None,
+            &mut app,
+            TuiAction::ShowDiff {
+                workspace: root.display().to_string(),
+            },
+        )
+        .unwrap();
+
+        let output = render_once(&app, 160, 48).unwrap();
+        assert!(output.contains("DeepSeekCode Diff"));
+        assert!(output.contains("Changed files (1):"));
+        assert!(output.contains("src.txt"));
+        assert!(output.contains("Stat"));
+        assert!(output.contains("diff shown"));
 
         let _ = fs::remove_dir_all(root);
     }

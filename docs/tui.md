@@ -51,6 +51,8 @@ Current surfaces:
 - context inspection with `context` / `/context` and `ctx` / `/ctx`, showing
   active-thread context window, compaction strategy, token/cache telemetry, and
   reasoning replay state
+- workspace diff inspection with `diff` / `/diff`, showing changed tracked
+  files and `git diff --stat` for the selected session workspace
 - slash quit aliases with `exit` / `/exit`, `quit` / `/quit`, and `q` / `/q`
 - conversation reset with `clear` / `/clear`, creating a fresh empty active
   thread in the selected durable session without deleting older thread history
@@ -304,6 +306,8 @@ Command palette commands currently implemented:
 | `/name [args]` | Expand a custom markdown slash command from `.dscode/commands/name.md` or the configured user commands dir, then submit it to the active thread |
 | `init`, `/init` | Create project `AGENTS.md` instructions in the selected session workspace |
 | `rename <title>`, `/rename <title>` | Rename the selected durable session and persist the new title |
+| `diff`, `/diff` | Show changed tracked files and `git diff --stat` for the selected workspace |
+| `diff help`, `/diff help` | Show diff command behavior and the selected workspace |
 | `clear`, `/clear` | Start a fresh active thread in the selected durable session without deleting older history |
 | `clear help`, `/clear help` | Show clear/reset behavior and the current session/thread target |
 | `stash`, `stash list`, `/stash list` | List parked composer drafts in the right-side detail panel |

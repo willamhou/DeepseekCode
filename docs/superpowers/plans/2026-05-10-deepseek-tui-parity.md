@@ -388,6 +388,9 @@ Landed first slice:
 - local file-backed TUI now supports DeepSeek-TUI-style `/clear` conversation
   reset by creating and switching to a fresh empty active thread in the selected
   durable session without deleting older thread history
+- local file-backed TUI now supports DeepSeek-TUI-style `/diff`, rendering
+  changed tracked files and `git diff --stat` for the selected session
+  workspace in the detail panel
 - local file-backed TUI now supports DeepSeek-TUI-style `/hooks` read-only
   inspection, listing the configured hook enabled state, timeout, project/user
   hook roots, executable scripts by event directory, and supported event names

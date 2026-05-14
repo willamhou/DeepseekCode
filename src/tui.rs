@@ -567,6 +567,7 @@ pub enum TuiMcpDetailKind {
     Tokens,
     Cost,
     Cache,
+    Diff,
     Clear,
     Model,
     Provider,
@@ -609,6 +610,7 @@ impl TuiMcpDetailKind {
             Self::Tokens => "tokens",
             Self::Cost => "cost",
             Self::Cache => "cache",
+            Self::Diff => "diff",
             Self::Clear => "clear",
             Self::Model => "model",
             Self::Provider => "provider",
@@ -651,6 +653,7 @@ impl TuiMcpDetailKind {
             Self::Tokens => "Tokens",
             Self::Cost => "Cost",
             Self::Cache => "Cache",
+            Self::Diff => "Diff",
             Self::Clear => "Clear",
             Self::Model => "Model",
             Self::Provider => "Provider",
@@ -693,6 +696,7 @@ impl TuiMcpDetailKind {
             Self::Tokens => Self::Manager,
             Self::Cost => Self::Manager,
             Self::Cache => Self::Manager,
+            Self::Diff => Self::Manager,
             Self::Clear => Self::Manager,
             Self::Model => Self::Manager,
             Self::Provider => Self::Manager,
@@ -735,6 +739,7 @@ impl TuiMcpDetailKind {
             Self::Tokens => Self::Manager,
             Self::Cost => Self::Manager,
             Self::Cache => Self::Manager,
+            Self::Diff => Self::Manager,
             Self::Clear => Self::Manager,
             Self::Model => Self::Manager,
             Self::Provider => Self::Manager,
@@ -979,6 +984,12 @@ pub enum TuiExportCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TuiClearCommand {
     Clear,
+    Help,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TuiDiffCommand {
+    Show,
     Help,
 }
 
@@ -1574,6 +1585,18 @@ fn parse_tui_clear_command(line: &str) -> Option<Result<TuiClearCommand, String>
     }
 }
 
+fn parse_tui_diff_command(line: &str) -> Option<Result<TuiDiffCommand, String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/diff")
+        .or_else(|| strip_tui_command_prefix(trimmed, "diff"))?;
+    let args = rest.split_whitespace().collect::<Vec<_>>();
+    match args.as_slice() {
+        [] | ["show"] => Some(Ok(TuiDiffCommand::Show)),
+        ["help" | "--help" | "-h"] => Some(Ok(TuiDiffCommand::Help)),
+        _ => Some(Err("usage: diff or /diff".to_string())),
+    }
+}
+
 fn parse_note_index_arg(value: &str) -> Option<usize> {
     value.parse::<usize>().ok().filter(|index| *index > 0)
 }
@@ -1727,6 +1750,9 @@ pub enum TuiAction {
     ClearConversation {
         session_id: String,
         previous_thread_id: Option<String>,
+    },
+    ShowDiff {
+        workspace: String,
     },
     Hooks {
         command: TuiHooksCommand,
@@ -1972,6 +1998,13 @@ const TUI_HELP_COMMANDS: &[TuiHelpCommandInfo] = &[
     },
     TuiHelpCommandInfo {
         category: "Workbench",
+        name: "diff",
+        aliases: &[],
+        usage: "/diff",
+        description: "Show changed files and git diff stat for the selected workspace.",
+    },
+    TuiHelpCommandInfo {
+        category: "Workbench",
         name: "clear",
         aliases: &[],
         usage: "/clear",
@@ -2184,6 +2217,8 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "exit",
     "quit",
     "q",
+    "diff",
+    "diff help",
     "clear",
     "clear help",
     "plan",
@@ -2398,6 +2433,8 @@ const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
     "/?",
     "/settings",
     "/config",
+    "/diff",
+    "/diff help",
     "/clear",
     "/clear help",
     "/memory",
@@ -4822,6 +4859,19 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(command) = parse_tui_diff_command(&content) {
+                    match command {
+                        Ok(command) => {
+                            self.handle_diff_command(command);
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some(command) = parse_tui_hooks_command(&content) {
                     match command {
                         Ok(command) => {
@@ -5411,6 +5461,15 @@ impl TuiApp {
         if let Some(command) = parse_tui_clear_command(command) {
             match command {
                 Ok(command) => self.handle_clear_command(command),
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_diff_command(command) {
+            match command {
+                Ok(command) => self.handle_diff_command(command),
                 Err(message) => {
                     self.status = message;
                 }
@@ -6320,7 +6379,7 @@ impl TuiApp {
             }
             ["cancel"] | ["stop"] => self.request_cancel_run(),
             ["help"] => {
-                self.status = "commands: mode plan|agent|yolo, clear, goal [objective|clear], sessions [filter], threads [filter], task <summary>|select all|select clear|pause [id]|resume [id]|cancel [id]|bulk pause|bulk resume|bulk cancel, shell <cmd>|list|show|wait|poll|stdin|close-stdin|cancel, stash [list|pop|clear], memory [show|path|clear|edit|help], anchor [text|list|remove], queue [list|edit|drop|clear], share, export [path], mcp manager|list|tools|prompts|resources|resource-templates|close|init|add|enable|disable|remove|user add|user enable|user disable|user remove|validate, diagnostics [--changed|paths...], restore snapshot|list|show, revert turn <id> [--apply], compact, approval, cancel".to_string();
+                self.status = "commands: mode plan|agent|yolo, diff, clear, goal [objective|clear], sessions [filter], threads [filter], task <summary>|select all|select clear|pause [id]|resume [id]|cancel [id]|bulk pause|bulk resume|bulk cancel, shell <cmd>|list|show|wait|poll|stdin|close-stdin|cancel, stash [list|pop|clear], memory [show|path|clear|edit|help], anchor [text|list|remove], queue [list|edit|drop|clear], share, export [path], mcp manager|list|tools|prompts|resources|resource-templates|close|init|add|enable|disable|remove|user add|user enable|user disable|user remove|validate, diagnostics [--changed|paths...], restore snapshot|list|show, revert turn <id> [--apply], compact, approval, cancel".to_string();
             }
             _ => {
                 self.status = format!("unknown command: {command}");
@@ -7316,6 +7375,50 @@ impl TuiApp {
         detail
     }
 
+    fn handle_diff_command(&mut self, command: TuiDiffCommand) {
+        match command {
+            TuiDiffCommand::Show => self.request_diff_workspace(),
+            TuiDiffCommand::Help => {
+                self.set_mcp_detail(TuiMcpDetailKind::Diff, self.render_diff_help_detail());
+                self.status = "diff help shown".to_string();
+            }
+        }
+    }
+
+    fn request_diff_workspace(&mut self) {
+        let workspace = self
+            .selected_session()
+            .map(|session| session.workspace.clone())
+            .unwrap_or_else(|| ".".to_string());
+        self.pending_actions.push(TuiAction::ShowDiff {
+            workspace: workspace.clone(),
+        });
+        self.status = format!("diff queued: {workspace}");
+    }
+
+    fn render_diff_help_detail(&self) -> String {
+        let workspace = self
+            .selected_session()
+            .map(|session| session.workspace.as_str())
+            .unwrap_or(".");
+        let mut detail = String::new();
+        let _ = writeln!(detail, "DeepSeekCode Diff");
+        let _ = writeln!(detail, "=================");
+        let _ = writeln!(detail);
+        let _ = writeln!(
+            detail,
+            "/diff shows changed tracked files and `git diff --stat` for the selected workspace."
+        );
+        let _ = writeln!(detail);
+        push_status_row(&mut detail, "Workspace:", workspace);
+        let _ = writeln!(detail);
+        let _ = writeln!(
+            detail,
+            "This is read-only and does not include untracked files."
+        );
+        detail
+    }
+
     fn handle_goal_command(&mut self, command: TuiGoalCommand) {
         match command {
             TuiGoalCommand::Show => {
@@ -7490,6 +7593,7 @@ impl TuiApp {
         let _ = writeln!(detail, "Config Commands");
         let _ = writeln!(detail, "---------------");
         let _ = writeln!(detail, "- /mode [agent|plan|yolo|1|2|3]");
+        let _ = writeln!(detail, "- /diff");
         let _ = writeln!(detail, "- /clear");
         let _ = writeln!(detail, "- /theme [dark|light|grayscale|system]");
         let _ = writeln!(detail, "- /verbose [on|off|toggle|show]");
@@ -14236,6 +14340,47 @@ mod tests {
         let (kind, detail) = app.mcp_detail.as_ref().expect("clear help detail");
         assert_eq!(*kind, TuiMcpDetailKind::Clear);
         assert!(detail.contains("/clear starts a fresh active thread"));
+        assert_eq!(app.composer, "");
+    }
+
+    #[test]
+    fn diff_command_queues_workspace_diff() {
+        let mut app = TuiApp::with_runtime(
+            vec![TuiSession {
+                id: "session-one".to_string(),
+                title: "One".to_string(),
+                workspace: "/workspace/project".to_string(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-one".to_string()),
+                thread_count: 1,
+            }],
+            vec![TuiThread {
+                id: "thread-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                title: "First thread".to_string(),
+                mode: "agent".to_string(),
+                status: "active".to_string(),
+                latest_turn_id: None,
+                event_seq: 1,
+            }],
+            Vec::new(),
+        );
+
+        run_palette_command(&mut app, "diff");
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::ShowDiff {
+                workspace: "/workspace/project".to_string(),
+            }]
+        );
+
+        app.composer_focused = true;
+        app.composer = "/diff help".to_string();
+        app.composer_cursor = app.composer.len();
+        assert!(app.handle_key(KeyCode::Enter));
+        let (kind, detail) = app.mcp_detail.as_ref().expect("diff help detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Diff);
+        assert!(detail.contains("/diff shows changed tracked files"));
         assert_eq!(app.composer, "");
     }
 
