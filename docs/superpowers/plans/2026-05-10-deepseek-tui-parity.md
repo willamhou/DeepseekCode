@@ -413,6 +413,9 @@ Landed first slice:
 - local file-backed TUI now supports DeepSeek-TUI-style `/cycles`, `/cycle <n>`,
   and `/recall <query>` over DeepSeekCode durable compaction summaries and the
   existing `recall_archive` runtime search tool
+- local file-backed TUI now supports DeepSeek-TUI-style `/review <target>` as a
+  built-in before custom slash fallback, rendering deterministic `review` tool
+  JSON in the detail panel
 - local file-backed TUI now supports DeepSeek-TUI-style `/clear` conversation
   reset by creating and switching to a fresh empty active thread in the selected
   durable session without deleting older thread history

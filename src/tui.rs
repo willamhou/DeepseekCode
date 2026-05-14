@@ -571,6 +571,7 @@ pub enum TuiMcpDetailKind {
     Retry,
     Cycles,
     Recall,
+    Review,
     Status,
     Tokens,
     Cost,
@@ -628,6 +629,7 @@ impl TuiMcpDetailKind {
             Self::Retry => "retry",
             Self::Cycles => "cycles",
             Self::Recall => "recall",
+            Self::Review => "review",
             Self::Status => "status",
             Self::Tokens => "tokens",
             Self::Cost => "cost",
@@ -685,6 +687,7 @@ impl TuiMcpDetailKind {
             Self::Retry => "Retry",
             Self::Cycles => "Cycles",
             Self::Recall => "Recall",
+            Self::Review => "Review",
             Self::Status => "Status",
             Self::Tokens => "Tokens",
             Self::Cost => "Cost",
@@ -742,6 +745,7 @@ impl TuiMcpDetailKind {
             Self::Retry => Self::Manager,
             Self::Cycles => Self::Manager,
             Self::Recall => Self::Manager,
+            Self::Review => Self::Manager,
             Self::Status => Self::Manager,
             Self::Tokens => Self::Manager,
             Self::Cost => Self::Manager,
@@ -799,6 +803,7 @@ impl TuiMcpDetailKind {
             Self::Retry => Self::Manager,
             Self::Cycles => Self::Manager,
             Self::Recall => Self::Manager,
+            Self::Review => Self::Manager,
             Self::Status => Self::Manager,
             Self::Tokens => Self::Manager,
             Self::Cost => Self::Manager,
@@ -1111,6 +1116,12 @@ pub enum TuiCycleCommand {
     List,
     Show { index: usize },
     Recall { query: String },
+    Help,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TuiReviewCommand {
+    Review { target: String },
     Help,
 }
 
@@ -1959,6 +1970,22 @@ fn parse_tui_cycle_command(line: &str) -> Option<Result<TuiCycleCommand, String>
     None
 }
 
+fn parse_tui_review_command(line: &str) -> Option<Result<TuiReviewCommand, String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/review")
+        .or_else(|| strip_tui_command_prefix(trimmed, "review"))?;
+    let target = rest.trim();
+    if matches!(target, "help" | "--help" | "-h") {
+        return Some(Ok(TuiReviewCommand::Help));
+    }
+    if target.is_empty() {
+        return Some(Err("usage: review <target> or /review <target>".to_string()));
+    }
+    Some(Ok(TuiReviewCommand::Review {
+        target: target.to_string(),
+    }))
+}
+
 fn parse_tui_clear_command(line: &str) -> Option<Result<TuiClearCommand, String>> {
     let trimmed = line.trim();
     let rest = strip_tui_command_prefix(trimmed, "/clear")
@@ -2221,6 +2248,10 @@ pub enum TuiAction {
         workspace: String,
         thread_id: Option<String>,
         query: String,
+    },
+    ReviewTarget {
+        workspace: String,
+        target: String,
     },
     RunCustomSlashCommand {
         thread_id: String,
@@ -2611,6 +2642,13 @@ const TUI_HELP_COMMANDS: &[TuiHelpCommandInfo] = &[
         aliases: &[],
         usage: "/recall <query>",
         description: "Search durable runtime archives with recall_archive.",
+    },
+    TuiHelpCommandInfo {
+        category: "Runtime Work",
+        name: "review",
+        aliases: &[],
+        usage: "/review <target>",
+        description: "Run deterministic local code review for a file or diff target.",
     },
     TuiHelpCommandInfo {
         category: "Workbench",
@@ -3191,6 +3229,8 @@ const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
     "/cycles help",
     "/cycle ",
     "/recall ",
+    "/review ",
+    "/review help",
     "/mode",
     "/mode agent",
     "/mode plan",
@@ -5705,6 +5745,19 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(command) = parse_tui_review_command(&content) {
+                    match command {
+                        Ok(command) => {
+                            self.handle_review_command(command);
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some(command) = parse_tui_clear_command(&content) {
                     match command {
                         Ok(command) => {
@@ -6436,6 +6489,15 @@ impl TuiApp {
         if let Some(command) = parse_tui_cycle_command(command) {
             match command {
                 Ok(command) => self.handle_cycle_command(command),
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_review_command(command) {
+            match command {
+                Ok(command) => self.handle_review_command(command),
                 Err(message) => {
                     self.status = message;
                 }
@@ -9236,6 +9298,49 @@ impl TuiApp {
         detail
     }
 
+    fn handle_review_command(&mut self, command: TuiReviewCommand) {
+        match command {
+            TuiReviewCommand::Review { target } => self.request_review_target(target),
+            TuiReviewCommand::Help => {
+                self.set_mcp_detail(TuiMcpDetailKind::Review, self.render_review_help_detail());
+                self.status = "review help shown".to_string();
+            }
+        }
+    }
+
+    fn request_review_target(&mut self, target: String) {
+        let workspace = self
+            .selected_session()
+            .map(|session| session.workspace.clone())
+            .unwrap_or_else(|| ".".to_string());
+        self.pending_actions.push(TuiAction::ReviewTarget {
+            workspace,
+            target: target.clone(),
+        });
+        self.status = format!("review queued: {}", clip_line(&target, 60));
+    }
+
+    fn render_review_help_detail(&self) -> String {
+        let mut detail = String::new();
+        let _ = writeln!(detail, "DeepSeekCode Review");
+        let _ = writeln!(detail, "===================");
+        let _ = writeln!(detail);
+        let _ = writeln!(
+            detail,
+            "/review <target> runs the deterministic local review tool for a file, diff, or supported review target."
+        );
+        let _ = writeln!(detail);
+        let _ = writeln!(detail, "Commands");
+        let _ = writeln!(detail, "--------");
+        let _ = writeln!(detail, "- /review <target>");
+        let _ = writeln!(detail, "- /review help");
+        if let Some(session) = self.selected_session() {
+            let _ = writeln!(detail);
+            push_status_row(&mut detail, "Workspace:", &session.workspace);
+        }
+        detail
+    }
+
     fn handle_clear_command(&mut self, command: TuiClearCommand) {
         match command {
             TuiClearCommand::Clear => self.request_clear_conversation(),
@@ -9527,6 +9632,7 @@ impl TuiApp {
         let _ = writeln!(detail, "- /undo");
         let _ = writeln!(detail, "- /retry");
         let _ = writeln!(detail, "- /cycles | /cycle <n> | /recall <query>");
+        let _ = writeln!(detail, "- /review <target>");
         let _ = writeln!(detail, "- /goal [objective [budget: N]|clear]");
         let _ = writeln!(detail, "- /model [name|list]");
         let _ = writeln!(detail, "- /provider [name [model]|list]");
@@ -15668,17 +15774,17 @@ mod tests {
             Vec::new(),
         );
 
-        run_palette_command(&mut app, "/review src/lib.rs --strict");
+        run_palette_command(&mut app, "/inspect src/lib.rs --strict");
 
         assert_eq!(
             app.drain_actions(),
             vec![TuiAction::RunCustomSlashCommand {
                 thread_id: "thread-one".to_string(),
-                command: "/review".to_string(),
+                command: "/inspect".to_string(),
                 args: vec!["src/lib.rs".to_string(), "--strict".to_string()],
             }]
         );
-        assert_eq!(app.status, "custom slash command queued: /review");
+        assert_eq!(app.status, "custom slash command queued: /inspect");
     }
 
     #[test]
@@ -16883,6 +16989,49 @@ mod tests {
     }
 
     #[test]
+    fn review_command_queues_local_review_before_custom_slash_fallback() {
+        let mut app = TuiApp::with_runtime(
+            vec![TuiSession {
+                id: "session-1".to_string(),
+                title: "Session".to_string(),
+                workspace: "/tmp/deepseek-review".to_string(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-1".to_string()),
+                thread_count: 1,
+            }],
+            vec![TuiThread {
+                id: "thread-1".to_string(),
+                session_id: Some("session-1".to_string()),
+                title: "Thread".to_string(),
+                mode: "agent".to_string(),
+                status: "idle".to_string(),
+                latest_turn_id: None,
+                event_seq: 0,
+            }],
+            Vec::new(),
+        );
+
+        run_palette_command(&mut app, "/review src/lib.rs --strict");
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::ReviewTarget {
+                workspace: "/tmp/deepseek-review".to_string(),
+                target: "src/lib.rs --strict".to_string(),
+            }]
+        );
+        assert_eq!(app.status, "review queued: src/lib.rs --strict");
+
+        run_palette_command(&mut app, "review help");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("review help detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Review);
+        assert!(detail.contains("/review <target> runs"));
+        assert!(detail.contains("/tmp/deepseek-review"));
+
+        run_palette_command(&mut app, "review");
+        assert_eq!(app.status, "usage: review <target> or /review <target>");
+    }
+
+    #[test]
     fn clear_command_queues_durable_session_reset() {
         let mut app = TuiApp::with_runtime(
             vec![TuiSession {
@@ -17966,10 +18115,9 @@ mod tests {
 
         assert_eq!(
             app.drain_actions(),
-            vec![TuiAction::RunCustomSlashCommand {
-                thread_id: "thread-one".to_string(),
-                command: "/review".to_string(),
-                args: vec!["src/lib.rs".to_string()],
+            vec![TuiAction::ReviewTarget {
+                workspace: ".".to_string(),
+                target: "src/lib.rs".to_string(),
             }]
         );
 

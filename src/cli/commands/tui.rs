@@ -57,6 +57,7 @@ use crate::tools::exec_shell::{
     ExecShellTool, ExecShellWaitTool,
 };
 use crate::tools::recall_archive::RecallArchiveTool;
+use crate::tools::review::ReviewTool;
 use crate::tools::types::{Tool, ToolInput};
 use crate::tui::{
     discover_custom_slash_commands_dir, render_once, run_interactive,
@@ -796,8 +797,11 @@ fn handle_tui_http_action(
         TuiAction::UndoConversation { .. }
         | TuiAction::RetryUserMessage { .. }
         | TuiAction::SubmitEditedUserMessage { .. }
-        | TuiAction::RecallArchive { .. } => {
-            app.set_status("undo/retry/recall commands require local file-backed TUI".to_string());
+        | TuiAction::RecallArchive { .. }
+        | TuiAction::ReviewTarget { .. } => {
+            app.set_status(
+                "undo/retry/recall/review commands require local file-backed TUI".to_string(),
+            );
         }
         TuiAction::Note { .. } => {
             app.set_status("note commands require local file-backed TUI".to_string());
@@ -1257,6 +1261,7 @@ fn mcp_detail_summary(
         TuiMcpDetailKind::Retry => Err(app_error("retry details are not MCP details")),
         TuiMcpDetailKind::Cycles => Err(app_error("cycle details are not MCP details")),
         TuiMcpDetailKind::Recall => Err(app_error("recall details are not MCP details")),
+        TuiMcpDetailKind::Review => Err(app_error("review details are not MCP details")),
         TuiMcpDetailKind::Status => Err(app_error("status details are not MCP details")),
         TuiMcpDetailKind::Tokens => Err(app_error("token details are not MCP details")),
         TuiMcpDetailKind::Cost => Err(app_error("cost details are not MCP details")),
@@ -1739,6 +1744,9 @@ fn handle_tui_action_with_live(
             query,
         } => {
             run_tui_recall_archive(app, config, &workspace, thread_id.as_deref(), &query);
+        }
+        TuiAction::ReviewTarget { workspace, target } => {
+            run_tui_review_target(app, &workspace, &target);
         }
         TuiAction::RunCustomSlashCommand {
             thread_id,
@@ -2628,6 +2636,35 @@ fn run_tui_recall_archive(
                 format!("Recall Archive\n==============\n\nQuery: {query}\n\n{error}"),
             );
             app.set_status(format!("recall failed: {error}"));
+        }
+    }
+}
+
+fn run_tui_review_target(app: &mut TuiApp, workspace: &str, target: &str) {
+    let input = ToolInput::new()
+        .with_arg("target", target.to_string())
+        .with_arg("cwd", workspace.to_string())
+        .with_arg("max_chars", "20000".to_string());
+    match ReviewTool::default().execute(input) {
+        Ok(output) => {
+            app.set_mcp_detail(
+                TuiMcpDetailKind::Review,
+                format!(
+                    "Review\n======\n\nWorkspace: {}\nTarget: {}\n\n{}",
+                    workspace, target, output.summary
+                ),
+            );
+            app.set_status(format!(
+                "review complete: {}",
+                last_nonempty_line(&output.summary, "ok")
+            ));
+        }
+        Err(error) => {
+            app.set_mcp_detail(
+                TuiMcpDetailKind::Review,
+                format!("Review\n======\n\nWorkspace: {workspace}\nTarget: {target}\n\n{error}"),
+            );
+            app.set_status(format!("review failed: {error}"));
         }
     }
 }
@@ -8645,6 +8682,41 @@ shell_allowlist = ["git diff"]
         assert!(output.contains("invoice reconciliation"));
         assert!(output.contains("\"hits\""));
         assert!(output.contains("recall complete"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn handle_tui_action_runs_review_target() {
+        let root = temp_root("review-action");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(
+            root.join("src/lib.rs"),
+            "fn demo(value: Option<u8>) { println!(\"{:?}\", value.unwrap()); }\n",
+        )
+        .unwrap();
+        let store = RuntimeStore::new(root.join(".dscode/runtime"));
+        let mut app = TuiApp::new(Vec::new());
+
+        handle_tui_action(
+            &store,
+            None,
+            &mut app,
+            TuiAction::ReviewTarget {
+                workspace: root.display().to_string(),
+                target: "src/lib.rs".to_string(),
+            },
+        )
+        .unwrap();
+
+        let (kind, detail) = app.mcp_detail_for_test().expect("review detail");
+        assert_eq!(kind, TuiMcpDetailKind::Review);
+        assert!(detail.contains("src/lib.rs"));
+        assert!(detail.contains("\"panic-prone error handling\""));
+
+        let output = render_once(&app, 160, 48).unwrap();
+        assert!(output.contains("Review"));
+        assert!(output.contains("review complete"));
 
         let _ = fs::remove_dir_all(root);
     }
