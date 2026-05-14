@@ -497,6 +497,7 @@ The first slice supports:
 - `session/tools/list`
 - `session/tools/call`
 - `session/rlm/subscribe`
+- `session/shell/subscribe`
 - `session/prompt`
 - `session/cancel`
 - `shutdown`
@@ -546,6 +547,13 @@ threads. It reads mirrored runtime `rlm_live_event` records after `cursor` /
 `tool_call_update` payloads, and returns `nextCursor` based on the runtime
 event sequence. This gives ACP clients the same live RLM subscription path that
 HTTP clients consume through aggregate runtime SSE.
+`session/shell/subscribe` is a DeepSeekCode ACP extension for shell-supervisor
+terminal event logs. It reads `{session.cwd}/.dscode/shell-jobs/{taskId}/`
+`terminal-events.jsonl` after `cursor` / `sinceSeq`, optionally waits with
+`waitMs` and `pollMs`, emits ACP `session/update` notifications using standard
+`tool_call_update` payloads, and returns `nextCursor` based on the terminal
+event sequence. This gives ACP clients the same shell terminal stream that HTTP
+clients consume through `/v1/shell/jobs/{task_id}/events/stream`.
 
 ```bash
 deepseek serve --acp

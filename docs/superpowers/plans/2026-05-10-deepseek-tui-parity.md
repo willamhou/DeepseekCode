@@ -1019,8 +1019,9 @@ Landed first slice:
 - `deepseek serve --acp` now runs an Agent Client Protocol stdio adapter:
   `initialize`, `session/new`, `session/list`, `session/load`,
   checkpoint read/restore methods, `session/tools/list`,
-  `session/tools/call`, `session/rlm/subscribe`, `session/prompt`,
-  `session/cancel`, and `shutdown`
+  `session/tools/call`, `session/rlm/subscribe`,
+  `session/shell/subscribe`, `session/prompt`, `session/cancel`, and
+  `shutdown`
 - ACP `session/list` exposes durable runtime sessions and `session/load` maps
   a runtime session/thread workspace into an in-process ACP session
 - Loaded ACP `session/prompt` records user/assistant durable turns and message
@@ -1073,6 +1074,10 @@ Landed first slice:
   mirrored `rlm_live_event` runtime events by cursor and receive standard
   `session/update` `tool_call` / `tool_call_update` notifications before the
   final `nextCursor` response
+- ACP `session/shell/subscribe` now lets ACP clients consume existing
+  shell-supervisor terminal event logs by terminal-event cursor and receive
+  standard `session/update` `tool_call_update` notifications before the final
+  `nextCursor` response
 - `deepseek serve --acp --workspace <path>` starts ACP from an explicit
   workspace
 - `deepseek mcp add/get/remove/enable/disable/validate` covers common MCP
@@ -1106,8 +1111,10 @@ Landed first slice:
 
 Remaining:
 
-- no open Phase G2 MCP/ACP parity gaps identified; continue monitoring upstream
-  MCP/ACP protocol drift and client interoperability reports
+- no open general Phase G2 MCP/ACP parity gaps identified; shell-supervisor
+  MCP-side terminal push/progress remains tracked under the shell hard-slice
+  residuals, and upstream protocol drift/client interoperability still need
+  monitoring
 
 ### Phase H: Packaging
 

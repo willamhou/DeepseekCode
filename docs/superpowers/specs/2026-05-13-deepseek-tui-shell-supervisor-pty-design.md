@@ -202,5 +202,6 @@ the first Linux `native-supervisor` PTY backend have landed. Normal
 `exec_shell tty=true` still uses `script`; shell-supervisor `tty=true` starts
 own a native PTY master, write `terminal-events.jsonl`, and support live
 `TIOCSWINSZ` resize through the in-process supervisor. Remaining hard slices
-are MCP/ACP attach push frames beyond the HTTP shell terminal SSE endpoint,
-service-manager lifecycle coverage, and Windows ConPTY.
+are MCP-side attach push/progress beyond the HTTP shell terminal SSE endpoint
+and ACP `session/shell/subscribe`, service-manager lifecycle coverage, and
+Windows ConPTY.

@@ -4672,6 +4672,9 @@ fn acp_handle_request(
         "session/rlm/subscribe" => Ok(AcpDispatch::Responses(acp_session_rlm_subscribe_responses(
             params, state,
         )?)),
+        "session/shell/subscribe" => Ok(AcpDispatch::Responses(
+            acp_session_shell_subscribe_responses(params, state)?,
+        )),
         "session/prompt" => {
             let (session_id, output) = acp_prompt(params, state)?;
             let mut responses = Vec::new();
@@ -4747,6 +4750,16 @@ fn acp_initialize_result(client_protocol_version: Option<u64>) -> JsonValue {
                             object([
                                 ("subscribe", JsonValue::Bool(true)),
                                 ("cursor", JsonValue::String("runtime_event_seq".to_string())),
+                            ]),
+                        ),
+                        (
+                            "shellTerminalEvents",
+                            object([
+                                ("subscribe", JsonValue::Bool(true)),
+                                (
+                                    "cursor",
+                                    JsonValue::String("terminal_event_seq".to_string()),
+                                ),
                             ]),
                         ),
                     ]),
@@ -5038,6 +5051,75 @@ fn acp_session_rlm_subscribe_responses(
     Ok(responses)
 }
 
+fn acp_session_shell_subscribe_responses(
+    params: &BTreeMap<String, JsonValue>,
+    state: &AcpStdioState,
+) -> Result<Vec<JsonValue>, (i64, String)> {
+    let session_id = acp_session_id_from_params(params)?;
+    let session = acp_session_from_params(params, state)?;
+    let task_id = acp_string_param(params, &["taskId", "task_id"])?
+        .ok_or_else(|| (-32602, "taskId is required".to_string()))?;
+    validate_record_id(task_id).map_err(|error| (-32602, error.to_string()))?;
+    let cursor = acp_u64_param(params, &["cursor", "sinceSeq", "since_seq"])?.unwrap_or(0);
+    let limit = acp_u64_param(params, &["limit"])?
+        .map(|limit| limit.clamp(1, 500) as usize)
+        .unwrap_or(50);
+    let limit_bytes = acp_u64_param(params, &["limitBytes", "limit_bytes"])?
+        .map(|limit| limit.clamp(1, 100_000) as usize)
+        .unwrap_or(20_000);
+    let wait_ms = acp_u64_param(params, &["waitMs", "wait_ms"])?
+        .map(|wait| wait.min(SSE_MAX_WAIT_MS))
+        .unwrap_or(0);
+    let poll_ms = acp_u64_param(params, &["pollMs", "poll_ms"])?
+        .map(|poll| poll.clamp(SSE_MIN_POLL_MS, 5_000))
+        .unwrap_or(100);
+    let tail = acp_bool_param(params, &["tail"]);
+    let cwd = session.cwd.display().to_string();
+    let snapshot = read_shell_terminal_events_with_wait(
+        &cwd,
+        task_id,
+        cursor,
+        limit_bytes,
+        tail,
+        wait_ms,
+        poll_ms,
+    )
+    .map_err(|error| {
+        let message = error.to_string();
+        if message.contains("unknown background shell task")
+            || message.contains("has no terminal event log")
+        {
+            (-32602, message)
+        } else {
+            (-32603, message)
+        }
+    })?;
+
+    let mut events = snapshot.events.clone();
+    let limit_truncated = events.len() > limit;
+    if limit_truncated {
+        events.truncate(limit);
+    }
+    let next_cursor = events.iter().map(|event| event.seq).max().unwrap_or(cursor);
+    let timed_out = events.is_empty() && wait_ms > 0 && snapshot.running;
+    let truncated = snapshot.truncated || limit_truncated;
+    let mut responses = events
+        .iter()
+        .map(|event| acp_shell_terminal_event_update(session_id, session, &snapshot, event))
+        .collect::<Vec<_>>();
+    responses.push(jsonrpc_success_response_without_id(object([
+        ("taskId", JsonValue::String(task_id.to_string())),
+        ("cursor", JsonValue::Number(cursor.to_string())),
+        ("nextCursor", JsonValue::Number(next_cursor.to_string())),
+        ("status", JsonValue::String(snapshot.status)),
+        ("running", JsonValue::Bool(snapshot.running)),
+        ("updates", JsonValue::Number(events.len().to_string())),
+        ("truncated", JsonValue::Bool(truncated)),
+        ("timedOut", JsonValue::Bool(timed_out)),
+    ])));
+    Ok(responses)
+}
+
 fn acp_session_id_from_params(params: &BTreeMap<String, JsonValue>) -> Result<&str, (i64, String)> {
     params
         .get("sessionId")
@@ -5052,6 +5134,29 @@ fn acp_tool_name_from_params(params: &BTreeMap<String, JsonValue>) -> Result<&st
         .and_then(json_as_string)
         .filter(|name| !name.trim().is_empty())
         .ok_or_else(|| (-32602, "name is required".to_string()))
+}
+
+fn acp_string_param<'a>(
+    params: &'a BTreeMap<String, JsonValue>,
+    names: &[&str],
+) -> Result<Option<&'a str>, (i64, String)> {
+    for name in names {
+        let Some(value) = params.get(*name) else {
+            continue;
+        };
+        return json_as_string(value)
+            .filter(|value| !value.trim().is_empty())
+            .map(Some)
+            .ok_or_else(|| (-32602, format!("{name} must be a non-empty string")));
+    }
+    Ok(None)
+}
+
+fn acp_bool_param(params: &BTreeMap<String, JsonValue>, names: &[&str]) -> bool {
+    names
+        .iter()
+        .find_map(|name| params.get(*name))
+        .is_some_and(|value| acp_json_truthy(Some(value)))
 }
 
 fn acp_u64_param(
@@ -6293,6 +6398,175 @@ fn acp_rlm_live_event_meta(event: &RuntimeEvent, rlm_session_id: &str) -> JsonVa
                 ("seq", JsonValue::Number(event.seq.to_string())),
             ]),
         ),
+    ])
+}
+
+fn acp_shell_terminal_event_update(
+    session_id: &str,
+    session: &AcpSession,
+    snapshot: &ShellTerminalEventSnapshot,
+    event: &ShellTerminalEvent,
+) -> JsonValue {
+    let session_update = if event.kind == "started" {
+        "tool_call"
+    } else {
+        "tool_call_update"
+    };
+    let mut update = BTreeMap::new();
+    update.insert(
+        "sessionUpdate".to_string(),
+        JsonValue::String(session_update.to_string()),
+    );
+    update.insert(
+        "toolCallId".to_string(),
+        JsonValue::String(acp_shell_terminal_tool_call_id(&snapshot.task_id)),
+    );
+    update.insert(
+        "title".to_string(),
+        JsonValue::String(format!("Shell {}", event.kind)),
+    );
+    update.insert("kind".to_string(), JsonValue::String("execute".to_string()));
+    update.insert(
+        "status".to_string(),
+        JsonValue::String(acp_shell_terminal_event_status(event).to_string()),
+    );
+    update.insert(
+        "content".to_string(),
+        JsonValue::Array(vec![object([
+            ("type", JsonValue::String("content".to_string())),
+            (
+                "content",
+                object([
+                    ("type", JsonValue::String("text".to_string())),
+                    (
+                        "text",
+                        JsonValue::String(acp_shell_terminal_event_summary(snapshot, event)),
+                    ),
+                ]),
+            ),
+        ])]),
+    );
+    if session_update == "tool_call" {
+        update.insert(
+            "rawInput".to_string(),
+            object([
+                ("taskId", JsonValue::String(snapshot.task_id.clone())),
+                ("cursor", JsonValue::Number(snapshot.cursor.to_string())),
+            ]),
+        );
+    }
+    update.insert(
+        "rawOutput".to_string(),
+        acp_shell_terminal_raw_output(snapshot, event),
+    );
+    update.insert(
+        "_meta".to_string(),
+        acp_shell_terminal_event_meta(session, snapshot, event),
+    );
+    acp_structured_session_update(session_id, JsonValue::Object(update))
+}
+
+fn acp_shell_terminal_event_summary(
+    snapshot: &ShellTerminalEventSnapshot,
+    event: &ShellTerminalEvent,
+) -> String {
+    let timestamp = event
+        .timestamp
+        .as_deref()
+        .map(|value| format!(" {value}"))
+        .unwrap_or_default();
+    if event.preview.is_empty() {
+        format!(
+            "shell {}: #{} {}{}",
+            snapshot.task_id, event.seq, event.kind, timestamp
+        )
+    } else {
+        format!(
+            "shell {}: #{} {}{} {}",
+            snapshot.task_id,
+            event.seq,
+            event.kind,
+            timestamp,
+            event.preview.trim_end()
+        )
+    }
+}
+
+fn acp_shell_terminal_event_status(event: &ShellTerminalEvent) -> &'static str {
+    match event.kind.as_str() {
+        "exit" => "completed",
+        "cancelled" | "failed" => "failed",
+        _ => "in_progress",
+    }
+}
+
+fn acp_shell_terminal_tool_call_id(task_id: &str) -> String {
+    format!("shell_{}", acp_stable_id_segment(task_id))
+}
+
+fn acp_shell_terminal_raw_output(
+    snapshot: &ShellTerminalEventSnapshot,
+    event: &ShellTerminalEvent,
+) -> JsonValue {
+    object([
+        (
+            "schema",
+            JsonValue::String("deepseek.exec_shell.terminal_event.v1".to_string()),
+        ),
+        ("taskId", JsonValue::String(snapshot.task_id.clone())),
+        ("status", JsonValue::String(snapshot.status.clone())),
+        ("cursor", JsonValue::Number(snapshot.cursor.to_string())),
+        (
+            "nextCursor",
+            JsonValue::Number(snapshot.next_cursor.to_string()),
+        ),
+        ("seq", JsonValue::Number(event.seq.to_string())),
+        ("kind", JsonValue::String(event.kind.clone())),
+        (
+            "timestamp",
+            event
+                .timestamp
+                .as_ref()
+                .map(|value| JsonValue::String(value.clone()))
+                .unwrap_or(JsonValue::Null),
+        ),
+        ("preview", JsonValue::String(event.preview.clone())),
+        ("truncated", JsonValue::Bool(snapshot.truncated)),
+        ("running", JsonValue::Bool(snapshot.running)),
+    ])
+}
+
+fn acp_shell_terminal_event_meta(
+    session: &AcpSession,
+    snapshot: &ShellTerminalEventSnapshot,
+    event: &ShellTerminalEvent,
+) -> JsonValue {
+    let mut runtime = BTreeMap::new();
+    if let Some(session_id) = session.runtime_session_id.as_deref() {
+        runtime.insert(
+            "sessionId".to_string(),
+            JsonValue::String(session_id.to_string()),
+        );
+    }
+    if let Some(thread_id) = session.runtime_thread_id.as_deref() {
+        runtime.insert(
+            "threadId".to_string(),
+            JsonValue::String(thread_id.to_string()),
+        );
+    }
+    object([
+        (
+            "deepseek",
+            object([
+                (
+                    "kind",
+                    JsonValue::String("deepseek.acp.shell_terminal_event.v1".to_string()),
+                ),
+                ("taskId", JsonValue::String(snapshot.task_id.clone())),
+                ("seq", JsonValue::Number(event.seq.to_string())),
+            ]),
+        ),
+        ("runtime", JsonValue::Object(runtime)),
     ])
 }
 
@@ -9123,6 +9397,60 @@ mod tests {
         }
     }
 
+    fn write_shell_terminal_event_job(root: &Path, task_id: &str) {
+        let job_dir = root.join(".dscode/shell-jobs").join(task_id);
+        fs::create_dir_all(&job_dir).unwrap();
+        fs::write(
+            job_dir.join("terminal-events.jsonl"),
+            "{\"seq\":1,\"kind\":\"output\",\"timestamp\":\"epoch+1\",\"preview\":\"hello from pty\"}\n{\"seq\":2,\"kind\":\"resize\",\"timestamp\":\"epoch+2\",\"rows\":33,\"cols\":101}\n",
+        )
+        .unwrap();
+        let manifest = json_object([
+            (
+                "kind",
+                JsonValue::String("deepseek.exec_shell.job.v1".to_string()),
+            ),
+            ("id", JsonValue::String(task_id.to_string())),
+            ("command", JsonValue::String("printf hello".to_string())),
+            ("cwd", JsonValue::String(root.display().to_string())),
+            ("tty", JsonValue::Bool(true)),
+            (
+                "pty_backend",
+                JsonValue::String("native-supervisor".to_string()),
+            ),
+            ("attachable", JsonValue::Bool(true)),
+            ("resizable", JsonValue::Bool(true)),
+            ("supervisor_pid", JsonValue::Null),
+            ("supervisor_socket", JsonValue::Null),
+            ("supervisor_epoch", JsonValue::String("epoch+1".to_string())),
+            (
+                "terminal_event_log",
+                JsonValue::String("terminal-events.jsonl".to_string()),
+            ),
+            ("terminal_event_seq", JsonValue::Number("2".to_string())),
+            ("control_token_hash", JsonValue::Null),
+            ("tty_rows", JsonValue::Number("24".to_string())),
+            ("tty_cols", JsonValue::Number("80".to_string())),
+            ("status", JsonValue::String("exited".to_string())),
+            ("exit_code", JsonValue::Number("0".to_string())),
+            ("pid", JsonValue::Number("0".to_string())),
+            ("owner_pid", JsonValue::Null),
+            ("process_group", JsonValue::Null),
+            ("stdin_path", JsonValue::Null),
+            ("stdin_keeper_pid", JsonValue::Null),
+            ("stdin_closed", JsonValue::Bool(true)),
+            ("started_at", JsonValue::String("epoch+1".to_string())),
+            ("updated_at", JsonValue::String("epoch+2".to_string())),
+            ("stdout_total_bytes", JsonValue::Number("0".to_string())),
+            ("stderr_total_bytes", JsonValue::Number("0".to_string())),
+        ]);
+        fs::write(
+            job_dir.join("manifest.json"),
+            json_value_to_string(&manifest),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn mcp_initialize_advertises_tools_capability() {
         let state = mcp_state("mcp-init");
@@ -10980,6 +11308,8 @@ shell_allowlist = ["cargo test"]
         assert!(
             rendered.contains(r#""rlmLiveEvents":{"cursor":"runtime_event_seq","subscribe":true}"#)
         );
+        assert!(rendered
+            .contains(r#""shellTerminalEvents":{"cursor":"terminal_event_seq","subscribe":true}"#));
         assert!(rendered.contains(r#""tools":{"permissioned":true,"readOnly":true}"#));
     }
 
@@ -11168,6 +11498,71 @@ shell_allowlist = ["cargo test"]
         let rendered = json_value_to_string(&responses[0]);
         assert!(rendered.contains(r#""id":44"#));
         assert!(rendered.contains("requires a loaded runtime thread"));
+    }
+
+    #[test]
+    fn acp_session_shell_subscribe_pushes_terminal_events() {
+        let mut state = acp_state("acp-shell-subscribe");
+        let workspace = state.default_cwd.clone();
+        let task_id = "shell-sse-1";
+        write_shell_terminal_event_job(&workspace, task_id);
+        let new_request = format!(
+            r#"{{"jsonrpc":"2.0","id":45,"method":"session/new","params":{{"cwd":"{}"}}}}"#,
+            workspace.display()
+        );
+        let AcpDispatch::Responses(new_responses) =
+            acp_dispatch_for_message(&new_request, &mut state)
+        else {
+            panic!("expected ACP responses");
+        };
+        let acp_session_id = parse_root_object(&json_value_to_string(&new_responses[0]))
+            .unwrap()
+            .get("result")
+            .and_then(json_as_object)
+            .and_then(|result| result.get("sessionId"))
+            .and_then(json_as_string)
+            .unwrap()
+            .to_string();
+        let request = format!(
+            r#"{{"jsonrpc":"2.0","id":46,"method":"session/shell/subscribe","params":{{"sessionId":"{acp_session_id}","taskId":"{task_id}","cursor":0,"limit":10}}}}"#
+        );
+
+        let AcpDispatch::Responses(responses) = acp_dispatch_for_message(&request, &mut state)
+        else {
+            panic!("expected ACP responses");
+        };
+
+        assert_eq!(responses.len(), 3);
+        let output_update = json_value_to_string(&responses[0]);
+        assert!(output_update.contains(r#""method":"session/update""#));
+        assert!(output_update.contains(r#""sessionUpdate":"tool_call_update""#));
+        assert!(output_update.contains(r#""toolCallId":"shell_shell-sse-1""#));
+        assert!(output_update.contains("deepseek.acp.shell_terminal_event.v1"));
+        assert!(output_update.contains("hello from pty"));
+        let resize_update = json_value_to_string(&responses[1]);
+        assert!(resize_update.contains(r#""kind":"resize""#));
+        assert!(resize_update.contains("rows=33 cols=101"));
+        let result = json_value_to_string(&responses[2]);
+        assert!(result.contains(r#""id":46"#));
+        assert!(result.contains(r#""taskId":"shell-sse-1""#));
+        assert!(result.contains(r#""nextCursor":2"#));
+        assert!(result.contains(r#""updates":2"#));
+
+        let replay_request = format!(
+            r#"{{"jsonrpc":"2.0","id":47,"method":"session/shell/subscribe","params":{{"sessionId":"{acp_session_id}","taskId":"{task_id}","sinceSeq":1,"limit":10}}}}"#
+        );
+        let AcpDispatch::Responses(replay_responses) =
+            acp_dispatch_for_message(&replay_request, &mut state)
+        else {
+            panic!("expected ACP responses");
+        };
+        assert_eq!(replay_responses.len(), 2);
+        let replay_update = json_value_to_string(&replay_responses[0]);
+        assert!(!replay_update.contains("hello from pty"));
+        assert!(replay_update.contains(r#""kind":"resize""#));
+        let replay_result = json_value_to_string(&replay_responses[1]);
+        assert!(replay_result.contains(r#""id":47"#));
+        assert!(replay_result.contains(r#""updates":1"#));
     }
 
     #[test]
