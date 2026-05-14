@@ -6,10 +6,10 @@ Status: completed
 
 ## Context
 
-The shell-supervisor PTY design reserves `terminal-events.jsonl` for future
-native supervisor-owned PTY sessions. Before a native Unix PTY backend can be
-useful to the TUI/MCP/ACP surfaces, existing shell tools need to understand
-terminal event logs instead of only stdout/stderr byte logs.
+The shell-supervisor PTY design reserves `terminal-events.jsonl` for
+supervisor-owned PTY sessions. Before a native Unix PTY backend can be useful
+to the TUI/MCP/ACP surfaces, existing shell tools need to understand terminal
+event logs instead of only stdout/stderr byte logs.
 
 ## Implementation
 
@@ -32,6 +32,6 @@ terminal event logs instead of only stdout/stderr byte logs.
 
 ## Residual
 
-This is replay/attach plumbing only. Native Unix PTY ownership, live
-`TIOCSWINSZ` resize, supervisor-owned PTY master fds, and owner-exit survival
-remain open implementation slices.
+This replay/attach plumbing now has a Linux native PTY producer, but streaming
+attach frames, owner-exit survival verification, child-observed resize checks,
+and Windows ConPTY remain open implementation slices.

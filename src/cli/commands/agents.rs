@@ -32,9 +32,9 @@ use crate::tools::dispatch_subagent::{
     active_agent_thread_path, agent_threads_dir, thread_file_path, validate_thread_id,
 };
 use crate::tools::exec_shell::{
-    count_active_durable_shell_jobs, ExecShellAttachTool, ExecShellCancelTool,
-    ExecShellInteractTool, ExecShellListTool, ExecShellReplayTool, ExecShellResizeTool,
-    ExecShellSupervisorStatusTool, ExecShellWaitTool, TaskShellStartTool,
+    count_active_durable_shell_jobs, native_supervisor_pty_supported, ExecShellAttachTool,
+    ExecShellCancelTool, ExecShellInteractTool, ExecShellListTool, ExecShellReplayTool,
+    ExecShellResizeTool, ExecShellSupervisorStatusTool, ExecShellWaitTool, TaskShellStartTool,
     SHELL_SUPERVISOR_SUPPORTED_METHODS, SHELL_SUPERVISOR_UNSUPPORTED_PTY_METHODS,
 };
 use crate::tools::rlm::{
@@ -917,7 +917,10 @@ fn shell_supervisor_protocol_response_for_request(
             "pty_backend".to_string(),
             JsonValue::String("none".to_string()),
         ),
-        ("native_pty".to_string(), JsonValue::Bool(false)),
+        (
+            "native_pty".to_string(),
+            JsonValue::Bool(native_supervisor_pty_supported()),
+        ),
         (
             "active_jobs".to_string(),
             JsonValue::Number(active_jobs.to_string()),
@@ -950,7 +953,7 @@ fn shell_supervisor_protocol_response_for_request(
                     }
                 }
             }
-            "start" => match shell_supervisor_start_job(request, cwd) {
+            "start" => match shell_supervisor_start_job(request, cwd, socket, epoch) {
                 Ok(start) => {
                     response.insert("task_id".to_string(), JsonValue::String(start.task_id));
                     response.insert(
@@ -1078,6 +1081,8 @@ struct ShellSupervisorStart {
 fn shell_supervisor_start_job(
     request: &ShellSupervisorRequest,
     supervisor_cwd: &Path,
+    socket: &Path,
+    epoch: &str,
 ) -> AppResult<ShellSupervisorStart> {
     let command = shell_supervisor_request_string(request, "command")
         .map(str::trim)
@@ -1110,6 +1115,12 @@ fn shell_supervisor_start_job(
         }
     }
     let tty = shell_supervisor_request_bool(request, "tty");
+    if tty {
+        input = input
+            .with_arg("pty_backend", "native-supervisor")
+            .with_arg("supervisor_socket", socket.display().to_string())
+            .with_arg("supervisor_epoch", epoch.to_string());
+    }
     let output = TaskShellStartTool.execute(input)?;
     let task_id = shell_supervisor_summary_value(&output.summary, "task_id")
         .ok_or_else(|| app_error("shell supervisor start did not return a task_id"))?;
@@ -3155,7 +3166,7 @@ mod tests {
         );
         assert!(matches!(
             object.get("native_pty"),
-            Some(JsonValue::Bool(false))
+            Some(JsonValue::Bool(value)) if *value == native_supervisor_pty_supported()
         ));
         assert!(matches!(
             object.get("active_jobs"),
@@ -3204,7 +3215,7 @@ mod tests {
         ));
         assert!(matches!(
             object.get("native_pty"),
-            Some(JsonValue::Bool(false))
+            Some(JsonValue::Bool(value)) if *value == native_supervisor_pty_supported()
         ));
         assert!(matches!(
             object.get("active_jobs"),
@@ -3232,6 +3243,152 @@ mod tests {
             ToolInput::new()
                 .with_arg("cwd", root.display().to_string())
                 .with_arg("task_id", task_id.to_string()),
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn shell_supervisor_protocol_tty_start_records_native_pty_events() {
+        if !native_supervisor_pty_supported() {
+            return;
+        }
+        let root = temp_root("shell-supervisor-native-pty");
+        let state_dir = root.join(".dscode/shell-supervisor");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        let socket = state_dir.join("supervisor.sock");
+        let start = parse_shell_supervisor_request(
+            r#"{"method":"start","arguments":{"command":"echo native-pty-ready","tty":true,"tty_rows":24,"tty_cols":80}}"#,
+        )
+        .unwrap();
+
+        let response =
+            shell_supervisor_protocol_response_for_request(&start, &root, &socket, "epoch+native");
+        let object = json_as_object(&response).unwrap();
+        assert_eq!(
+            json_as_string(object.get("status").unwrap()),
+            Some("ok"),
+            "{response:?}"
+        );
+        let task_id = json_as_string(object.get("task_id").unwrap())
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            json_as_string(object.get("job_pty_backend").unwrap()),
+            Some("native-supervisor")
+        );
+        assert!(matches!(object.get("job_tty"), Some(JsonValue::Bool(true))));
+
+        let wait = parse_shell_supervisor_request(&format!(
+            r#"{{"method":"wait","arguments":{{"task_id":"{task_id}","timeout_ms":2000}}}}"#
+        ))
+        .unwrap();
+        let response =
+            shell_supervisor_protocol_response_for_request(&wait, &root, &socket, "epoch+wait");
+        let object = json_as_object(&response).unwrap();
+        let wait_summary = json_as_string(object.get("wait_summary").unwrap()).unwrap();
+        assert!(wait_summary.contains("pty_backend: native-supervisor"));
+        assert!(wait_summary.contains("attachable: true"));
+
+        let manifest = std::fs::read_to_string(
+            root.join(".dscode/shell-jobs")
+                .join(&task_id)
+                .join("manifest.json"),
+        )
+        .unwrap();
+        assert!(manifest.contains(r#""pty_backend":"native-supervisor""#));
+        assert!(manifest.contains(r#""terminal_event_log":"terminal-events.jsonl""#));
+
+        let mut replay_summary = String::new();
+        for _ in 0..20 {
+            let replay = parse_shell_supervisor_request(&format!(
+                r#"{{"method":"replay","arguments":{{"task_id":"{task_id}","stream":"terminal","cursor":0,"limit_bytes":4000}}}}"#
+            ))
+            .unwrap();
+            let response = shell_supervisor_protocol_response_for_request(
+                &replay,
+                &root,
+                &socket,
+                "epoch+replay",
+            );
+            let object = json_as_object(&response).unwrap();
+            replay_summary = json_as_string(object.get("replay_summary").unwrap())
+                .unwrap()
+                .to_string();
+            if replay_summary.contains("native-pty-ready") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(
+            replay_summary.contains("stream: terminal"),
+            "{replay_summary}"
+        );
+        assert!(
+            replay_summary.contains("native-pty-ready"),
+            "{replay_summary}"
+        );
+
+        let _ = crate::tools::exec_shell::ExecShellCancelTool.execute(
+            ToolInput::new()
+                .with_arg("cwd", root.display().to_string())
+                .with_arg("task_id", task_id),
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn shell_supervisor_protocol_native_pty_resize_records_event() {
+        if !native_supervisor_pty_supported() {
+            return;
+        }
+        let root = temp_root("shell-supervisor-native-resize");
+        let state_dir = root.join(".dscode/shell-supervisor");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        let socket = state_dir.join("supervisor.sock");
+        let start = parse_shell_supervisor_request(
+            r#"{"method":"start","arguments":{"command":"tail -f /dev/null","tty":true,"tty_rows":24,"tty_cols":80}}"#,
+        )
+        .unwrap();
+        let response =
+            shell_supervisor_protocol_response_for_request(&start, &root, &socket, "epoch+native");
+        let object = json_as_object(&response).unwrap();
+        assert_eq!(
+            json_as_string(object.get("status").unwrap()),
+            Some("ok"),
+            "{response:?}"
+        );
+        let task_id = json_as_string(object.get("task_id").unwrap())
+            .unwrap()
+            .to_string();
+
+        let resize = parse_shell_supervisor_request(&format!(
+            r#"{{"method":"resize","arguments":{{"task_id":"{task_id}","tty_rows":32,"tty_cols":100}}}}"#
+        ))
+        .unwrap();
+        let response =
+            shell_supervisor_protocol_response_for_request(&resize, &root, &socket, "epoch+resize");
+        let object = json_as_object(&response).unwrap();
+        let resize_summary = json_as_string(object.get("resize_summary").unwrap()).unwrap();
+        assert!(resize_summary.contains("meta.live_resize=native_tiocswinsz"));
+        assert!(resize_summary.contains("pty_backend: native-supervisor"));
+        assert!(resize_summary.contains("tty_rows: 32"));
+        assert!(resize_summary.contains("tty_cols: 100"));
+
+        let replay = parse_shell_supervisor_request(&format!(
+            r#"{{"method":"replay","arguments":{{"task_id":"{task_id}","stream":"terminal","cursor":0,"limit_bytes":4000}}}}"#
+        ))
+        .unwrap();
+        let response =
+            shell_supervisor_protocol_response_for_request(&replay, &root, &socket, "epoch+replay");
+        let object = json_as_object(&response).unwrap();
+        let replay_summary = json_as_string(object.get("replay_summary").unwrap()).unwrap();
+        assert!(replay_summary.contains("[2 resize"));
+        assert!(replay_summary.contains("rows=32 cols=100"));
+
+        let _ = crate::tools::exec_shell::ExecShellCancelTool.execute(
+            ToolInput::new()
+                .with_arg("cwd", root.display().to_string())
+                .with_arg("task_id", task_id),
         );
         let _ = std::fs::remove_dir_all(root);
     }

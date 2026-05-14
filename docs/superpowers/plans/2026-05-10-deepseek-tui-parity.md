@@ -240,12 +240,17 @@ Landed first slice:
   to `exited` when the pid is gone, and new Unix background jobs use durable
   FIFO stdin plus direct stdout/stderr log files so detached
   `exec_shell_interact cwd=<path> task_id=<id>` can write stdin or close it
-  without the original in-memory manager; `tty=true` now runs new background
-  shell jobs through the Unix `script` PTY backend and persists `tty` /
-  `pty_backend` metadata; `tty_rows` plus `tty_cols` set and persist initial
-  PTY geometry; `exec_shell_resize` updates durable PTY geometry and sends a
-  best-effort `stty rows/cols` command through attached stdin or detached FIFO
-  for running TTY jobs; `exec_shell_replay` now replays durable stdout/stderr
+  without the original in-memory manager; normal `tty=true` background shell
+  jobs still use the Unix `script` PTY backend and persist `tty` /
+  `pty_backend` metadata, while Linux shell-supervisor `tty=true` starts now
+  use a supervisor-owned `native-supervisor` PTY master, record
+  `terminal-events.jsonl`, expose `attachable=true` / `resizable=true`, and
+  keep regular stdout log replay populated from PTY bytes; `tty_rows` plus
+  `tty_cols` set and persist initial PTY geometry; `exec_shell_resize` updates
+  durable PTY geometry, sends a best-effort `stty rows/cols` command through
+  attached stdin or detached FIFO for `script` jobs, and uses `TIOCSWINSZ` plus
+  `SIGWINCH` with a persisted `resize` terminal event for live
+  `native-supervisor` jobs; `exec_shell_replay` now replays durable stdout/stderr
   log slices by byte offset for restart-safe shell-log replay and can replay
   supervisor terminal event logs with `stream=terminal` / `stream=events` plus
   sequence cursors; `exec_shell_attach` now provides terminal-oriented attach
@@ -255,8 +260,8 @@ Landed first slice:
   supervisor capability fields (`attachable`, `resizable`,
   `supervisor_pid`, `supervisor_socket`, `supervisor_epoch`,
   `terminal_event_log`, `terminal_event_seq`) so current `script` records
-  explicitly render as non-attachable/non-supervisor while future
-  `native-supervisor` records can be read without downgrading their backend;
+  explicitly render as non-attachable/non-supervisor while
+  `native-supervisor` records keep their backend and terminal-event metadata;
   `exec_shell_supervisor_status` now exposes the planned workspace-local
   `.dscode/shell-supervisor` manifest/socket status and protocol method names
   without leaking `control_token_hash`; `deepseek agents shell-supervisor
@@ -266,8 +271,7 @@ Landed first slice:
   includes durable `.dscode/shell-jobs` inventory in `show` responses, can
   `start` safe workspace-contained `task_shell_start` background jobs owned by
   the supervisor process, and bridges wait/replay/attach/stdin/resize/cancel
-  control requests through the durable shell job tools while native
-  supervisor-owned PTYs remain a later slice; `deepseek agents service`
+  control requests through the durable shell job tools; `deepseek agents service`
   and packaged systemd/launchd templates include that shell-supervisor service;
   `exec_shell_supervisor_status` now probes socket health before reporting a
   daemon as ready, reads healthy daemon `status` active-job counts backed by

@@ -10,13 +10,20 @@ use crate::util::json::{
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+#[cfg(all(unix, target_os = "linux"))]
+use std::ffi::CStr;
+#[cfg(all(unix, target_os = "linux"))]
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+#[cfg(all(unix, target_os = "linux"))]
+use std::os::unix::process::CommandExt;
 
 const DEFAULT_WAIT_MS: u64 = 5_000;
 const MAX_TIMEOUT_MS: u64 = 600_000;
@@ -24,6 +31,7 @@ const DEFAULT_REPLAY_LIMIT_BYTES: u64 = 20_000;
 const MAX_REPLAY_LIMIT_BYTES: u64 = 100_000;
 const PTY_BACKEND_SCRIPT: &str = "script";
 const PTY_BACKEND_NONE: &str = "none";
+const PTY_BACKEND_NATIVE_SUPERVISOR: &str = "native-supervisor";
 pub const SHELL_SUPERVISOR_SUPPORTED_METHODS: &[&str] = &[
     "health", "status", "show", "start", "wait", "replay", "attach", "stdin", "resize", "cancel",
     "shutdown",
@@ -93,6 +101,7 @@ impl Tool for ExecShellTool {
         let shell_env = shell_env_from_input(&input);
         let background = truthy(input.get("background"));
         let tty_options = parse_tty_options(&input)?;
+        let supervisor = parse_supervisor_pty_context(&input, tty_options)?;
         if !background {
             if tty_options.requested() {
                 return Err(app_error("exec_shell tty options require background=true"));
@@ -126,18 +135,22 @@ impl Tool for ExecShellTool {
             .get("stdin")
             .or_else(|| input.get("input"))
             .or_else(|| input.get("data"));
-        let task_id = shell_manager().lock().unwrap().spawn_with_env(
+        let mut manager = shell_manager().lock().unwrap();
+        let task_id = manager.spawn_with_env_and_context(
             command,
             cwd,
             stdin,
             tty_options,
             &shell_env,
+            supervisor,
         )?;
+        let pty_backend = manager.job_pty_backend_label(&task_id)?;
+        let attachable = manager.job_attachable(&task_id)?;
+        let resizable = manager.job_resizable(&task_id)?;
         Ok(ToolOutput {
             summary: format!(
-                "task_id: {task_id}\nstatus: running\ncommand: {command}\ncwd: {cwd}\ntty: {}\npty_backend: {}\nattachable: false\nresizable: false\ntty_rows: {}\ntty_cols: {}\nPoll with exec_shell_wait task_id={task_id} or cancel with exec_shell_cancel task_id={task_id}.",
+                "task_id: {task_id}\nstatus: running\ncommand: {command}\ncwd: {cwd}\ntty: {}\npty_backend: {pty_backend}\nattachable: {attachable}\nresizable: {resizable}\ntty_rows: {}\ntty_cols: {}\nPoll with exec_shell_wait task_id={task_id} or cancel with exec_shell_cancel task_id={task_id}.",
                 tty_options.enabled,
-                pty_backend_label(tty_options),
                 tty_rows_label(tty_options.size),
                 tty_cols_label(tty_options.size)
             ),
@@ -216,7 +229,12 @@ impl Tool for TaskShellStartTool {
             shell_input = shell_input.with_arg("tty_cols", tty_cols.to_string());
         }
         for (key, value) in &input.args {
-            if key.starts_with("env.") {
+            if key.starts_with("env.")
+                || matches!(
+                    key.as_str(),
+                    "pty_backend" | "native_pty" | "supervisor_socket" | "supervisor_epoch"
+                )
+            {
                 shell_input = shell_input.with_arg(key.clone(), value.clone());
             }
         }
@@ -548,6 +566,10 @@ struct BackgroundShellJob {
     command: String,
     cwd: String,
     tty_options: ShellTtyOptions,
+    pty_backend: ShellPtyBackend,
+    supervisor: Option<ShellSupervisorJobContext>,
+    terminal_event_log: Option<String>,
+    terminal_event_seq: Option<Arc<AtomicU64>>,
     owner_pid: u32,
     child_pid: u32,
     process_group: u32,
@@ -560,6 +582,19 @@ struct BackgroundShellJob {
     started_at: String,
     updated_at: String,
     record_dir: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+struct ShellSupervisorJobContext {
+    socket: String,
+    epoch: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShellPtyBackend {
+    None,
+    Script,
+    NativeSupervisor,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -580,6 +615,12 @@ enum ShellStdinControl {
         path: PathBuf,
         keeper: Option<Child>,
         closed: bool,
+    },
+    #[cfg(all(unix, target_os = "linux"))]
+    NativePty {
+        writer: File,
+        event_log: PathBuf,
+        seq: Arc<AtomicU64>,
     },
 }
 
@@ -625,9 +666,22 @@ impl BackgroundShellManager {
         tty_options: ShellTtyOptions,
         env: &BTreeMap<String, String>,
     ) -> AppResult<String> {
+        self.spawn_with_env_and_context(command, cwd, stdin_data, tty_options, env, None)
+    }
+
+    fn spawn_with_env_and_context(
+        &mut self,
+        command: &str,
+        cwd: &str,
+        stdin_data: Option<&str>,
+        tty_options: ShellTtyOptions,
+        env: &BTreeMap<String, String>,
+        supervisor: Option<ShellSupervisorJobContext>,
+    ) -> AppResult<String> {
         let id = generated_job_id();
         let record_dir = shell_job_record_dir(cwd, &id);
         fs::create_dir_all(&record_dir)?;
+        let pty_backend = resolve_background_pty_backend(tty_options, supervisor.as_ref())?;
         let stdout_file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -636,6 +690,23 @@ impl BackgroundShellManager {
             .create(true)
             .append(true)
             .open(record_dir.join("stderr.log"))?;
+        if pty_backend == ShellPtyBackend::NativeSupervisor {
+            let job = spawn_native_supervisor_pty_background_job(
+                id.clone(),
+                command,
+                cwd,
+                stdin_data,
+                tty_options,
+                env,
+                supervisor,
+                record_dir,
+            )?;
+            self.jobs.insert(id.clone(), job);
+            if let Some(job) = self.jobs.get(&id) {
+                persist_job_snapshot(job)?;
+            }
+            return Ok(id);
+        }
         let PreparedBackgroundStdin {
             stdio: stdin_stdio,
             mode: stdin_mode,
@@ -667,6 +738,10 @@ impl BackgroundShellManager {
                 command: command.to_string(),
                 cwd: cwd.to_string(),
                 tty_options,
+                pty_backend,
+                supervisor: None,
+                terminal_event_log: None,
+                terminal_event_seq: None,
                 owner_pid,
                 child_pid,
                 process_group,
@@ -687,6 +762,26 @@ impl BackgroundShellManager {
         Ok(id)
     }
 
+    fn job_pty_backend_label(&self, task_id: &str) -> AppResult<&'static str> {
+        let job = self
+            .jobs
+            .get(task_id)
+            .ok_or_else(|| app_error(format!("unknown background shell task: {task_id}")))?;
+        Ok(job.pty_backend.label())
+    }
+
+    fn job_attachable(&self, task_id: &str) -> AppResult<bool> {
+        let job = self
+            .jobs
+            .get(task_id)
+            .ok_or_else(|| app_error(format!("unknown background shell task: {task_id}")))?;
+        Ok(job.pty_backend == ShellPtyBackend::NativeSupervisor)
+    }
+
+    fn job_resizable(&self, task_id: &str) -> AppResult<bool> {
+        self.job_attachable(task_id)
+    }
+
     fn refresh(&mut self, task_id: &str) -> AppResult<()> {
         let job = self
             .jobs
@@ -705,6 +800,7 @@ impl BackgroundShellManager {
             } else {
                 ShellJobStatus::Failed
             };
+            append_job_terminal_status_event(job);
             job.child = None;
             close_background_stdin_control(job.stdin.take());
             job.updated_at = epoch_label();
@@ -753,7 +849,7 @@ impl BackgroundShellManager {
             let stdout_total = durable_log_bytes(&job.record_dir, "stdout.log", 0);
             let stderr_total = durable_log_bytes(&job.record_dir, "stderr.log", 0);
             lines.push(format!(
-                "- {} [{}] exit={} stdout={} stderr={} tty={} pty_backend={} attachable=false resizable=false tty_size={} cwd={}",
+                "- {} [{}] exit={} stdout={} stderr={} tty={} pty_backend={} attachable={} resizable={} tty_size={} cwd={}",
                 job.id,
                 job.status.as_str(),
                 job.exit_code
@@ -762,7 +858,9 @@ impl BackgroundShellManager {
                 stdout_total,
                 stderr_total,
                 job.tty_options.enabled,
-                pty_backend_label(job.tty_options),
+                job.pty_backend.label(),
+                job.pty_backend == ShellPtyBackend::NativeSupervisor,
+                job.pty_backend == ShellPtyBackend::NativeSupervisor,
                 tty_size_label(job.tty_options.size),
                 job.cwd
             ));
@@ -808,7 +906,7 @@ impl BackgroundShellManager {
         let stdout_total = durable_log_bytes(&job.record_dir, "stdout.log", 0);
         let stderr_total = durable_log_bytes(&job.record_dir, "stderr.log", 0);
         let mut out = format!(
-            "task_id: {}\nstatus: {}\nexit_code: {}\ncommand: {}\ncwd: {}\nowner_pid: {}\nowner_alive: {}\npid: {}\nprocess_group: {}\ntty: {}\npty_backend: {}\nattachable: false\nresizable: false\nsupervisor_pid: null\nsupervisor_alive: unknown\nsupervisor_socket: null\nsupervisor_epoch: null\nterminal_event_log: null\nterminal_event_seq: null\ntty_rows: {}\ntty_cols: {}\nstdout_total_bytes: {stdout_total}\nstderr_total_bytes: {stderr_total}\n",
+            "task_id: {}\nstatus: {}\nexit_code: {}\ncommand: {}\ncwd: {}\nowner_pid: {}\nowner_alive: {}\npid: {}\nprocess_group: {}\ntty: {}\npty_backend: {}\nattachable: {}\nresizable: {}\nsupervisor_pid: {}\nsupervisor_alive: {}\nsupervisor_socket: {}\nsupervisor_epoch: {}\nterminal_event_log: {}\nterminal_event_seq: {}\ntty_rows: {}\ntty_cols: {}\nstdout_total_bytes: {stdout_total}\nstderr_total_bytes: {stderr_total}\n",
             job.id,
             job.status.as_str(),
             job.exit_code
@@ -821,7 +919,15 @@ impl BackgroundShellManager {
             job.child_pid,
             job.process_group,
             job.tty_options.enabled,
-            pty_backend_label(job.tty_options),
+            job.pty_backend.label(),
+            job.pty_backend == ShellPtyBackend::NativeSupervisor,
+            job.pty_backend == ShellPtyBackend::NativeSupervisor,
+            shell_optional_pid_label(job.supervisor.as_ref().map(|_| job.owner_pid)),
+            owner_alive_label(job.supervisor.as_ref().map(|_| job.owner_pid)),
+            shell_optional_string_label(job.supervisor.as_ref().map(|value| value.socket.as_str())),
+            shell_optional_string_label(job.supervisor.as_ref().map(|value| value.epoch.as_str())),
+            shell_optional_string_label(job.terminal_event_log.as_deref()),
+            shell_optional_u64_label(job_terminal_event_seq(job)),
             tty_rows_label(job.tty_options.size),
             tty_cols_label(job.tty_options.size)
         );
@@ -850,7 +956,7 @@ impl BackgroundShellManager {
         let stdout_total = stdout.len();
         let stderr_total = stderr.len();
         let mut out = format!(
-            "task_id: {}\nstatus: {}\nexit_code: {}\ncommand: {}\ncwd: {}\nowner_pid: {}\nowner_alive: {}\npid: {}\nprocess_group: {}\ntty: {}\npty_backend: {}\nattachable: false\nresizable: false\nsupervisor_pid: null\nsupervisor_alive: unknown\nsupervisor_socket: null\nsupervisor_epoch: null\nterminal_event_log: null\nterminal_event_seq: null\ntty_rows: {}\ntty_cols: {}\nstdout_total_bytes: {stdout_total}\nstderr_total_bytes: {stderr_total}\n",
+            "task_id: {}\nstatus: {}\nexit_code: {}\ncommand: {}\ncwd: {}\nowner_pid: {}\nowner_alive: {}\npid: {}\nprocess_group: {}\ntty: {}\npty_backend: {}\nattachable: {}\nresizable: {}\nsupervisor_pid: {}\nsupervisor_alive: {}\nsupervisor_socket: {}\nsupervisor_epoch: {}\nterminal_event_log: {}\nterminal_event_seq: {}\ntty_rows: {}\ntty_cols: {}\nstdout_total_bytes: {stdout_total}\nstderr_total_bytes: {stderr_total}\n",
             job.id,
             job.status.as_str(),
             job.exit_code
@@ -863,7 +969,15 @@ impl BackgroundShellManager {
             job.child_pid,
             job.process_group,
             job.tty_options.enabled,
-            pty_backend_label(job.tty_options),
+            job.pty_backend.label(),
+            job.pty_backend == ShellPtyBackend::NativeSupervisor,
+            job.pty_backend == ShellPtyBackend::NativeSupervisor,
+            shell_optional_pid_label(job.supervisor.as_ref().map(|_| job.owner_pid)),
+            owner_alive_label(job.supervisor.as_ref().map(|_| job.owner_pid)),
+            shell_optional_string_label(job.supervisor.as_ref().map(|value| value.socket.as_str())),
+            shell_optional_string_label(job.supervisor.as_ref().map(|value| value.epoch.as_str())),
+            shell_optional_string_label(job.terminal_event_log.as_deref()),
+            shell_optional_u64_label(job_terminal_event_seq(job)),
             tty_rows_label(job.tty_options.size),
             tty_cols_label(job.tty_options.size)
         );
@@ -922,7 +1036,14 @@ impl BackgroundShellManager {
             }
             let mut live_control = "metadata_only";
             if job.status == ShellJobStatus::Running {
-                live_control = if let Some(control) = job.stdin.as_mut() {
+                live_control = if job.pty_backend == ShellPtyBackend::NativeSupervisor {
+                    if let Some(control) = job.stdin.as_mut() {
+                        resize_native_pty_stdin_control(control, size, job.process_group)?;
+                        "native_tiocswinsz"
+                    } else {
+                        "metadata_only_no_pty_master"
+                    }
+                } else if let Some(control) = job.stdin.as_mut() {
                     write_background_stdin_control(control, &resize_stty_command(size))?;
                     "stdin_stty"
                 } else {
@@ -954,6 +1075,7 @@ impl BackgroundShellManager {
         close_background_stdin_control(job.stdin.take());
         job.status = ShellJobStatus::Killed;
         job.updated_at = epoch_label();
+        append_job_terminal_status_event(job);
         persist_job_snapshot(job)?;
         Ok(())
     }
@@ -996,6 +1118,16 @@ impl ShellJobStatus {
     }
 }
 
+impl ShellPtyBackend {
+    fn label(self) -> &'static str {
+        match self {
+            Self::None => PTY_BACKEND_NONE,
+            Self::Script => PTY_BACKEND_SCRIPT,
+            Self::NativeSupervisor => PTY_BACKEND_NATIVE_SUPERVISOR,
+        }
+    }
+}
+
 fn shell_manager() -> &'static Mutex<BackgroundShellManager> {
     SHELL_JOBS.get_or_init(|| Mutex::new(BackgroundShellManager::default()))
 }
@@ -1023,6 +1155,56 @@ fn parse_tty_options(input: &ToolInput) -> AppResult<ShellTtyOptions> {
         return Err(app_error("exec_shell tty_rows/tty_cols require tty=true"));
     }
     Ok(ShellTtyOptions { enabled, size })
+}
+
+fn parse_supervisor_pty_context(
+    input: &ToolInput,
+    tty_options: ShellTtyOptions,
+) -> AppResult<Option<ShellSupervisorJobContext>> {
+    let native_requested = input
+        .get("pty_backend")
+        .map(str::trim)
+        .is_some_and(|value| value == PTY_BACKEND_NATIVE_SUPERVISOR)
+        || truthy(input.get("native_pty"));
+    if !native_requested {
+        return Ok(None);
+    }
+    if !tty_options.enabled {
+        return Err(app_error("native-supervisor PTY backend requires tty=true"));
+    }
+    if !native_supervisor_pty_supported() {
+        return Err(app_error(
+            "native-supervisor PTY backend is supported only on Unix/Linux in this build",
+        ));
+    }
+    Ok(Some(ShellSupervisorJobContext {
+        socket: input
+            .get("supervisor_socket")
+            .map(str::to_string)
+            .unwrap_or_else(|| "null".to_string()),
+        epoch: input
+            .get("supervisor_epoch")
+            .map(str::to_string)
+            .unwrap_or_else(epoch_label),
+    }))
+}
+
+fn resolve_background_pty_backend(
+    tty_options: ShellTtyOptions,
+    supervisor: Option<&ShellSupervisorJobContext>,
+) -> AppResult<ShellPtyBackend> {
+    if !tty_options.enabled {
+        return Ok(ShellPtyBackend::None);
+    }
+    if supervisor.is_some() {
+        if native_supervisor_pty_supported() {
+            return Ok(ShellPtyBackend::NativeSupervisor);
+        }
+        return Err(app_error(
+            "native-supervisor PTY backend is supported only on Unix/Linux in this build",
+        ));
+    }
+    Ok(ShellPtyBackend::Script)
 }
 
 fn required_resize_tty_size(input: &ToolInput) -> AppResult<ShellTtySize> {
@@ -1111,14 +1293,6 @@ fn resize_stty_command(size: ShellTtySize) -> String {
     format!("stty rows {} cols {}\n", size.rows, size.cols)
 }
 
-fn pty_backend_label(tty_options: ShellTtyOptions) -> &'static str {
-    if tty_options.enabled {
-        PTY_BACKEND_SCRIPT
-    } else {
-        PTY_BACKEND_NONE
-    }
-}
-
 fn durable_pty_backend_label(record: &DurableShellJobRecord) -> &str {
     record.pty_backend.as_deref().unwrap_or(PTY_BACKEND_NONE)
 }
@@ -1169,6 +1343,326 @@ fn script_pty_backend_available() -> bool {
         .status()
         .map(|status| status.success())
         .unwrap_or(false)
+}
+
+pub(crate) fn native_supervisor_pty_supported() -> bool {
+    cfg!(all(unix, target_os = "linux"))
+}
+
+fn job_terminal_event_seq(job: &BackgroundShellJob) -> Option<u64> {
+    job.terminal_event_seq
+        .as_ref()
+        .map(|seq| seq.load(Ordering::Relaxed))
+}
+
+#[cfg(all(unix, target_os = "linux"))]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct NativeWinsize {
+    ws_row: u16,
+    ws_col: u16,
+    ws_xpixel: u16,
+    ws_ypixel: u16,
+}
+
+#[cfg(all(unix, target_os = "linux"))]
+unsafe extern "C" {
+    fn posix_openpt(flags: i32) -> i32;
+    fn grantpt(fd: i32) -> i32;
+    fn unlockpt(fd: i32) -> i32;
+    fn ptsname(fd: i32) -> *mut i8;
+    fn setsid() -> i32;
+    fn ioctl(fd: i32, request: u64, ...) -> i32;
+    fn kill(pid: i32, sig: i32) -> i32;
+}
+
+#[cfg(all(unix, target_os = "linux"))]
+const NATIVE_O_RDWR: i32 = 0o2;
+#[cfg(all(unix, target_os = "linux"))]
+const NATIVE_O_NOCTTY: i32 = 0o400;
+#[cfg(all(unix, target_os = "linux"))]
+const NATIVE_TIOCSCTTY: u64 = 0x540E;
+#[cfg(all(unix, target_os = "linux"))]
+const NATIVE_TIOCSWINSZ: u64 = 0x5414;
+#[cfg(all(unix, target_os = "linux"))]
+const NATIVE_SIGWINCH: i32 = 28;
+
+fn spawn_native_supervisor_pty_background_job(
+    id: String,
+    command: &str,
+    cwd: &str,
+    stdin_data: Option<&str>,
+    tty_options: ShellTtyOptions,
+    env: &BTreeMap<String, String>,
+    supervisor: Option<ShellSupervisorJobContext>,
+    record_dir: PathBuf,
+) -> AppResult<BackgroundShellJob> {
+    spawn_native_supervisor_pty_background_job_impl(
+        id,
+        command,
+        cwd,
+        stdin_data,
+        tty_options,
+        env,
+        supervisor,
+        record_dir,
+    )
+}
+
+#[cfg(not(all(unix, target_os = "linux")))]
+fn spawn_native_supervisor_pty_background_job_impl(
+    _id: String,
+    _command: &str,
+    _cwd: &str,
+    _stdin_data: Option<&str>,
+    _tty_options: ShellTtyOptions,
+    _env: &BTreeMap<String, String>,
+    _supervisor: Option<ShellSupervisorJobContext>,
+    _record_dir: PathBuf,
+) -> AppResult<BackgroundShellJob> {
+    Err(app_error(
+        "native-supervisor PTY backend is supported only on Unix/Linux in this build",
+    ))
+}
+
+#[cfg(all(unix, target_os = "linux"))]
+fn spawn_native_supervisor_pty_background_job_impl(
+    id: String,
+    command: &str,
+    cwd: &str,
+    stdin_data: Option<&str>,
+    tty_options: ShellTtyOptions,
+    env: &BTreeMap<String, String>,
+    supervisor: Option<ShellSupervisorJobContext>,
+    record_dir: PathBuf,
+) -> AppResult<BackgroundShellJob> {
+    let (master, slave) = open_native_pty(tty_options.size)?;
+    let slave_fd = slave.as_raw_fd();
+    let mut process = Command::new("sh");
+    process.args(["-lc", command]);
+    apply_shell_env(&mut process, env);
+    process
+        .current_dir(cwd)
+        .env("TERM", "xterm-256color")
+        .stdin(Stdio::from(slave.try_clone()?))
+        .stdout(Stdio::from(slave.try_clone()?))
+        .stderr(Stdio::from(slave.try_clone()?));
+    if let Some(size) = tty_options.size {
+        process.env("LINES", size.rows.to_string());
+        process.env("COLUMNS", size.cols.to_string());
+    }
+    unsafe {
+        process.pre_exec(move || {
+            if setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if ioctl(slave_fd, NATIVE_TIOCSCTTY, 0) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let child = process.spawn()?;
+    drop(slave);
+    let child_pid = child.id();
+    let owner_pid = std::process::id();
+    let process_group = child_pid;
+    let event_log_name = "terminal-events.jsonl".to_string();
+    let event_log = record_dir.join(&event_log_name);
+    let seq = Arc::new(AtomicU64::new(0));
+    append_terminal_event(&event_log, &seq, "started", "spawned", None);
+    let reader = master.try_clone()?;
+    start_native_pty_reader_thread(
+        reader,
+        record_dir.join("stdout.log"),
+        event_log.clone(),
+        seq.clone(),
+    );
+    let mut stdin = Some(ShellStdinControl::NativePty {
+        writer: master,
+        event_log,
+        seq: seq.clone(),
+    });
+    if let Some(data) = stdin_data {
+        if let Some(control) = stdin.as_mut() {
+            write_background_stdin_control(control, data)?;
+        }
+    }
+    let now = epoch_label();
+    Ok(BackgroundShellJob {
+        id,
+        command: command.to_string(),
+        cwd: cwd.to_string(),
+        tty_options,
+        pty_backend: ShellPtyBackend::NativeSupervisor,
+        supervisor,
+        terminal_event_log: Some(event_log_name),
+        terminal_event_seq: Some(seq),
+        owner_pid,
+        child_pid,
+        process_group,
+        child: Some(child),
+        stdin,
+        stdout_cursor: 0,
+        stderr_cursor: 0,
+        status: ShellJobStatus::Running,
+        exit_code: None,
+        started_at: now.clone(),
+        updated_at: now,
+        record_dir,
+    })
+}
+
+#[cfg(all(unix, target_os = "linux"))]
+fn open_native_pty(size: Option<ShellTtySize>) -> AppResult<(File, File)> {
+    let master_fd = unsafe { posix_openpt(NATIVE_O_RDWR | NATIVE_O_NOCTTY) };
+    if master_fd < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    if unsafe { grantpt(master_fd) } < 0 {
+        let error = std::io::Error::last_os_error();
+        unsafe {
+            let _ = File::from_raw_fd(master_fd);
+        }
+        return Err(error.into());
+    }
+    if unsafe { unlockpt(master_fd) } < 0 {
+        let error = std::io::Error::last_os_error();
+        unsafe {
+            let _ = File::from_raw_fd(master_fd);
+        }
+        return Err(error.into());
+    }
+    let slave_name = unsafe { ptsname(master_fd) };
+    if slave_name.is_null() {
+        let error = std::io::Error::last_os_error();
+        unsafe {
+            let _ = File::from_raw_fd(master_fd);
+        }
+        return Err(error.into());
+    }
+    let slave_path = unsafe { CStr::from_ptr(slave_name) }
+        .to_string_lossy()
+        .to_string();
+    let master = unsafe { File::from_raw_fd(master_fd) };
+    let slave = OpenOptions::new().read(true).write(true).open(slave_path)?;
+    if let Some(size) = size {
+        set_native_pty_size(master.as_raw_fd(), size)?;
+    }
+    Ok((master, slave))
+}
+
+#[cfg(all(unix, target_os = "linux"))]
+fn set_native_pty_size(fd: RawFd, size: ShellTtySize) -> AppResult<()> {
+    let winsize = NativeWinsize {
+        ws_row: size.rows,
+        ws_col: size.cols,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let result = unsafe { ioctl(fd, NATIVE_TIOCSWINSZ, &winsize) };
+    if result < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(())
+}
+
+#[cfg(all(unix, target_os = "linux"))]
+fn start_native_pty_reader_thread(
+    mut reader: File,
+    stdout_log: PathBuf,
+    event_log: PathBuf,
+    seq: Arc<AtomicU64>,
+) {
+    thread::spawn(move || {
+        let mut stdout = match OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(stdout_log)
+        {
+            Ok(file) => file,
+            Err(_) => return,
+        };
+        let mut buffer = [0u8; 4096];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) => {
+                    let bytes = &buffer[..count];
+                    let _ = stdout.write_all(bytes);
+                    let _ = stdout.flush();
+                    append_terminal_event(
+                        &event_log,
+                        &seq,
+                        "output",
+                        &String::from_utf8_lossy(bytes),
+                        None,
+                    );
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+        }
+    });
+}
+
+fn append_terminal_event(
+    event_log: &Path,
+    seq: &Arc<AtomicU64>,
+    kind: &str,
+    preview: &str,
+    fields: Option<BTreeMap<String, JsonValue>>,
+) {
+    let next = seq.fetch_add(1, Ordering::Relaxed) + 1;
+    let mut root = BTreeMap::from([
+        ("seq".to_string(), JsonValue::Number(next.to_string())),
+        ("kind".to_string(), JsonValue::String(kind.to_string())),
+        ("timestamp".to_string(), JsonValue::String(epoch_label())),
+        (
+            "preview".to_string(),
+            JsonValue::String(terminal_event_safe_preview(preview)),
+        ),
+    ]);
+    if let Some(fields) = fields {
+        root.extend(fields);
+    }
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(event_log) {
+        let _ = writeln!(file, "{}", json_value_to_string(&JsonValue::Object(root)));
+    }
+}
+
+fn terminal_event_safe_preview(value: &str) -> String {
+    const MAX_PREVIEW_CHARS: usize = 4000;
+    let mut preview = value.chars().take(MAX_PREVIEW_CHARS).collect::<String>();
+    preview = preview.replace('\0', "\\0");
+    preview
+}
+
+fn append_job_terminal_status_event(job: &BackgroundShellJob) {
+    let Some(event_log) = job.terminal_event_log.as_deref() else {
+        return;
+    };
+    let Some(seq) = job.terminal_event_seq.as_ref() else {
+        return;
+    };
+    let mut fields = BTreeMap::from([(
+        "status".to_string(),
+        JsonValue::String(job.status.as_str().to_string()),
+    )]);
+    if let Some(code) = job.exit_code {
+        fields.insert("exit_code".to_string(), JsonValue::Number(code.to_string()));
+    }
+    append_terminal_event(
+        &job.record_dir.join(event_log),
+        seq,
+        if job.status == ShellJobStatus::Killed {
+            "cancelled"
+        } else {
+            "exit"
+        },
+        job.status.as_str(),
+        Some(fields),
+    );
 }
 
 fn prepare_background_stdin(record_dir: &Path) -> AppResult<PreparedBackgroundStdin> {
@@ -1233,6 +1727,74 @@ fn write_background_stdin_control(control: &mut ShellStdinControl, data: &str) -
             }
             write_fifo_stdin(path, data)?;
         }
+        #[cfg(all(unix, target_os = "linux"))]
+        ShellStdinControl::NativePty {
+            writer,
+            event_log,
+            seq,
+        } => {
+            writer.write_all(data.as_bytes())?;
+            writer.flush()?;
+            append_terminal_event(event_log, seq, "input", data, None);
+        }
+    }
+    Ok(())
+}
+
+fn resize_native_pty_stdin_control(
+    control: &mut ShellStdinControl,
+    size: ShellTtySize,
+    process_group: u32,
+) -> AppResult<()> {
+    resize_native_pty_stdin_control_impl(control, size, process_group)
+}
+
+#[cfg(not(all(unix, target_os = "linux")))]
+fn resize_native_pty_stdin_control_impl(
+    _control: &mut ShellStdinControl,
+    _size: ShellTtySize,
+    _process_group: u32,
+) -> AppResult<()> {
+    Err(app_error(
+        "native-supervisor PTY resize is supported only on Unix/Linux in this build",
+    ))
+}
+
+#[cfg(all(unix, target_os = "linux"))]
+fn resize_native_pty_stdin_control_impl(
+    control: &mut ShellStdinControl,
+    size: ShellTtySize,
+    process_group: u32,
+) -> AppResult<()> {
+    let ShellStdinControl::NativePty {
+        writer,
+        event_log,
+        seq,
+    } = control
+    else {
+        return Err(app_error(
+            "native-supervisor PTY resize requires a native PTY master",
+        ));
+    };
+    set_native_pty_size(writer.as_raw_fd(), size)?;
+    let mut fields = BTreeMap::from([
+        ("rows".to_string(), JsonValue::Number(size.rows.to_string())),
+        ("cols".to_string(), JsonValue::Number(size.cols.to_string())),
+    ]);
+    fields.insert(
+        "process_group".to_string(),
+        JsonValue::Number(process_group.to_string()),
+    );
+    append_terminal_event(
+        event_log,
+        seq,
+        "resize",
+        &format!("rows={} cols={}", size.rows, size.cols),
+        Some(fields),
+    );
+    let pgid = -(process_group as i32);
+    if unsafe { kill(pgid, NATIVE_SIGWINCH) } < 0 {
+        return Err(std::io::Error::last_os_error().into());
     }
     Ok(())
 }
@@ -1251,6 +1813,8 @@ fn close_background_stdin_control(control: Option<ShellStdinControl>) {
             let _ = keeper.wait();
         }
         ShellStdinControl::Fifo { keeper: None, .. } => {}
+        #[cfg(all(unix, target_os = "linux"))]
+        ShellStdinControl::NativePty { .. } => {}
     }
 }
 
@@ -1269,6 +1833,10 @@ fn shell_stdin_manifest_fields(control: &ShellStdinControl) -> (JsonValue, JsonV
                 .unwrap_or(JsonValue::Null),
             JsonValue::Bool(*closed),
         ),
+        #[cfg(all(unix, target_os = "linux"))]
+        ShellStdinControl::NativePty { .. } => {
+            (JsonValue::Null, JsonValue::Null, JsonValue::Bool(false))
+        }
     }
 }
 
@@ -1581,19 +2149,54 @@ fn persist_job_snapshot(job: &BackgroundShellJob) -> AppResult<()> {
         ("tty".to_string(), JsonValue::Bool(job.tty_options.enabled)),
         (
             "pty_backend".to_string(),
-            if job.tty_options.enabled {
-                JsonValue::String(PTY_BACKEND_SCRIPT.to_string())
-            } else {
+            if job.pty_backend == ShellPtyBackend::None {
                 JsonValue::Null
+            } else {
+                JsonValue::String(job.pty_backend.label().to_string())
             },
         ),
-        ("attachable".to_string(), JsonValue::Bool(false)),
-        ("resizable".to_string(), JsonValue::Bool(false)),
-        ("supervisor_pid".to_string(), JsonValue::Null),
-        ("supervisor_socket".to_string(), JsonValue::Null),
-        ("supervisor_epoch".to_string(), JsonValue::Null),
-        ("terminal_event_log".to_string(), JsonValue::Null),
-        ("terminal_event_seq".to_string(), JsonValue::Null),
+        (
+            "attachable".to_string(),
+            JsonValue::Bool(job.pty_backend == ShellPtyBackend::NativeSupervisor),
+        ),
+        (
+            "resizable".to_string(),
+            JsonValue::Bool(job.pty_backend == ShellPtyBackend::NativeSupervisor),
+        ),
+        (
+            "supervisor_pid".to_string(),
+            job.supervisor
+                .as_ref()
+                .map(|_| JsonValue::Number(job.owner_pid.to_string()))
+                .unwrap_or(JsonValue::Null),
+        ),
+        (
+            "supervisor_socket".to_string(),
+            job.supervisor
+                .as_ref()
+                .map(|value| JsonValue::String(value.socket.clone()))
+                .unwrap_or(JsonValue::Null),
+        ),
+        (
+            "supervisor_epoch".to_string(),
+            job.supervisor
+                .as_ref()
+                .map(|value| JsonValue::String(value.epoch.clone()))
+                .unwrap_or(JsonValue::Null),
+        ),
+        (
+            "terminal_event_log".to_string(),
+            job.terminal_event_log
+                .as_ref()
+                .map(|value| JsonValue::String(value.clone()))
+                .unwrap_or(JsonValue::Null),
+        ),
+        (
+            "terminal_event_seq".to_string(),
+            job_terminal_event_seq(job)
+                .map(|seq| JsonValue::Number(seq.to_string()))
+                .unwrap_or(JsonValue::Null),
+        ),
         ("control_token_hash".to_string(), JsonValue::Null),
         (
             "tty_rows".to_string(),

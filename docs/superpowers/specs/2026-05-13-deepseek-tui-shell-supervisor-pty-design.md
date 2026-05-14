@@ -141,21 +141,25 @@ Attach is an API-level terminal stream, not a full UI widget:
    - workspace-local socket
    - health/show methods
    - manifest fields
-   - no native PTY yet
+   - status: landed
 2. Native Unix PTY backend:
-   - `openpty`/`fork` or equivalent FFI
-   - supervisor-owned master fd
+   - Linux `posix_openpt`/`setsid`/`TIOCSCTTY` FFI
+   - supervisor-owned master fd for `deepseek agents shell-supervisor`
+     `tty=true` starts
    - child process group
    - terminal event log writer
+   - status: first Linux slice landed
 3. Replay and attach:
    - `stream=terminal`
    - event cursor support
-   - MCP/ACP schema exposure
+   - MCP/ACP schema exposure remains open
 4. Resize:
    - `exec_shell_resize`
    - `TIOCSWINSZ`
    - `SIGWINCH`
-   - tests that verify `stty size` changes inside a running PTY
+   - persisted `resize` terminal event
+   - tests verify the native supervisor resize path and event log; an
+     end-to-end `stty size` assertion inside the child PTY remains open
 5. Owner-exit integration:
    - integration test that starts a supervised job through a short-lived CLI
      process, exits the owner, then shows/waits/cancels through a new process
@@ -181,8 +185,11 @@ Future implementation should add these gates:
 ## Current Decision
 
 Do not add fake live resize or fake attach on top of the `script` backend.
-The supervisor protocol skeleton and terminal event replay/attach plumbing have
-landed; native Unix PTY ownership is still the next hard implementation slice.
-Until then, docs and tool outputs must continue to describe current PTY support
-as `script` execution with initial geometry, durable logs, FIFO stdin, and
-best-effort detached process control.
+The supervisor protocol skeleton, terminal event replay/attach plumbing, and
+the first Linux `native-supervisor` PTY backend have landed. Normal
+`exec_shell tty=true` still uses `script`; shell-supervisor `tty=true` starts
+own a native PTY master, write `terminal-events.jsonl`, and support live
+`TIOCSWINSZ` resize through the in-process supervisor. Remaining hard slices
+are owner-exit integration tests against a separately launched daemon,
+streaming MCP/ACP attach frames, stronger child-observed resize verification,
+and Windows ConPTY.
