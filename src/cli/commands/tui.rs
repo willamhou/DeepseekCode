@@ -3259,6 +3259,7 @@ fn handle_tui_action_with_live(
         }
         TuiAction::Model { workspace, command } => {
             let workspace = Path::new(&workspace);
+            let completes_setup_step = matches!(&command, TuiModelCommand::Set { .. });
             let status = match &command {
                 TuiModelCommand::Pick => "model picker shown".to_string(),
                 TuiModelCommand::Show => "model config shown".to_string(),
@@ -3272,6 +3273,7 @@ fn handle_tui_action_with_live(
                     }
                 }
             };
+            let setup_status = status.clone();
             let summary = model_config_summary_at(workspace)?;
             let detail = match command {
                 TuiModelCommand::Pick | TuiModelCommand::List => {
@@ -3283,9 +3285,13 @@ fn handle_tui_action_with_live(
             };
             app.set_mcp_detail(TuiMcpDetailKind::Model, detail);
             app.set_status(status);
+            if completes_setup_step {
+                app.complete_setup_wizard_active_step("model", &["model"], &setup_status);
+            }
         }
         TuiAction::Provider { workspace, command } => {
             let workspace = Path::new(&workspace);
+            let completes_setup_step = matches!(&command, TuiProviderCommand::Set { .. });
             let status = match &command {
                 TuiProviderCommand::Pick => "provider picker shown".to_string(),
                 TuiProviderCommand::Show => "provider config shown".to_string(),
@@ -3302,6 +3308,7 @@ fn handle_tui_action_with_live(
                     }
                 }
             };
+            let setup_status = status.clone();
             let summary = provider_config_summary_at(workspace)?;
             let detail = match command {
                 TuiProviderCommand::Pick | TuiProviderCommand::List => {
@@ -3313,6 +3320,13 @@ fn handle_tui_action_with_live(
             };
             app.set_mcp_detail(TuiMcpDetailKind::Provider, detail);
             app.set_status(status);
+            if completes_setup_step {
+                app.complete_setup_wizard_active_step(
+                    "provider",
+                    &["provider", "model"],
+                    &setup_status,
+                );
+            }
         }
         TuiAction::Profile { workspace, command } => {
             let workspace = Path::new(&workspace);
@@ -3386,6 +3400,7 @@ fn handle_tui_action_with_live(
                 format_workspace_trust_summary(workspace, &trust),
             );
             app.set_status(status);
+            app.complete_setup_wizard_active_step("trust", &["trust"], "workspace trust shown");
         }
         TuiAction::Logout { workspace } => {
             let summary = logout_credentials_at(Path::new(&workspace))?;
@@ -3430,7 +3445,9 @@ fn handle_tui_action_with_live(
                 format!("auth credential unchanged: {}", result.env_name)
             };
             app.set_mcp_detail(TuiMcpDetailKind::Setup, detail);
+            let setup_status = status.clone();
             app.set_status(status);
+            app.complete_setup_wizard_active_step("auth", &["auth"], &setup_status);
         }
         TuiAction::Skills { command } => {
             let fallback_config;

@@ -37,5 +37,7 @@ entry point.
 
 ## Residual Gap
 
-The stepper opens each focused setup control but does not yet persist per-step
-completion state or automatically advance after a picker/action succeeds.
+The initial stepper opened each focused setup control but did not yet persist
+per-step completion state or automatically advance after a picker/action
+succeeds. Follow-up spec
+`2026-05-14-deepseek-tui-first-run-wizard-state-polish.md` closes that gap.

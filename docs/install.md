@@ -282,8 +282,9 @@ printf '%s\n' "$DEEPSEEK_API_KEY" | deepseek config auth DEEPSEEK_API_KEY --stdi
 ```
 
 在 TUI 中也可以运行 `/setup wizard` 串起 provider、model、auth、trust、theme 和
-language 设置；或者直接运行 `/setup auth` / `/setup auth <ENV>`，用 masked 输入框把
-密钥写入当前选中 workspace 的 `.env`。
+language 设置。wizard 会显示每一步的 done/todo/review 状态，完成
+provider/model/auth/trust 后自动回到下一步；也可以直接运行 `/setup auth` /
+`/setup auth <ENV>`，用 masked 输入框把密钥写入当前选中 workspace 的 `.env`。
 
 `deepseek` 会自动读取当前工作目录下的 `.env`，并在变量尚未存在于进程环境时注入。常用 DeepSeek/OpenAI-compatible 配置：
 

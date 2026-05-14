@@ -21,7 +21,7 @@ use ratatui::{
     Frame, Terminal,
 };
 
-use crate::config::load::config_assignments;
+use crate::config::load::{config_assignments, parse_dotenv_assignment};
 use crate::config::types::AppConfig;
 use crate::core::runtime::{
     AutomationRecord, ItemRecord, RuntimeEvent, SessionRecord, TaskRecord, ThreadRecord,
@@ -33,6 +33,7 @@ use crate::util::json::{
     json_as_array, json_as_object, json_as_string, json_as_u64, json_value_to_string,
     parse_json_value, parse_root_object, JsonValue,
 };
+use crate::workspace_trust::WorkspaceTrust;
 
 const USER_INPUT_OTHER_MAX_CHARS: usize = 200;
 const TUI_AUTH_SECRET_MAX_CHARS: usize = 4096;
@@ -1585,6 +1586,13 @@ struct TuiSetupWizardStep {
     key: &'static str,
     title: &'static str,
     hint: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TuiSetupWizardStepState {
+    tag: &'static str,
+    detail: String,
+    done: bool,
 }
 
 const TUI_SETUP_WIZARD_STEPS: &[TuiSetupWizardStep] = &[
@@ -4630,6 +4638,8 @@ pub struct TuiApp {
     auth_secret_cursor: usize,
     show_setup_wizard: bool,
     setup_wizard_step: usize,
+    setup_wizard_active_step: Option<String>,
+    setup_wizard_completed_steps: BTreeSet<String>,
     show_approval_modal: bool,
     show_user_input_modal: bool,
     show_mcp_manager: bool,
@@ -4820,6 +4830,8 @@ impl TuiApp {
             auth_secret_cursor: 0,
             show_setup_wizard: false,
             setup_wizard_step: 0,
+            setup_wizard_active_step: None,
+            setup_wizard_completed_steps: BTreeSet::new(),
             show_approval_modal: false,
             show_user_input_modal: false,
             show_mcp_manager: false,
@@ -9171,6 +9183,7 @@ impl TuiApp {
         match code {
             KeyCode::Esc => {
                 self.show_provider_picker = false;
+                self.clear_setup_wizard_active_step("provider");
                 self.status = "provider picker closed".to_string();
             }
             KeyCode::Enter => self.apply_provider_picker_selection(),
@@ -9231,6 +9244,7 @@ impl TuiApp {
         match code {
             KeyCode::Esc => {
                 self.show_model_picker = false;
+                self.clear_setup_wizard_active_step("model");
                 self.status = "model picker closed".to_string();
             }
             KeyCode::Enter => self.apply_model_picker_selection(),
@@ -11656,7 +11670,7 @@ impl TuiApp {
 
     fn open_setup_wizard(&mut self) {
         self.show_setup_wizard = true;
-        self.setup_wizard_step = 0;
+        self.setup_wizard_active_step = None;
         self.show_session_picker = false;
         self.show_thread_picker = false;
         self.show_links_picker = false;
@@ -11665,6 +11679,7 @@ impl TuiApp {
         self.show_provider_picker = false;
         self.show_auth_modal = false;
         self.show_command_palette = false;
+        self.setup_wizard_step = self.next_incomplete_setup_wizard_step().unwrap_or(0);
         self.status = "setup wizard opened".to_string();
     }
 
@@ -11720,20 +11735,211 @@ impl TuiApp {
         }
     }
 
+    fn setup_wizard_step_states_for_workspace(
+        &self,
+        workspace: &str,
+    ) -> Vec<TuiSetupWizardStepState> {
+        let workspace_path = Path::new(workspace);
+        let config_path = tui_setup_config_path(workspace_path);
+        let config_present = config_path.exists();
+        let (config, _) = read_tui_setup_config(&config_path);
+        let trust = WorkspaceTrust::load_for(workspace_path);
+        TUI_SETUP_WIZARD_STEPS
+            .iter()
+            .map(|step| {
+                self.setup_wizard_step_state(*step, workspace_path, &config, config_present, &trust)
+            })
+            .collect()
+    }
+
+    fn setup_wizard_step_state(
+        &self,
+        step: TuiSetupWizardStep,
+        workspace: &Path,
+        config: &AppConfig,
+        config_present: bool,
+        trust: &WorkspaceTrust,
+    ) -> TuiSetupWizardStepState {
+        let completed_in_session = self.setup_wizard_completed_steps.contains(step.key);
+        match step.key {
+            "provider" => {
+                if config_present && !config.model.base_url.trim().is_empty() {
+                    TuiSetupWizardStepState {
+                        tag: "done",
+                        detail: setup_wizard_provider_detail(&config.model.base_url),
+                        done: true,
+                    }
+                } else {
+                    TuiSetupWizardStepState {
+                        tag: "todo",
+                        detail: "project config missing".to_string(),
+                        done: false,
+                    }
+                }
+            }
+            "model" => {
+                if config_present && !config.model.model.trim().is_empty() {
+                    TuiSetupWizardStepState {
+                        tag: "done",
+                        detail: config.model.model.clone(),
+                        done: true,
+                    }
+                } else {
+                    TuiSetupWizardStepState {
+                        tag: "todo",
+                        detail: "choose model".to_string(),
+                        done: false,
+                    }
+                }
+            }
+            "auth" => {
+                if tui_auth_env_present(workspace, &config.model.api_key_env) {
+                    TuiSetupWizardStepState {
+                        tag: "done",
+                        detail: format!("{} present", config.model.api_key_env),
+                        done: true,
+                    }
+                } else {
+                    TuiSetupWizardStepState {
+                        tag: "todo",
+                        detail: format!("{} missing", config.model.api_key_env),
+                        done: false,
+                    }
+                }
+            }
+            "trust" => {
+                if completed_in_session || trust.trust_mode() || !trust.paths().is_empty() {
+                    TuiSetupWizardStepState {
+                        tag: "done",
+                        detail: "trust reviewed".to_string(),
+                        done: true,
+                    }
+                } else {
+                    TuiSetupWizardStepState {
+                        tag: "review",
+                        detail: "inspect permissions".to_string(),
+                        done: false,
+                    }
+                }
+            }
+            "theme" => {
+                if completed_in_session
+                    || self
+                        .theme_preferences_path
+                        .as_ref()
+                        .is_some_and(|path| path.exists())
+                {
+                    TuiSetupWizardStepState {
+                        tag: "done",
+                        detail: self.theme.title().to_string(),
+                        done: true,
+                    }
+                } else {
+                    TuiSetupWizardStepState {
+                        tag: "review",
+                        detail: self.theme.title().to_string(),
+                        done: false,
+                    }
+                }
+            }
+            "language" => {
+                if completed_in_session {
+                    TuiSetupWizardStepState {
+                        tag: "done",
+                        detail: self.translation_target_language.clone(),
+                        done: true,
+                    }
+                } else {
+                    TuiSetupWizardStepState {
+                        tag: "review",
+                        detail: self.translation_target_language.clone(),
+                        done: false,
+                    }
+                }
+            }
+            _ => TuiSetupWizardStepState {
+                tag: "todo",
+                detail: "unavailable".to_string(),
+                done: false,
+            },
+        }
+    }
+
+    fn next_incomplete_setup_wizard_step(&self) -> Option<usize> {
+        let workspace = self.selected_workspace_string();
+        let states = self.setup_wizard_step_states_for_workspace(&workspace);
+        states
+            .iter()
+            .position(|state| !state.done)
+            .or_else(|| TUI_SETUP_WIZARD_STEPS.len().checked_sub(1))
+    }
+
+    pub(crate) fn complete_setup_wizard_active_step(
+        &mut self,
+        active_key: &str,
+        completed_keys: &[&str],
+        status_prefix: &str,
+    ) {
+        if self.setup_wizard_active_step.as_deref() != Some(active_key) {
+            return;
+        }
+        for key in completed_keys {
+            self.setup_wizard_completed_steps.insert((*key).to_string());
+        }
+        self.setup_wizard_active_step = None;
+        self.show_setup_wizard = true;
+        self.show_command_palette = false;
+        self.show_model_picker = false;
+        self.show_provider_picker = false;
+        self.show_auth_modal = false;
+        if let Some(next) = self.next_incomplete_setup_wizard_step() {
+            self.setup_wizard_step = next;
+            if let Some(step) = self.selected_setup_wizard_step() {
+                if self
+                    .setup_wizard_step_states_for_workspace(&self.selected_workspace_string())
+                    .iter()
+                    .all(|state| state.done)
+                {
+                    self.status = format!("{status_prefix}; setup wizard complete");
+                } else {
+                    self.status = format!("{status_prefix}; setup wizard advanced: {}", step.key);
+                }
+            }
+        }
+    }
+
+    fn clear_setup_wizard_active_step(&mut self, step_key: &str) {
+        if self.setup_wizard_active_step.as_deref() == Some(step_key) {
+            self.setup_wizard_active_step = None;
+        }
+    }
+
     fn apply_setup_wizard_step(&mut self) {
         let Some(step) = self.selected_setup_wizard_step() else {
             self.status = "setup wizard has no selected step".to_string();
             return;
         };
         self.show_setup_wizard = false;
+        self.setup_wizard_active_step = Some(step.key.to_string());
         match step.key {
             "provider" => self.request_provider_command(TuiProviderCommand::Pick),
             "model" => self.request_model_command(TuiModelCommand::Pick),
             "auth" => self.open_auth_modal(None),
             "trust" => self.request_trust_command(TuiTrustCommand::Show),
-            "theme" => self.show_theme_detail(),
-            "language" => self.show_translation_detail(),
-            _ => self.status = format!("setup wizard step unavailable: {}", step.key),
+            "theme" => {
+                self.show_theme_detail();
+                let status = self.status.clone();
+                self.complete_setup_wizard_active_step("theme", &["theme"], &status);
+            }
+            "language" => {
+                self.show_translation_detail();
+                let status = self.status.clone();
+                self.complete_setup_wizard_active_step("language", &["language"], &status);
+            }
+            _ => {
+                self.setup_wizard_active_step = None;
+                self.status = format!("setup wizard step unavailable: {}", step.key);
+            }
         }
     }
 
@@ -11801,6 +12007,7 @@ impl TuiApp {
         self.auth_secret.clear();
         self.auth_secret_cursor = 0;
         self.show_auth_modal = false;
+        self.clear_setup_wizard_active_step("auth");
         self.status = "auth credential wizard cancelled".to_string();
     }
 
@@ -11858,8 +12065,10 @@ impl TuiApp {
         let config_path = tui_setup_config_path(Path::new(workspace));
         let config_present = config_path.exists();
         let (config, active_profile) = read_tui_setup_config(&config_path);
-        let api_key_present = tui_env_var_nonempty(&config.model.api_key_env);
+        let api_key_present = tui_auth_env_present(Path::new(workspace), &config.model.api_key_env);
         let ready_for_live_model = config_present && api_key_present;
+        let wizard_states = self.setup_wizard_step_states_for_workspace(workspace);
+        let wizard_done = wizard_states.iter().filter(|state| state.done).count();
 
         let mut detail = String::new();
         let _ = writeln!(detail, "DeepSeekCode Setup");
@@ -11907,6 +12116,28 @@ impl TuiApp {
                 "blocked"
             },
         );
+        push_status_row(
+            &mut detail,
+            "Setup wizard:",
+            &format!("{wizard_done}/{} complete", wizard_states.len()),
+        );
+        let _ = writeln!(detail);
+        let _ = writeln!(detail, "Wizard Steps");
+        let _ = writeln!(detail, "------------");
+        for (index, (step, state)) in TUI_SETUP_WIZARD_STEPS
+            .iter()
+            .zip(wizard_states.iter())
+            .enumerate()
+        {
+            let _ = writeln!(
+                detail,
+                "- {:>2}. [{:<6}] {:<18} {}",
+                index + 1,
+                state.tag,
+                step.title,
+                state.detail
+            );
+        }
         let _ = writeln!(detail);
         let _ = writeln!(detail, "Next Commands");
         let _ = writeln!(detail, "-------------");
@@ -15634,6 +15865,29 @@ fn tui_env_var_nonempty(key: &str) -> bool {
     env::var(key).is_ok_and(|value| !value.trim().is_empty())
 }
 
+fn tui_auth_env_present(workspace: &Path, key: &str) -> bool {
+    tui_env_var_nonempty(key) || tui_dotenv_var_nonempty(workspace, key)
+}
+
+fn tui_dotenv_var_nonempty(workspace: &Path, key: &str) -> bool {
+    let path = workspace.join(".env");
+    let Ok(content) = fs::read_to_string(path) else {
+        return false;
+    };
+    content.lines().any(|line| {
+        parse_dotenv_assignment(line)
+            .is_some_and(|(name, value)| name == key && !value.trim().is_empty())
+    })
+}
+
+fn setup_wizard_provider_detail(base_url: &str) -> String {
+    TUI_PROVIDER_PICKER_SPECS
+        .iter()
+        .find(|spec| spec.base_url == base_url)
+        .map(|spec| spec.name.to_string())
+        .unwrap_or_else(|| clip_line(base_url, 34))
+}
+
 fn tui_config_string_value(value: &str) -> String {
     let trimmed = value.trim();
     if let Some(value) = parse_basic_toml_string(trimmed) {
@@ -16758,21 +17012,37 @@ fn draw_command_palette(frame: &mut Frame, app: &TuiApp) {
 }
 
 fn draw_setup_wizard(frame: &mut Frame, app: &TuiApp) {
-    let area = bottom_center_rect(frame.area(), 78, 16);
+    let area = bottom_center_rect(frame.area(), 86, 18);
     frame.render_widget(Clear, area);
     let workspace = app.selected_workspace_string();
+    let states = app.setup_wizard_step_states_for_workspace(&workspace);
+    let done_count = states.iter().filter(|state| state.done).count();
     let mut lines = vec![
         Line::from("First-Run Setup Wizard"),
         Line::from(format!("Workspace: {}", clip_line(&workspace, 58))),
+        Line::from(format!(
+            "Progress: {done_count}/{} complete",
+            TUI_SETUP_WIZARD_STEPS.len()
+        )),
         Line::from(""),
     ];
     for (index, step) in TUI_SETUP_WIZARD_STEPS.iter().enumerate() {
         let selected = index == app.setup_wizard_step.min(TUI_SETUP_WIZARD_STEPS.len() - 1);
+        let state = states
+            .get(index)
+            .cloned()
+            .unwrap_or(TuiSetupWizardStepState {
+                tag: "todo",
+                detail: "unknown".to_string(),
+                done: false,
+            });
         let marker = if selected { "> " } else { "  " };
         lines.push(Line::from(format!(
-            "{marker}{:>2}. {:<18} {}",
+            "{marker}{:>2}. [{:<6}] {:<18} {:<22} {}",
             index + 1,
+            state.tag,
             step.title,
+            clip_line(&state.detail, 22),
             step.hint
         )));
     }
@@ -17863,6 +18133,83 @@ api_key_env = "{env_name}"
                 command: TuiTrustCommand::Show,
             }]
         );
+    }
+
+    #[test]
+    fn setup_wizard_tracks_completion_state_and_advances() {
+        let root = temp_root("setup-wizard-state");
+        fs::create_dir_all(root.join(".dscode")).unwrap();
+        let workspace = root.display().to_string();
+        let mut app = TuiApp::with_runtime(
+            vec![TuiSession {
+                id: "session-one".to_string(),
+                title: "One".to_string(),
+                workspace: workspace.clone(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-one".to_string()),
+                thread_count: 1,
+            }],
+            vec![TuiThread {
+                id: "thread-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                title: "First thread".to_string(),
+                mode: "agent".to_string(),
+                status: "running".to_string(),
+                latest_turn_id: None,
+                event_seq: 1,
+            }],
+            Vec::new(),
+        );
+
+        run_palette_command(&mut app, "setup wizard");
+        let rendered = render_once(&app, 110, 36).expect("setup wizard renders");
+        assert!(rendered.contains("Progress:"));
+        assert!(rendered.contains("[todo  ] Choose provider"));
+        assert!(rendered.contains("[review] Inspect trust"));
+
+        assert!(app.handle_key(KeyCode::Enter));
+        assert!(app.show_provider_picker);
+        assert_eq!(app.setup_wizard_active_step.as_deref(), Some("provider"));
+        fs::write(
+            root.join(".dscode/config.toml"),
+            r#"model.base_url = "https://api.deepseek.com"
+model.api_key_env = "DSCODE_TEST_SETUP_WIZARD_AUTH_KEY"
+model.model = "deepseek-v4-pro"
+"#,
+        )
+        .unwrap();
+        app.complete_setup_wizard_active_step(
+            "provider",
+            &["provider", "model"],
+            "provider set: deepseek-v4-pro",
+        );
+        assert!(app.show_setup_wizard);
+        assert_eq!(app.setup_wizard_step, 2);
+        assert!(app.status.contains("setup wizard advanced: auth"));
+        let rendered = render_once(&app, 110, 36).expect("setup wizard advances");
+        assert!(rendered.contains("Progress: 2/6 complete"));
+        assert!(rendered.contains("[done  ] Choose provider"));
+        assert!(rendered.contains("[done  ] Choose model"));
+        assert!(rendered.contains("[todo  ] Store API key"));
+
+        app.setup_wizard_active_step = Some("auth".to_string());
+        fs::write(
+            root.join(".env"),
+            "DSCODE_TEST_SETUP_WIZARD_AUTH_KEY=sk-test-secret\n",
+        )
+        .unwrap();
+        app.complete_setup_wizard_active_step(
+            "auth",
+            &["auth"],
+            "auth credential stored: DSCODE_TEST_SETUP_WIZARD_AUTH_KEY",
+        );
+        assert_eq!(app.setup_wizard_step, 3);
+        let rendered = render_once(&app, 110, 36).expect("auth state renders");
+        assert!(rendered.contains("Progress: 3/6 complete"));
+        assert!(rendered.contains("DSCODE_TEST_SETUP_"));
+        assert!(!rendered.contains("sk-test-secret"));
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

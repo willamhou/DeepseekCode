@@ -24,7 +24,6 @@ The largest remaining DeepSeek-TUI / Claude Code CLI / Codex CLI gaps are now:
 - native supervisor-owned PTY attach/stdin/resize/replay/wait/cancel polish;
 - live external write-fixture validation across real repositories;
 - release-channel proof for npm and Homebrew once credentials are available;
-- completion-state and validation polish inside the first-run wizard;
 - richer model-backed demo evidence beyond deterministic TUI snapshots.
 
 ## Deliverables

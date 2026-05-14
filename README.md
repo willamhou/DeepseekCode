@@ -30,8 +30,8 @@ iterating from the same terminal.
   workspace shell-supervisor protocol bridge.
 - Local HTTP/SSE runtime, ACP stdio adapter, MCP client/server tooling, and TUI
   MCP management screens.
-- Guided `/setup` onboarding with a first-run stepper, provider/model pickers,
-  masked TUI auth, and CLI stdin auth persistence.
+- Guided `/setup` onboarding with first-run done/todo/review state,
+  provider/model pickers, masked TUI auth, and CLI stdin auth persistence.
 - RLM helpers for recursive/long-input analysis, model-session context, live
   queue status, event replay, cancellation, recovery, and drain controls.
 - LSP-backed and fallback diagnostics runners with JSON/JSONL watch output.
@@ -106,8 +106,7 @@ Claude Code CLI / Codex CLI polish. The largest remaining gaps are:
 - native supervisor-owned PTY attach/stdin/resize/replay/wait/cancel;
 - live external write-fixture validation across real repositories;
 - npm registry publishing and a Homebrew tap, both blocked on credentials;
-- product polish around wizard completion/validation states and richer
-  model-backed demos.
+- richer model-backed demo evidence beyond deterministic TUI snapshots.
 
 ## Demo Asset
 
