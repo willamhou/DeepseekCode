@@ -1421,6 +1421,25 @@ fn parse_tui_sessions_command(line: &str) -> Option<Result<TuiSessionsCommand, S
     }
 }
 
+fn parse_tui_legacy_migration_command(line: &str) -> Option<&'static str> {
+    let trimmed = line.trim();
+    if strip_tui_command_prefix(trimmed, "/set")
+        .or_else(|| strip_tui_command_prefix(trimmed, "set"))
+        .is_some()
+    {
+        return Some(
+            "The /set command was retired. Use /config to edit settings and /settings to inspect current values.",
+        );
+    }
+    if strip_tui_command_prefix(trimmed, "/deepseek")
+        .or_else(|| strip_tui_command_prefix(trimmed, "deepseek"))
+        .is_some()
+    {
+        return Some("The /deepseek command was renamed. Use /links (aliases: /dashboard, /api).");
+    }
+    None
+}
+
 fn parse_tui_context_command(line: &str) -> Option<Result<(), String>> {
     let trimmed = line.trim();
     let rest = strip_tui_command_prefix(trimmed, "/context")
@@ -6484,6 +6503,10 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(message) = parse_tui_legacy_migration_command(&content) {
+                    self.status = message.to_string();
+                    return true;
+                }
                 if let Some((command, args)) = parse_tui_custom_slash_command(&content) {
                     if self.request_custom_slash_command(command, args) {
                         self.composer.clear();
@@ -7215,6 +7238,10 @@ impl TuiApp {
                     self.status = message;
                 }
             }
+            return;
+        }
+        if let Some(message) = parse_tui_legacy_migration_command(command) {
+            self.status = message.to_string();
             return;
         }
         if let Some((command, args)) = parse_tui_custom_slash_command(command) {
@@ -16465,6 +16492,49 @@ mod tests {
             }]
         );
         assert_eq!(app.status, "custom slash command queued: /inspect");
+    }
+
+    #[test]
+    fn legacy_command_migrations_precede_custom_slash_fallback() {
+        let mut app = TuiApp::with_runtime(
+            vec![TuiSession {
+                id: "session-one".to_string(),
+                title: "One".to_string(),
+                workspace: ".".to_string(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-one".to_string()),
+                thread_count: 1,
+            }],
+            vec![TuiThread {
+                id: "thread-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                title: "First thread".to_string(),
+                mode: "agent".to_string(),
+                status: "active".to_string(),
+                latest_turn_id: None,
+                event_seq: 1,
+            }],
+            Vec::new(),
+        );
+
+        run_palette_command(&mut app, "/set model auto");
+
+        assert!(app.drain_actions().is_empty());
+        assert_eq!(
+            app.status,
+            "The /set command was retired. Use /config to edit settings and /settings to inspect current values."
+        );
+
+        app.composer_focused = true;
+        app.composer = "/deepseek".to_string();
+        app.composer_cursor = app.composer.len();
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert!(app.drain_actions().is_empty());
+        assert_eq!(
+            app.status,
+            "The /deepseek command was renamed. Use /links (aliases: /dashboard, /api)."
+        );
     }
 
     #[test]
