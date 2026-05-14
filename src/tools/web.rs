@@ -309,6 +309,15 @@ struct FetchedUrl {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct FetchedUrlBytes {
+    pub final_url: String,
+    pub status: u16,
+    pub body_bytes: Vec<u8>,
+    pub total_bytes: usize,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone)]
 struct FetchedPageView {
     summary: String,
     cache: WebRunCachedPage,
@@ -1232,6 +1241,22 @@ pub(crate) fn fetch_url_text(
     network_approved: bool,
 ) -> AppResult<String> {
     Ok(fetch_url(url, max_bytes, timeout_ms, network_approved)?.body)
+}
+
+pub(crate) fn fetch_url_bytes(
+    url: &str,
+    max_bytes: usize,
+    timeout_ms: u64,
+    network_approved: bool,
+) -> AppResult<FetchedUrlBytes> {
+    let fetched = fetch_url(url, max_bytes, timeout_ms, network_approved)?;
+    Ok(FetchedUrlBytes {
+        final_url: fetched.final_url,
+        status: fetched.status,
+        body_bytes: fetched.body_bytes,
+        total_bytes: fetched.total_bytes,
+        truncated: fetched.truncated,
+    })
 }
 
 fn parse_http_url(url: &str) -> AppResult<ParsedUrl> {

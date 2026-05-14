@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -13,6 +13,8 @@ use std::sync::{
 };
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
+
+use flate2::read::GzDecoder;
 
 use crate::cli::app::{McpConfigScope, TuiArgs};
 use crate::cli::commands::config::{
@@ -64,7 +66,7 @@ use crate::tools::exec_shell::{
 use crate::tools::recall_archive::RecallArchiveTool;
 use crate::tools::review::ReviewTool;
 use crate::tools::types::{Tool, ToolInput};
-use crate::tools::web::fetch_url_text;
+use crate::tools::web::{fetch_url_bytes, fetch_url_text};
 use crate::tui::{
     discover_custom_slash_commands_dir, render_once, run_interactive,
     run_interactive_with_refresh_actions_and_live, TuiAction, TuiAnchorCommand, TuiApp,
@@ -1330,6 +1332,7 @@ fn mcp_detail_summary(
 }
 
 const REMOTE_SKILL_REGISTRY_MAX_BYTES: usize = 1_000_000;
+const REMOTE_SKILL_DOWNLOAD_MAX_BYTES: usize = 5 * 1024 * 1024;
 const REMOTE_SKILL_REGISTRY_TIMEOUT_MS: u64 = 15_000;
 
 fn format_skills_summary(config: &AppConfig, command: &TuiSkillsCommand) -> AppResult<String> {
@@ -1558,7 +1561,7 @@ fn render_remote_skill_entries(registry_url: &str, entries: &[RemoteSkillEntry])
     detail.push_str("\nRegistry: ");
     detail.push_str(registry_url);
     detail.push_str(
-        "\n\nUse /skill install <name|url> for direct TOML skill sources, or /skills sync to cache supported TOML registry entries. GitHub/tarball/SKILL.md archive installs remain pending.",
+        "\n\nUse /skill install <name|url> for direct TOML, SKILL.md, GitHub, or tar.gz skill sources, or /skills sync to cache supported registry entries. Zip archives remain pending.",
     );
     detail
 }
@@ -1653,18 +1656,25 @@ enum SkillSyncEntryOutcome {
 }
 
 fn sync_remote_skill_entry(entry: &RemoteSkillEntry, cache_dir: &Path) -> SkillSyncEntryOutcome {
-    if is_unsupported_skill_archive_source(&entry.source) || !is_http_url(&entry.source) {
-        return SkillSyncEntryOutcome::Skipped {
-            name: entry.name.clone(),
-            reason: "source is not a direct TOML URL; archive installer is pending".to_string(),
-        };
-    }
-    let content = match fetch_url_text(
-        &entry.source,
-        REMOTE_SKILL_REGISTRY_MAX_BYTES,
-        REMOTE_SKILL_REGISTRY_TIMEOUT_MS,
-        false,
-    ) {
+    let install_source = match resolve_remote_skill_entry_source(&entry.source) {
+        Ok(source) => source,
+        Err(message) => {
+            return SkillSyncEntryOutcome::Skipped {
+                name: entry.name.clone(),
+                reason: message,
+            };
+        }
+    };
+    let downloaded = match fetch_first_skill_source(&install_source.candidate_urls) {
+        Ok(downloaded) => downloaded,
+        Err(error) => {
+            return SkillSyncEntryOutcome::Failed {
+                name: entry.name.clone(),
+                reason: error.to_string(),
+            };
+        }
+    };
+    let content = match skill_source_bytes_to_toml(&downloaded.url, &downloaded.bytes) {
         Ok(content) => content,
         Err(error) => {
             return SkillSyncEntryOutcome::Failed {
@@ -1719,7 +1729,7 @@ fn sync_remote_skill_entry(entry: &RemoteSkillEntry, cache_dir: &Path) -> SkillS
             reason: error.to_string(),
         };
     }
-    if let Err(error) = write_skill_sync_marker(&marker, &entry.name, &entry.source, &checksum) {
+    if let Err(error) = write_skill_sync_marker(&marker, &entry.name, &downloaded.url, &checksum) {
         return SkillSyncEntryOutcome::Failed {
             name: skill.name,
             reason: error.to_string(),
@@ -1758,21 +1768,24 @@ fn install_user_skill(config: &AppConfig, source: &str) -> AppResult<String> {
     if source.is_empty() {
         return Ok("Usage: /skill install <registry-name|url>".to_string());
     }
-    let install_source = match resolve_toml_skill_install_source(config, source) {
+    let install_source = match resolve_skill_install_source(config, source) {
         Ok(source) => source,
         Err(message) => return Ok(message),
     };
-    let content = match fetch_url_text(
-        &install_source.url,
-        REMOTE_SKILL_REGISTRY_MAX_BYTES,
-        REMOTE_SKILL_REGISTRY_TIMEOUT_MS,
-        false,
-    ) {
+    let downloaded = match fetch_first_skill_source(&install_source.candidate_urls) {
+        Ok(downloaded) => downloaded,
+        Err(error) => {
+            return Ok(format!(
+                "Skill install failed.\n\nSource: {source}\nError: {error}"
+            ));
+        }
+    };
+    let content = match skill_source_bytes_to_toml(&downloaded.url, &downloaded.bytes) {
         Ok(content) => content,
         Err(error) => {
             return Ok(format!(
                 "Skill install failed.\n\nSource: {source}\nURL: {}\nError: {error}",
-                install_source.url
+                downloaded.url
             ));
         }
     };
@@ -1786,7 +1799,7 @@ fn install_user_skill(config: &AppConfig, source: &str) -> AppResult<String> {
             let _ = std::fs::remove_file(&temp_path);
             return Ok(format!(
                 "Skill install failed.\n\nSource: {source}\nURL: {}\nError: {error}",
-                install_source.url
+                downloaded.url
             ));
         }
     };
@@ -1806,13 +1819,13 @@ fn install_user_skill(config: &AppConfig, source: &str) -> AppResult<String> {
     write_installed_from_marker(
         &installed_from_marker_path(&final_path),
         source,
-        &install_source.url,
+        &downloaded.url,
         &checksum,
     )?;
     Ok(format!(
         "Skill `{}` installed.\n\nSource: {source}\nURL: {}\nSkill file: {}\nInstall marker: {}\n\nRun /skills to refresh the list.",
         skill.name,
-        install_source.url,
+        downloaded.url,
         final_path.display(),
         installed_from_marker_path(&final_path).display()
     ))
@@ -1840,7 +1853,7 @@ fn update_user_skill(config: &AppConfig, name: &str) -> AppResult<String> {
     let marker = installed_from_marker_path(&skill_path);
     if !marker.exists() {
         return Ok(format!(
-            "Skill `{name}` was not installed by /skill install.\n\nMissing marker: {}\nReinstall from a direct TOML URL or registry entry to enable /skill update.",
+            "Skill `{name}` was not installed by /skill install.\n\nMissing marker: {}\nReinstall from a supported TOML, SKILL.md, tarball, GitHub, or registry source to enable /skill update.",
             marker.display()
         ));
     }
@@ -1854,21 +1867,24 @@ fn update_user_skill(config: &AppConfig, name: &str) -> AppResult<String> {
             marker.display()
         ));
     }
-    let install_source = match resolve_toml_skill_install_source(config, &source) {
+    let install_source = match resolve_skill_install_source(config, &source) {
         Ok(source) => source,
         Err(message) => return Ok(message),
     };
-    let content = match fetch_url_text(
-        &install_source.url,
-        REMOTE_SKILL_REGISTRY_MAX_BYTES,
-        REMOTE_SKILL_REGISTRY_TIMEOUT_MS,
-        false,
-    ) {
+    let downloaded = match fetch_first_skill_source(&install_source.candidate_urls) {
+        Ok(downloaded) => downloaded,
+        Err(error) => {
+            return Ok(format!(
+                "Skill update failed.\n\nSkill: {name}\nSource: {source}\nError: {error}"
+            ));
+        }
+    };
+    let content = match skill_source_bytes_to_toml(&downloaded.url, &downloaded.bytes) {
         Ok(content) => content,
         Err(error) => {
             return Ok(format!(
                 "Skill update failed.\n\nSkill: {name}\nSource: {source}\nURL: {}\nError: {error}",
-                install_source.url
+                downloaded.url
             ));
         }
     };
@@ -1876,7 +1892,7 @@ fn update_user_skill(config: &AppConfig, name: &str) -> AppResult<String> {
     if read_marker_value(&marker_body, "checksum").as_deref() == Some(checksum.as_str()) {
         return Ok(format!(
             "Skill `{name}` is already up to date.\n\nSource: {source}\nURL: {}",
-            install_source.url
+            downloaded.url
         ));
     }
     let temp_path = temporary_skill_path(&user_dir);
@@ -1887,7 +1903,7 @@ fn update_user_skill(config: &AppConfig, name: &str) -> AppResult<String> {
             let _ = std::fs::remove_file(&temp_path);
             return Ok(format!(
                 "Skill update failed.\n\nSkill: {name}\nSource: {source}\nURL: {}\nError: {error}",
-                install_source.url
+                downloaded.url
             ));
         }
     };
@@ -1900,31 +1916,35 @@ fn update_user_skill(config: &AppConfig, name: &str) -> AppResult<String> {
     }
     std::fs::write(&skill_path, &content)?;
     let _ = std::fs::remove_file(&temp_path);
-    write_installed_from_marker(&marker, &source, &install_source.url, &checksum)?;
+    write_installed_from_marker(&marker, &source, &downloaded.url, &checksum)?;
     Ok(format!(
         "Skill `{name}` updated.\n\nSource: {source}\nURL: {}\nSkill file: {}\nInstall marker: {}",
-        install_source.url,
+        downloaded.url,
         skill_path.display(),
         marker.display()
     ))
 }
 
-struct TomlSkillInstallSource {
-    url: String,
+struct SkillInstallSource {
+    candidate_urls: Vec<String>,
 }
 
-fn resolve_toml_skill_install_source(
+struct DownloadedSkillSource {
+    url: String,
+    bytes: Vec<u8>,
+}
+
+fn resolve_skill_install_source(
     config: &AppConfig,
     source: &str,
-) -> Result<TomlSkillInstallSource, String> {
+) -> Result<SkillInstallSource, String> {
     let source = source.trim();
-    if is_unsupported_skill_archive_source(source) {
-        return Err(unsupported_skill_archive_message(source));
-    }
-    if is_http_url(source) {
-        return Ok(TomlSkillInstallSource {
-            url: source.to_string(),
-        });
+    match resolve_remote_skill_entry_source(source) {
+        Ok(source) => return Ok(source),
+        Err(message) if source.starts_with("github:") || is_http_url(source) => {
+            return Err(message);
+        }
+        Err(_) => {}
     }
 
     let registry_url = config.skills.registry_url.trim();
@@ -1960,37 +1980,377 @@ fn resolve_toml_skill_install_source(
             if available.is_empty() { "none" } else { &available }
         ));
     };
-    if is_unsupported_skill_archive_source(&entry.source) || !is_http_url(&entry.source) {
-        return Err(unsupported_skill_archive_message(&entry.source));
-    }
-    Ok(TomlSkillInstallSource {
-        url: entry.source.clone(),
-    })
+    resolve_remote_skill_entry_source(&entry.source)
 }
 
 fn is_http_url(value: &str) -> bool {
     value.starts_with("http://") || value.starts_with("https://")
 }
 
-fn is_unsupported_skill_archive_source(source: &str) -> bool {
+fn resolve_remote_skill_entry_source(source: &str) -> Result<SkillInstallSource, String> {
+    let source = source.trim();
+    if source.is_empty() {
+        return Err("source is empty".to_string());
+    }
+    if is_zip_skill_source(source) {
+        return Err(unsupported_zip_skill_message(source));
+    }
+    if let Some(repo) = parse_github_source(source)? {
+        return Ok(SkillInstallSource {
+            candidate_urls: github_archive_candidate_urls(&repo),
+        });
+    }
+    if is_http_url(source) {
+        if let Some(repo) = parse_github_browser_url(source) {
+            return Ok(SkillInstallSource {
+                candidate_urls: github_archive_candidate_urls(&repo),
+            });
+        }
+        return Ok(SkillInstallSource {
+            candidate_urls: vec![source.to_string()],
+        });
+    }
+    Err(format!(
+        "source is not a supported direct skill URL or github:owner/repo spec: {source}"
+    ))
+}
+
+fn parse_github_source(source: &str) -> Result<Option<String>, String> {
+    let Some(rest) = source.strip_prefix("github:") else {
+        return Ok(None);
+    };
+    let (owner, repo) = rest
+        .trim()
+        .split_once('/')
+        .ok_or_else(|| format!("github source must be `github:owner/repo` (got {source})"))?;
+    let owner = owner.trim();
+    let repo = repo.trim().trim_end_matches('/').trim_end_matches(".git");
+    if owner.is_empty() || repo.is_empty() || owner.contains('/') || repo.contains('/') {
+        return Err(format!(
+            "github source must be `github:owner/repo` (got {source})"
+        ));
+    }
+    Ok(Some(format!("{owner}/{repo}")))
+}
+
+fn parse_github_browser_url(url: &str) -> Option<String> {
+    let after_scheme = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
+    let (host, rest) = after_scheme.split_once('/')?;
+    if !host.eq_ignore_ascii_case("github.com") && !host.eq_ignore_ascii_case("www.github.com") {
+        return None;
+    }
+    let trimmed = rest
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(rest)
+        .trim_end_matches('/');
+    let mut parts = trimmed.splitn(3, '/');
+    let owner = parts.next()?.trim();
+    let repo = parts.next()?.trim().trim_end_matches(".git");
+    if owner.is_empty() || repo.is_empty() || parts.next().is_some() {
+        return None;
+    }
+    Some(format!("{owner}/{repo}"))
+}
+
+fn github_archive_candidate_urls(repo: &str) -> Vec<String> {
+    vec![
+        format!("https://github.com/{repo}/archive/refs/heads/main.tar.gz"),
+        format!("https://github.com/{repo}/archive/refs/heads/master.tar.gz"),
+    ]
+}
+
+fn is_zip_skill_source(source: &str) -> bool {
     let lower = source.to_ascii_lowercase();
     let lower_without_suffix = lower
         .split(|ch| ch == '?' || ch == '#')
         .next()
         .unwrap_or(lower.as_str());
-    lower.starts_with("github:")
-        || lower.starts_with("https://github.com/")
-        || lower.starts_with("http://github.com/")
-        || lower_without_suffix.ends_with(".tar.gz")
-        || lower_without_suffix.ends_with(".tgz")
-        || lower_without_suffix.ends_with(".zip")
-        || lower_without_suffix.ends_with("/skill.md")
+    lower_without_suffix.ends_with(".zip")
 }
 
-fn unsupported_skill_archive_message(source: &str) -> String {
+fn unsupported_zip_skill_message(source: &str) -> String {
     format!(
-        "Skill source is not supported by this TOML installer slice.\n\nSource: {source}\n\nSupported now: direct http(s) URLs that return a DeepSeekCode TOML skill, or registry entries whose source is such a URL.\nStill pending: GitHub/tarball/SKILL.md archive installer."
+        "Skill zip archives are not supported yet.\n\nSource: {source}\n\nSupported now: direct TOML URLs, direct SKILL.md URLs, GitHub repository specs, and .tar.gz/.tgz skill archives."
     )
+}
+
+fn fetch_first_skill_source(candidate_urls: &[String]) -> AppResult<DownloadedSkillSource> {
+    let mut errors = Vec::new();
+    for url in candidate_urls {
+        match fetch_url_bytes(
+            url,
+            REMOTE_SKILL_DOWNLOAD_MAX_BYTES,
+            REMOTE_SKILL_REGISTRY_TIMEOUT_MS,
+            false,
+        ) {
+            Ok(response) if response.status == 404 => {
+                errors.push(format!("{url}: HTTP 404"));
+            }
+            Ok(response) if !(200..=299).contains(&response.status) => {
+                errors.push(format!("{url}: HTTP {}", response.status));
+            }
+            Ok(response)
+                if response.truncated || response.total_bytes > REMOTE_SKILL_DOWNLOAD_MAX_BYTES =>
+            {
+                errors.push(format!(
+                    "{url}: response exceeded {} bytes",
+                    REMOTE_SKILL_DOWNLOAD_MAX_BYTES
+                ));
+            }
+            Ok(response) => {
+                return Ok(DownloadedSkillSource {
+                    url: if response.final_url.trim().is_empty() {
+                        url.clone()
+                    } else {
+                        response.final_url
+                    },
+                    bytes: response.body_bytes,
+                });
+            }
+            Err(error) => errors.push(format!("{url}: {error}")),
+        }
+    }
+    Err(app_error(format!(
+        "all candidate skill URLs failed: {}",
+        if errors.is_empty() {
+            "none".to_string()
+        } else {
+            errors.join("; ")
+        }
+    )))
+}
+
+fn skill_source_bytes_to_toml(url: &str, bytes: &[u8]) -> AppResult<String> {
+    if is_zip_skill_source(url) || bytes.starts_with(b"PK\x03\x04") {
+        return Err(app_error(unsupported_zip_skill_message(url)));
+    }
+    if is_tar_gz_skill_source(url, bytes) {
+        let skill_md = read_skill_md_from_tar_gz(bytes)?;
+        return skill_md_to_toml(&skill_md);
+    }
+    let content = String::from_utf8(bytes.to_vec())
+        .map_err(|_| app_error("downloaded skill source is not valid UTF-8"))?;
+    if is_skill_md_source(url) || content.trim_start().starts_with("---") {
+        return skill_md_to_toml(&content);
+    }
+    Ok(content)
+}
+
+fn is_tar_gz_skill_source(url: &str, bytes: &[u8]) -> bool {
+    let lower = url.to_ascii_lowercase();
+    let without_suffix = lower.split(['?', '#']).next().unwrap_or(lower.as_str());
+    without_suffix.ends_with(".tar.gz")
+        || without_suffix.ends_with(".tgz")
+        || bytes.starts_with(&[0x1f, 0x8b])
+}
+
+fn is_skill_md_source(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    let without_suffix = lower.split(['?', '#']).next().unwrap_or(lower.as_str());
+    without_suffix.ends_with("/skill.md") || without_suffix.ends_with("skill.md")
+}
+
+fn read_skill_md_from_tar_gz(bytes: &[u8]) -> AppResult<String> {
+    let cursor = std::io::Cursor::new(bytes);
+    let decoder = GzDecoder::new(cursor);
+    let mut archive = tar::Archive::new(decoder);
+    let mut best = None::<(u8, String, Vec<u8>)>;
+    let mut total_size = 0usize;
+
+    let entries = archive
+        .entries()
+        .map_err(|error| app_error(format!("failed to read skill archive entries: {error}")))?;
+    for entry in entries {
+        let mut entry = entry
+            .map_err(|error| app_error(format!("failed to read skill archive entry: {error}")))?;
+        let header = entry.header().clone();
+        let path = entry
+            .path()
+            .map_err(|error| app_error(format!("skill archive entry has invalid path: {error}")))?
+            .to_path_buf();
+        if !is_safe_archive_path(&path) {
+            return Err(app_error(format!(
+                "skill archive entry escapes destination: {}",
+                path.display()
+            )));
+        }
+        if let Ok(size) = header.size() {
+            total_size = total_size.saturating_add(size as usize);
+            if total_size > REMOTE_SKILL_DOWNLOAD_MAX_BYTES {
+                return Err(app_error(format!(
+                    "skill archive uncompressed size exceeds {} bytes",
+                    REMOTE_SKILL_DOWNLOAD_MAX_BYTES
+                )));
+            }
+        }
+        if !header.entry_type().is_file() {
+            continue;
+        }
+        let Some(rank) = skill_md_archive_candidate_rank(&path) else {
+            continue;
+        };
+        if best
+            .as_ref()
+            .is_some_and(|(current_rank, _, _)| *current_rank <= rank)
+        {
+            continue;
+        }
+        let mut body = Vec::new();
+        entry
+            .read_to_end(&mut body)
+            .map_err(|error| app_error(format!("failed to read SKILL.md from archive: {error}")))?;
+        best = Some((rank, path.display().to_string(), body));
+    }
+
+    let Some((_, path, body)) = best else {
+        return Err(app_error("missing SKILL.md in skill archive"));
+    };
+    String::from_utf8(body)
+        .map_err(|_| app_error(format!("SKILL.md in archive is not valid UTF-8: {path}")))
+}
+
+fn skill_md_archive_candidate_rank(path: &Path) -> Option<u8> {
+    let raw = path
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => value.to_str(),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/");
+    let raw_rank = skill_md_candidate_rank(&raw);
+    let stripped_rank = raw
+        .split_once('/')
+        .and_then(|(_, stripped)| skill_md_candidate_rank(stripped));
+    match (raw_rank, stripped_rank) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(rank), None) | (None, Some(rank)) => Some(rank),
+        (None, None) => None,
+    }
+}
+
+fn skill_md_candidate_rank(path: &str) -> Option<u8> {
+    if path.eq_ignore_ascii_case("SKILL.md") {
+        return Some(0);
+    }
+    let parts = path.split('/').collect::<Vec<_>>();
+    if parts
+        .last()
+        .is_none_or(|name| !name.eq_ignore_ascii_case("SKILL.md"))
+    {
+        return None;
+    }
+    if parts.len() >= 3 && parts[parts.len() - 3].eq_ignore_ascii_case("skills") {
+        return Some(1);
+    }
+    if parts.len() == 2 {
+        return Some(2);
+    }
+    None
+}
+
+fn is_safe_archive_path(path: &Path) -> bool {
+    if path.is_absolute() {
+        return false;
+    }
+    path.components().all(|component| {
+        !matches!(
+            component,
+            Component::ParentDir | Component::Prefix(_) | Component::RootDir
+        )
+    })
+}
+
+struct ImportedSkillMd {
+    name: String,
+    description: String,
+    body: String,
+}
+
+fn skill_md_to_toml(content: &str) -> AppResult<String> {
+    let imported = parse_skill_md(content)?;
+    Ok(format!(
+        "name = \"{}\"\ndescription = \"{}\"\nallowed_tools = []\nsystem_append = \"\"\"\nImported from a SKILL.md bundle.\n\n{}\n\"\"\"\n\n[policy]\nrequire_write_confirmation = true\nrequire_shell_confirmation = false\nshell_allowlist = []\n",
+        toml_escape(&imported.name),
+        toml_escape(&imported.description),
+        toml_multiline_escape(imported.body.trim())
+    ))
+}
+
+fn parse_skill_md(content: &str) -> AppResult<ImportedSkillMd> {
+    let trimmed = content.trim_start_matches('\u{feff}').trim_start();
+    let mut lines = trimmed.lines();
+    let Some(first) = lines.next() else {
+        return Err(app_error("SKILL.md is empty"));
+    };
+    if first.trim() != "---" {
+        return Err(app_error(
+            "SKILL.md is missing the leading `---` frontmatter fence",
+        ));
+    }
+
+    let mut frontmatter = Vec::new();
+    let mut body = Vec::new();
+    let mut in_frontmatter = true;
+    let mut closed = false;
+    for line in lines {
+        if in_frontmatter && line.trim() == "---" {
+            in_frontmatter = false;
+            closed = true;
+            continue;
+        }
+        if in_frontmatter {
+            frontmatter.push(line);
+        } else {
+            body.push(line);
+        }
+    }
+    if !closed {
+        return Err(app_error(
+            "SKILL.md is missing the closing `---` frontmatter fence",
+        ));
+    }
+
+    let mut name = String::new();
+    let mut description = String::new();
+    for line in frontmatter {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = value.trim().trim_matches('"').trim_matches('\'');
+        match key.trim().to_ascii_lowercase().as_str() {
+            "name" => name = value.to_string(),
+            "description" => description = value.to_string(),
+            _ => {}
+        }
+    }
+    if name.trim().is_empty() {
+        return Err(app_error(
+            "SKILL.md frontmatter missing required field: name",
+        ));
+    }
+    validate_skill_name(&name)?;
+    if description.trim().is_empty() {
+        return Err(app_error(
+            "SKILL.md frontmatter missing required field: description",
+        ));
+    }
+    Ok(ImportedSkillMd {
+        name,
+        description,
+        body: body.join("\n"),
+    })
+}
+
+fn toml_multiline_escape(value: &str) -> String {
+    value.replace("\"\"\"", "'''")
 }
 
 fn validate_downloaded_skill_toml(path: &Path, content: &str) -> AppResult<SkillSpec> {
@@ -6937,17 +7297,23 @@ description = "Review pull requests."
     }
 
     fn serve_once_text(body: String) -> String {
+        serve_once_bytes(body.into_bytes(), "application/json")
+    }
+
+    fn serve_once_bytes(body: Vec<u8>, content_type: &str) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
+        let content_type = content_type.to_string();
         thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let mut request = [0u8; 1024];
             let _ = stream.read(&mut request);
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 body.len()
             );
             stream.write_all(response.as_bytes()).unwrap();
+            stream.write_all(&body).unwrap();
         });
         format!("http://{addr}/index.json")
     }
@@ -6973,6 +7339,32 @@ require_shell_confirmation = false
 shell_allowlist = []
 "#
         )
+    }
+
+    fn test_skill_md(name: &str, description: &str, body: &str) -> String {
+        format!(
+            r#"---
+name: {name}
+description: {description}
+---
+{body}
+"#
+        )
+    }
+
+    fn test_skill_tarball(path: &str, skill_md: &str) -> Vec<u8> {
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        {
+            let mut builder = tar::Builder::new(&mut encoder);
+            let mut header = tar::Header::new_gnu();
+            header.set_size(skill_md.as_bytes().len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            let mut body = skill_md.as_bytes();
+            builder.append_data(&mut header, path, &mut body).unwrap();
+            builder.finish().unwrap();
+        }
+        encoder.finish().unwrap()
     }
 
     #[test]
@@ -8832,6 +9224,25 @@ shell_allowlist = ["git diff"]
     }
 
     #[test]
+    fn github_skill_source_resolves_main_master_tarball_candidates() {
+        let source = resolve_remote_skill_entry_source("github:owner/repo").unwrap();
+        assert_eq!(
+            source.candidate_urls,
+            vec![
+                "https://github.com/owner/repo/archive/refs/heads/main.tar.gz".to_string(),
+                "https://github.com/owner/repo/archive/refs/heads/master.tar.gz".to_string(),
+            ]
+        );
+
+        let source = resolve_remote_skill_entry_source("https://github.com/owner/repo.git")
+            .expect("bare GitHub URL source");
+        assert_eq!(
+            source.candidate_urls[0],
+            "https://github.com/owner/repo/archive/refs/heads/main.tar.gz"
+        );
+    }
+
+    #[test]
     fn handle_tui_action_lists_remote_skill_registry() {
         let _guard = env_lock();
         let previous_allow_local = std::env::var("DSCODE_ALLOW_LOCAL_FETCH").ok();
@@ -8869,7 +9280,8 @@ shell_allowlist = ["git diff"]
         assert!(detail.contains("source: github:team/beta"));
         assert!(detail.contains(&format!("Registry: {registry_url}")));
         assert!(detail.contains("Use /skill install <name|url>"));
-        assert!(detail.contains("GitHub/tarball/SKILL.md archive installs remain pending"));
+        assert!(detail.contains("GitHub, or tar.gz skill sources"));
+        assert!(detail.contains("Zip archives remain pending"));
 
         restore_env_var("DSCODE_ALLOW_LOCAL_FETCH", previous_allow_local);
         restore_env_var("DSCODE_NETWORK_DEFAULT", previous_network_default);
@@ -8886,7 +9298,7 @@ shell_allowlist = ["git diff"]
 
         let skill_url = serve_once_text(test_skill_toml("cache-triage", "Cache triage"));
         let registry_url = serve_once_text(format!(
-            r#"{{"skills":{{"cache-triage":{{"description":"Cache triage","source":"{skill_url}"}},"archive":{{"description":"Archive skill","source":"github:owner/repo"}}}}}}"#
+            r#"{{"skills":{{"cache-triage":{{"description":"Cache triage","source":"{skill_url}"}},"zip":{{"description":"Zip skill","source":"https://example.com/repo.zip"}}}}}}"#
         ));
         let root = temp_root("skill-sync-cache");
         let store = RuntimeStore::new(root.join("runtime"));
@@ -8911,9 +9323,62 @@ shell_allowlist = ["git diff"]
         let (_, detail) = app.mcp_detail_for_test().expect("skill sync detail");
         assert!(detail.contains("Remote skill registry sync complete."));
         assert!(detail.contains("cache-triage downloaded"));
-        assert!(detail.contains("archive skipped"));
+        assert!(detail.contains("zip skipped"));
         assert!(detail
             .contains("2 skill(s) processed: 1 downloaded, 0 up-to-date, 1 skipped, 0 failed."));
+
+        restore_env_var("DSCODE_ALLOW_LOCAL_FETCH", previous_allow_local);
+        restore_env_var("DSCODE_NETWORK_DEFAULT", previous_network_default);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn handle_tui_action_syncs_remote_tarball_skill_cache() {
+        let _guard = env_lock();
+        let previous_allow_local = std::env::var("DSCODE_ALLOW_LOCAL_FETCH").ok();
+        let previous_network_default = std::env::var("DSCODE_NETWORK_DEFAULT").ok();
+        std::env::set_var("DSCODE_ALLOW_LOCAL_FETCH", "1");
+        std::env::set_var("DSCODE_NETWORK_DEFAULT", "allow");
+
+        let skill_md = test_skill_md(
+            "archive-triage",
+            "Archive triage",
+            "Use archived workflow instructions.",
+        );
+        let archive_url = serve_once_bytes(
+            test_skill_tarball("repo-main/skills/archive-triage/SKILL.md", &skill_md),
+            "application/gzip",
+        );
+        let registry_url = serve_once_text(format!(
+            r#"{{"skills":{{"archive-triage":{{"description":"Archive triage","source":"{archive_url}"}}}}}}"#
+        ));
+        let root = temp_root("skill-sync-archive");
+        let store = RuntimeStore::new(root.join("runtime"));
+        let cache_dir = root.join("skill-cache");
+        let mut config = temp_config(&root);
+        config.skills.registry_url = registry_url;
+        config.skills.cache_dir = cache_dir.display().to_string();
+        let mut app = TuiApp::new(Vec::new());
+
+        handle_tui_action(
+            &store,
+            Some(&config),
+            &mut app,
+            TuiAction::Skills {
+                command: TuiSkillsCommand::Sync,
+            },
+        )
+        .unwrap();
+
+        let cached = cache_dir.join("archive-triage.toml");
+        assert!(cached.is_file());
+        let cached_body = fs::read_to_string(cached).unwrap();
+        assert!(cached_body.contains("Imported from a SKILL.md bundle."));
+        assert!(cached_body.contains("Use archived workflow instructions."));
+        let (_, detail) = app.mcp_detail_for_test().expect("archive sync detail");
+        assert!(detail.contains("archive-triage downloaded"));
+        assert!(detail
+            .contains("1 skill(s) processed: 1 downloaded, 0 up-to-date, 0 skipped, 0 failed."));
 
         restore_env_var("DSCODE_ALLOW_LOCAL_FETCH", previous_allow_local);
         restore_env_var("DSCODE_NETWORK_DEFAULT", previous_network_default);
@@ -9048,6 +9513,52 @@ shell_allowlist = ["git diff"]
     }
 
     #[test]
+    fn handle_tui_action_installs_direct_skill_md_import() {
+        let _guard = env_lock();
+        let previous_allow_local = std::env::var("DSCODE_ALLOW_LOCAL_FETCH").ok();
+        let previous_network_default = std::env::var("DSCODE_NETWORK_DEFAULT").ok();
+        std::env::set_var("DSCODE_ALLOW_LOCAL_FETCH", "1");
+        std::env::set_var("DSCODE_NETWORK_DEFAULT", "allow");
+
+        let skill_url = serve_once_text(test_skill_md(
+            "md-triage",
+            "Markdown triage",
+            "Use Markdown skill instructions.",
+        ));
+        let root = temp_root("skill-install-skill-md");
+        let store = RuntimeStore::new(root.join("runtime"));
+        let user_skills = root.join("user-skills");
+        let mut config = temp_config(&root);
+        config.workspace.user_skills_dir = user_skills.display().to_string();
+        let mut app = TuiApp::new(Vec::new());
+
+        handle_tui_action(
+            &store,
+            Some(&config),
+            &mut app,
+            TuiAction::Skills {
+                command: TuiSkillsCommand::Install {
+                    source: skill_url.clone(),
+                },
+            },
+        )
+        .unwrap();
+
+        let skill_path = user_skills.join("md-triage.toml");
+        assert!(skill_path.is_file());
+        let body = fs::read_to_string(&skill_path).unwrap();
+        assert!(body.contains("Imported from a SKILL.md bundle."));
+        assert!(body.contains("Use Markdown skill instructions."));
+        let (_, detail) = app.mcp_detail_for_test().expect("skill md install detail");
+        assert!(detail.contains("Skill `md-triage` installed."));
+        assert!(detail.contains(&format!("URL: {skill_url}")));
+
+        restore_env_var("DSCODE_ALLOW_LOCAL_FETCH", previous_allow_local);
+        restore_env_var("DSCODE_NETWORK_DEFAULT", previous_network_default);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn handle_tui_action_installs_registry_toml_skill() {
         let _guard = env_lock();
         let previous_allow_local = std::env::var("DSCODE_ALLOW_LOCAL_FETCH").ok();
@@ -9083,6 +9594,61 @@ shell_allowlist = ["git diff"]
         let (_, detail) = app.mcp_detail_for_test().expect("registry install detail");
         assert!(detail.contains("Skill `registry-triage` installed."));
         assert!(detail.contains("Source: remote-triage"));
+
+        restore_env_var("DSCODE_ALLOW_LOCAL_FETCH", previous_allow_local);
+        restore_env_var("DSCODE_NETWORK_DEFAULT", previous_network_default);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn handle_tui_action_installs_registry_tarball_skill() {
+        let _guard = env_lock();
+        let previous_allow_local = std::env::var("DSCODE_ALLOW_LOCAL_FETCH").ok();
+        let previous_network_default = std::env::var("DSCODE_NETWORK_DEFAULT").ok();
+        std::env::set_var("DSCODE_ALLOW_LOCAL_FETCH", "1");
+        std::env::set_var("DSCODE_NETWORK_DEFAULT", "allow");
+
+        let skill_md = test_skill_md(
+            "archive-triage",
+            "Archive triage",
+            "Use archive install instructions.",
+        );
+        let archive_url = serve_once_bytes(
+            test_skill_tarball("repo-main/SKILL.md", &skill_md),
+            "application/gzip",
+        );
+        let registry_url = serve_once_text(format!(
+            r#"{{"skills":{{"remote-archive":{{"description":"Remote archive","source":"{archive_url}"}}}}}}"#
+        ));
+        let root = temp_root("skill-install-registry-archive");
+        let store = RuntimeStore::new(root.join("runtime"));
+        let user_skills = root.join("user-skills");
+        let mut config = temp_config(&root);
+        config.workspace.user_skills_dir = user_skills.display().to_string();
+        config.skills.registry_url = registry_url;
+        let mut app = TuiApp::new(Vec::new());
+
+        handle_tui_action(
+            &store,
+            Some(&config),
+            &mut app,
+            TuiAction::Skills {
+                command: TuiSkillsCommand::Install {
+                    source: "remote-archive".to_string(),
+                },
+            },
+        )
+        .unwrap();
+
+        let skill_path = user_skills.join("archive-triage.toml");
+        assert!(skill_path.is_file());
+        let body = fs::read_to_string(skill_path).unwrap();
+        assert!(body.contains("Use archive install instructions."));
+        let (_, detail) = app
+            .mcp_detail_for_test()
+            .expect("registry archive install detail");
+        assert!(detail.contains("Skill `archive-triage` installed."));
+        assert!(detail.contains("Source: remote-archive"));
 
         restore_env_var("DSCODE_ALLOW_LOCAL_FETCH", previous_allow_local);
         restore_env_var("DSCODE_NETWORK_DEFAULT", previous_network_default);
@@ -9141,8 +9707,61 @@ shell_allowlist = ["git diff"]
     }
 
     #[test]
-    fn handle_tui_action_rejects_unsupported_archive_skill_source() {
-        let root = temp_root("skill-install-archive");
+    fn handle_tui_action_updates_installed_skill_md_import() {
+        let _guard = env_lock();
+        let previous_allow_local = std::env::var("DSCODE_ALLOW_LOCAL_FETCH").ok();
+        let previous_network_default = std::env::var("DSCODE_NETWORK_DEFAULT").ok();
+        std::env::set_var("DSCODE_ALLOW_LOCAL_FETCH", "1");
+        std::env::set_var("DSCODE_NETWORK_DEFAULT", "allow");
+
+        let root = temp_root("skill-update-skill-md");
+        let store = RuntimeStore::new(root.join("runtime"));
+        let user_skills = root.join("user-skills");
+        fs::create_dir_all(&user_skills).unwrap();
+        let old_toml =
+            skill_md_to_toml(&test_skill_md("md-triage", "Old triage", "Old body.")).unwrap();
+        let new_md = test_skill_md("md-triage", "Updated triage", "Updated body.");
+        let new_toml = skill_md_to_toml(&new_md).unwrap();
+        let skill_path = user_skills.join("md-triage.toml");
+        fs::write(&skill_path, old_toml).unwrap();
+        let update_url = serve_once_text(new_md);
+        write_installed_from_marker(
+            &user_skills.join("md-triage.installed-from"),
+            &update_url,
+            &update_url,
+            "old-checksum",
+        )
+        .unwrap();
+        let mut config = temp_config(&root);
+        config.workspace.user_skills_dir = user_skills.display().to_string();
+        let mut app = TuiApp::new(Vec::new());
+
+        handle_tui_action(
+            &store,
+            Some(&config),
+            &mut app,
+            TuiAction::Skills {
+                command: TuiSkillsCommand::Update {
+                    name: "md-triage".to_string(),
+                },
+            },
+        )
+        .unwrap();
+
+        assert_eq!(fs::read_to_string(&skill_path).unwrap(), new_toml);
+        let marker = fs::read_to_string(user_skills.join("md-triage.installed-from")).unwrap();
+        assert!(marker.contains(&checksum_hex(&new_toml)));
+        let (_, detail) = app.mcp_detail_for_test().expect("skill md update detail");
+        assert!(detail.contains("Skill `md-triage` updated."));
+
+        restore_env_var("DSCODE_ALLOW_LOCAL_FETCH", previous_allow_local);
+        restore_env_var("DSCODE_NETWORK_DEFAULT", previous_network_default);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn handle_tui_action_rejects_unsupported_zip_skill_source() {
+        let root = temp_root("skill-install-zip");
         let store = RuntimeStore::new(root.join("runtime"));
         let mut app = TuiApp::new(Vec::new());
         let config = temp_config(&root);
@@ -9153,17 +9772,15 @@ shell_allowlist = ["git diff"]
             &mut app,
             TuiAction::Skills {
                 command: TuiSkillsCommand::Install {
-                    source: "github:owner/repo".to_string(),
+                    source: "https://example.com/repo.zip".to_string(),
                 },
             },
         )
         .unwrap();
 
-        let (_, detail) = app
-            .mcp_detail_for_test()
-            .expect("unsupported archive detail");
-        assert!(detail.contains("Skill source is not supported"));
-        assert!(detail.contains("GitHub/tarball/SKILL.md archive installer"));
+        let (_, detail) = app.mcp_detail_for_test().expect("unsupported zip detail");
+        assert!(detail.contains("Skill zip archives are not supported yet"));
+        assert!(detail.contains("direct SKILL.md URLs"));
 
         let _ = std::fs::remove_dir_all(root);
     }
