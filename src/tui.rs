@@ -577,6 +577,7 @@ pub enum TuiMcpDetailKind {
     Home,
     Note,
     Subagents,
+    Rlm,
     Hooks,
     Goal,
     Anchor,
@@ -621,6 +622,7 @@ impl TuiMcpDetailKind {
             Self::Home => "home",
             Self::Note => "note",
             Self::Subagents => "subagents",
+            Self::Rlm => "rlm",
             Self::Hooks => "hooks",
             Self::Goal => "goal",
             Self::Anchor => "anchor",
@@ -665,6 +667,7 @@ impl TuiMcpDetailKind {
             Self::Home => "Home",
             Self::Note => "Note",
             Self::Subagents => "Subagents",
+            Self::Rlm => "RLM",
             Self::Hooks => "Hooks",
             Self::Goal => "Goal",
             Self::Anchor => "Anchor",
@@ -709,6 +712,7 @@ impl TuiMcpDetailKind {
             Self::Home => Self::Manager,
             Self::Note => Self::Manager,
             Self::Subagents => Self::Manager,
+            Self::Rlm => Self::Manager,
             Self::Hooks => Self::Manager,
             Self::Goal => Self::Manager,
             Self::Anchor => Self::Manager,
@@ -753,6 +757,7 @@ impl TuiMcpDetailKind {
             Self::Home => Self::Manager,
             Self::Note => Self::Manager,
             Self::Subagents => Self::Manager,
+            Self::Rlm => Self::Manager,
             Self::Hooks => Self::Manager,
             Self::Goal => Self::Manager,
             Self::Anchor => Self::Manager,
@@ -1002,6 +1007,12 @@ pub enum TuiDiffCommand {
 pub enum TuiSubagentsCommand {
     List,
     Spawn { max_depth: usize, task: String },
+    Help,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TuiRlmCommand {
+    Start { max_depth: usize, target: String },
     Help,
 }
 
@@ -1667,6 +1678,42 @@ fn parse_tui_agent_command(line: &str) -> Option<Result<TuiSubagentsCommand, Str
     }))
 }
 
+fn parse_tui_rlm_command(line: &str) -> Option<Result<TuiRlmCommand, String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/rlm")
+        .or_else(|| strip_tui_command_prefix(trimmed, "rlm"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "/recursive"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "recursive"))?;
+    let arg = rest.trim();
+    if matches!(arg, "help" | "--help" | "-h") {
+        return Some(Ok(TuiRlmCommand::Help));
+    }
+    if arg.is_empty() {
+        return Some(Err(
+            "usage: rlm [0-3] <file_or_text> or /rlm [0-3] <file_or_text>".to_string(),
+        ));
+    }
+    let mut parts = arg.split_whitespace();
+    let first = parts.next().unwrap_or_default();
+    let (max_depth, target) = match first.parse::<usize>() {
+        Ok(depth) if depth <= 3 => (depth, parts.collect::<Vec<_>>().join(" ")),
+        Ok(_) => {
+            return Some(Err("rlm depth must be between 0 and 3".to_string()));
+        }
+        Err(_) => (1, arg.to_string()),
+    };
+    let target = target.trim();
+    if target.is_empty() {
+        return Some(Err(
+            "usage: rlm [0-3] <file_or_text> or /rlm [0-3] <file_or_text>".to_string(),
+        ));
+    }
+    Some(Ok(TuiRlmCommand::Start {
+        max_depth,
+        target: target.to_string(),
+    }))
+}
+
 fn parse_note_index_arg(value: &str) -> Option<usize> {
     value.parse::<usize>().ok().filter(|index| *index > 0)
 }
@@ -2037,6 +2084,13 @@ const TUI_HELP_COMMANDS: &[TuiHelpCommandInfo] = &[
         description: "Queue a persistent sub-agent task for the active thread.",
     },
     TuiHelpCommandInfo {
+        category: "Runtime Work",
+        name: "rlm",
+        aliases: &["recursive"],
+        usage: "/rlm [0-3] <file_or_text>",
+        description: "Ask the active agent to open a persistent RLM process.",
+    },
+    TuiHelpCommandInfo {
         category: "Interaction",
         name: "note",
         aliases: &[],
@@ -2368,6 +2422,8 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "subagents",
     "agents",
     "agent ",
+    "rlm ",
+    "recursive ",
     "note ",
     "note add ",
     "note list",
@@ -2538,6 +2594,8 @@ const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
     "/subagents",
     "/agents",
     "/agent ",
+    "/rlm ",
+    "/recursive ",
     "/note ",
     "/note add ",
     "/note list",
@@ -4901,6 +4959,19 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(command) = parse_tui_rlm_command(&content) {
+                    match command {
+                        Ok(command) => {
+                            self.handle_rlm_command(command);
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some(command) = parse_tui_anchor_command(&content) {
                     match command {
                         Ok(command) => {
@@ -5537,6 +5608,15 @@ impl TuiApp {
         {
             match command {
                 Ok(command) => self.handle_subagents_command(command),
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_rlm_command(command) {
+            match command {
+                Ok(command) => self.handle_rlm_command(command),
                 Err(message) => {
                     self.status = message;
                 }
@@ -6500,7 +6580,7 @@ impl TuiApp {
             }
             ["cancel"] | ["stop"] => self.request_cancel_run(),
             ["help"] => {
-                self.status = "commands: mode plan|agent|yolo, diff, clear, goal [objective|clear], sessions [filter], threads [filter], agent [N] <task>, subagents, task <summary>|select all|select clear|pause [id]|resume [id]|cancel [id]|bulk pause|bulk resume|bulk cancel, shell <cmd>|list|show|wait|poll|stdin|close-stdin|cancel, stash [list|pop|clear], memory [show|path|clear|edit|help], anchor [text|list|remove], queue [list|edit|drop|clear], share, export [path], mcp manager|list|tools|prompts|resources|resource-templates|close|init|add|enable|disable|remove|user add|user enable|user disable|user remove|validate, diagnostics [--changed|paths...], restore snapshot|list|show, revert turn <id> [--apply], compact, approval, cancel".to_string();
+                self.status = "commands: mode plan|agent|yolo, diff, clear, goal [objective|clear], sessions [filter], threads [filter], agent [N] <task>, subagents, rlm [N] <file_or_text>, task <summary>|select all|select clear|pause [id]|resume [id]|cancel [id]|bulk pause|bulk resume|bulk cancel, shell <cmd>|list|show|wait|poll|stdin|close-stdin|cancel, stash [list|pop|clear], memory [show|path|clear|edit|help], anchor [text|list|remove], queue [list|edit|drop|clear], share, export [path], mcp manager|list|tools|prompts|resources|resource-templates|close|init|add|enable|disable|remove|user add|user enable|user disable|user remove|validate, diagnostics [--changed|paths...], restore snapshot|list|show, revert turn <id> [--apply], compact, approval, cancel".to_string();
             }
             _ => {
                 self.status = format!("unknown command: {command}");
@@ -7253,6 +7333,104 @@ impl TuiApp {
             );
         }
         detail
+    }
+
+    fn handle_rlm_command(&mut self, command: TuiRlmCommand) {
+        match command {
+            TuiRlmCommand::Start { max_depth, target } => {
+                self.request_rlm_session(max_depth, target);
+            }
+            TuiRlmCommand::Help => {
+                self.set_mcp_detail(TuiMcpDetailKind::Rlm, self.render_rlm_help_detail());
+                self.status = "rlm help shown".to_string();
+            }
+        }
+    }
+
+    fn request_rlm_session(&mut self, max_depth: usize, target: String) {
+        let target = target.trim().to_string();
+        if target.is_empty() {
+            self.status = "rlm target is empty".to_string();
+            return;
+        }
+        let Some(thread_id) = self.selected_thread_id.clone() else {
+            self.status = "no active durable thread for rlm".to_string();
+            return;
+        };
+        let content = self.render_rlm_user_message(max_depth, &target);
+        self.pending_actions.push(TuiAction::SubmitUserMessage {
+            thread_id: thread_id.clone(),
+            content,
+        });
+        self.status = format!(
+            "rlm request queued for {thread_id} (depth={max_depth}): {}",
+            clip_line(&target, 60)
+        );
+    }
+
+    fn render_rlm_help_detail(&self) -> String {
+        let mut detail = String::new();
+        let _ = writeln!(detail, "DeepSeekCode RLM");
+        let _ = writeln!(detail, "================");
+        let _ = writeln!(detail);
+        match self.active_thread() {
+            Some(thread) => {
+                push_status_row(
+                    &mut detail,
+                    "Thread:",
+                    &format!("{} [{}]", thread.title, thread.id),
+                );
+            }
+            None => {
+                let _ = writeln!(detail, "No active durable thread selected.");
+            }
+        }
+        if let Some(session) = self.selected_session() {
+            push_status_row(&mut detail, "Workspace:", &session.workspace);
+        }
+        let _ = writeln!(detail);
+        let _ = writeln!(detail, "Usage");
+        let _ = writeln!(detail, "-----");
+        let _ = writeln!(
+            detail,
+            "- /rlm [0-3] <file_or_text>        Open a persistent RLM process"
+        );
+        let _ = writeln!(detail, "- /recursive [0-3] <file_or_text>  Alias for /rlm");
+        let _ = writeln!(detail);
+        let _ = writeln!(
+            detail,
+            "Existing files are passed as file_path; other targets are passed as content."
+        );
+        detail
+    }
+
+    fn render_rlm_user_message(&self, max_depth: usize, target: &str) -> String {
+        let source_arg = self.rlm_source_arg(target);
+        let session_id = self
+            .selected_thread_id
+            .as_deref()
+            .map(|thread_id| format!("slash_rlm_{}", stable_tui_segment(thread_id)))
+            .unwrap_or_else(|| "slash_rlm".to_string());
+        format!(
+            "Open and use a persistent RLM process for this request. Call `rlm_process` with `live=true`, `session_id: {session_id:?}`, `task: {:?}`, {source_arg}, and `max_depth: {max_depth}`. Use `rlm_process_wait` or `rlm_process_events` to inspect progress, and use the returned context before answering.",
+            format!("Analyze this RLM target: {target}")
+        )
+    }
+
+    fn rlm_source_arg(&self, target: &str) -> String {
+        let target_path = Path::new(target);
+        let exists = if target_path.is_absolute() {
+            target_path.exists()
+        } else {
+            self.selected_session()
+                .map(|session| Path::new(&session.workspace).join(target).exists())
+                .unwrap_or_else(|| target_path.exists())
+        };
+        if exists {
+            format!("`file_path: {target:?}`")
+        } else {
+            format!("`content: {target:?}`")
+        }
     }
 
     fn request_anchor_command(&mut self, command: TuiAnchorCommand) {
@@ -10151,6 +10329,19 @@ fn clip_line(value: &str, max_chars: usize) -> String {
         clipped.push_str("...");
     }
     clipped
+}
+
+fn stable_tui_segment(value: &str) -> String {
+    let segment = value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+        .take(48)
+        .collect::<String>();
+    if segment.is_empty() {
+        "session".to_string()
+    } else {
+        segment
+    }
 }
 
 fn tui_queue_preview(value: &str) -> String {
@@ -14671,6 +14862,80 @@ mod tests {
         let (kind, detail) = app.mcp_detail.as_ref().expect("subagents help detail");
         assert_eq!(*kind, TuiMcpDetailKind::Subagents);
         assert!(detail.contains("/agent [0-3] <task>"));
+    }
+
+    #[test]
+    fn rlm_command_queues_persistent_process_prompt() {
+        let root = temp_root("rlm-command");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("notes.txt"), "persistent context").unwrap();
+        let mut app = TuiApp::with_runtime(
+            vec![TuiSession {
+                id: "session-one".to_string(),
+                title: "One".to_string(),
+                workspace: root.display().to_string(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-one".to_string()),
+                thread_count: 1,
+            }],
+            vec![TuiThread {
+                id: "thread-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                title: "First thread".to_string(),
+                mode: "agent".to_string(),
+                status: "active".to_string(),
+                latest_turn_id: None,
+                event_seq: 1,
+            }],
+            Vec::new(),
+        );
+
+        run_palette_command(&mut app, "rlm 2 analyze src/main.rs");
+        let actions = app.drain_actions();
+        assert_eq!(actions.len(), 1);
+        let TuiAction::SubmitUserMessage { thread_id, content } = &actions[0] else {
+            panic!("expected rlm submit action");
+        };
+        assert_eq!(thread_id, "thread-one");
+        assert!(content.contains("`rlm_process`"));
+        assert!(content.contains("live=true"));
+        assert!(content.contains("session_id: \"slash_rlm_thread-one\""));
+        assert!(content.contains("content: \"analyze src/main.rs\""));
+        assert!(content.contains("max_depth: 2"));
+
+        run_palette_command(&mut app, "rlm 0 notes.txt");
+        let actions = app.drain_actions();
+        let TuiAction::SubmitUserMessage { content, .. } = &actions[0] else {
+            panic!("expected rlm file submit action");
+        };
+        assert!(content.contains("file_path: \"notes.txt\""));
+        assert!(content.contains("max_depth: 0"));
+
+        run_palette_command(&mut app, "rlm 4 invalid depth");
+        assert!(app.drain_actions().is_empty());
+        assert_eq!(app.status, "rlm depth must be between 0 and 3");
+
+        app.composer_focused = true;
+        app.composer = "/recursive inspect project".to_string();
+        app.composer_cursor = app.composer.len();
+        assert!(app.handle_key(KeyCode::Enter));
+        let actions = app.drain_actions();
+        let TuiAction::SubmitUserMessage { content, .. } = &actions[0] else {
+            panic!("expected recursive submit action");
+        };
+        assert!(content.contains("max_depth: 1"));
+        assert!(content.contains("content: \"inspect project\""));
+        assert_eq!(app.composer, "");
+
+        app.composer_focused = true;
+        app.composer = "/rlm help".to_string();
+        app.composer_cursor = app.composer.len();
+        assert!(app.handle_key(KeyCode::Enter));
+        let (kind, detail) = app.mcp_detail.as_ref().expect("rlm help detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Rlm);
+        assert!(detail.contains("/rlm [0-3] <file_or_text>"));
+        assert!(detail.contains("/recursive [0-3] <file_or_text>"));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

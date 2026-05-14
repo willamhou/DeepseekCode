@@ -25,6 +25,9 @@ Current surfaces:
 - runtime-backed sub-agent task inspection and queueing with `subagents` /
   `/subagents`, `agents` / `/agents`, and `agent [0-3] <task>` /
   `/agent [0-3] <task>`
+- persistent RLM process kickoff with `rlm [0-3] <file_or_text>` / `/rlm`,
+  plus `recursive` / `/recursive` aliases, routed through the active thread
+  as an `rlm_process live=true` agent instruction
 - hook inspection with `hooks` / `/hooks`, including `hooks list` and
   `hooks events` over the configured project/user hook roots
 - composer and command palette custom slash commands from project
@@ -328,6 +331,9 @@ Command palette commands currently implemented:
 | `subagents`, `/subagents`, `agents`, `/agents` | List runtime-backed `subagent` and `subagent_input` tasks for the active thread |
 | `agent [0-3] <task>`, `/agent [0-3] <task>` | Queue a pending active-thread `subagent` runtime task; omitted depth defaults to `1` |
 | `subagents help`, `/agents help`, `agent help`, `/agent help` | Show sub-agent command behavior and the current thread target |
+| `rlm [0-3] <file_or_text>`, `/rlm [0-3] <file_or_text>` | Ask the active agent to open a persistent `rlm_process live=true` session; omitted depth defaults to `1` |
+| `recursive [0-3] <file_or_text>`, `/recursive [0-3] <file_or_text>` | Alias for `rlm` / `/rlm` |
+| `rlm help`, `/rlm help` | Show RLM command behavior and active thread/workspace target |
 | `shell <command>`, `shell run <command>`, `! <command>` | Start an allowlisted local background shell job, or request foreground approval for an unallowlisted command |
 | `shell list`, `jobs list` | List known local background shell jobs |
 | `shell show <id>`, `jobs show <id>` | Show a shell job snapshot with accumulated output |

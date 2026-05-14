@@ -394,6 +394,10 @@ Landed first slice:
 - local file-backed TUI now supports DeepSeek-TUI-style `/subagents` and
   `/agents` active-thread sub-agent task inspection plus `/agent [0-3] <task>`
   queueing into pending `subagent` runtime tasks for daemon/external runners
+- TUI now supports DeepSeek-TUI-style `/rlm [0-3] <file_or_text>` and
+  `/recursive` aliases, routing a persistent `rlm_process live=true` kickoff
+  prompt through the active durable thread so local and HTTP runtime sessions
+  share the existing message-submit path
 - local file-backed TUI now supports DeepSeek-TUI-style `/hooks` read-only
   inspection, listing the configured hook enabled state, timeout, project/user
   hook roots, executable scripts by event directory, and supported event names

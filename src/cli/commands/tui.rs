@@ -1243,6 +1243,7 @@ fn mcp_detail_summary(
         TuiMcpDetailKind::Home => Err(app_error("home details are not MCP details")),
         TuiMcpDetailKind::Note => Err(app_error("note details are not MCP details")),
         TuiMcpDetailKind::Subagents => Err(app_error("subagent details are not MCP details")),
+        TuiMcpDetailKind::Rlm => Err(app_error("rlm details are not MCP details")),
         TuiMcpDetailKind::Anchor => Err(app_error("anchor details are not MCP details")),
         TuiMcpDetailKind::Queue => Err(app_error("queue details are not MCP details")),
         TuiMcpDetailKind::Share => Err(app_error("share details are not MCP details")),
