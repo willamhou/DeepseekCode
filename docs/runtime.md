@@ -1753,8 +1753,8 @@ Current boundaries are explicit:
 
 - untracked restore currently covers regular files, empty directories, Unix
   directory mode metadata for captured untracked directory trees, Unix FIFOs,
-  Unix sockets, and Unix symlinks, not device nodes or Windows symlink
-  recreation;
+  Unix sockets, Unix symlinks, and Unix device node metadata with best-effort
+  `mknod` restore when the OS/user permits it, not Windows symlink recreation;
 - untracked files created after the snapshot are not cleaned unless they became
   tracked changes in the git diff;
 - rollback storage under `.dscode/rollback` is excluded from untracked capture;

@@ -30,6 +30,7 @@ pub struct SnapshotRecord {
     pub untracked_fifos: Vec<String>,
     pub untracked_sockets: Vec<String>,
     pub untracked_symlinks: Vec<UntrackedSymlinkRecord>,
+    pub untracked_device_nodes: Vec<UntrackedDeviceNodeRecord>,
     pub tracked_only: bool,
     pub runtime_thread_id: Option<String>,
     pub runtime_turn_id: Option<String>,
@@ -47,6 +48,15 @@ pub struct UntrackedDirectoryMetadataRecord {
     pub mode: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UntrackedDeviceNodeRecord {
+    pub path: String,
+    pub kind: String,
+    pub major: u64,
+    pub minor: u64,
+    pub mode: u32,
+}
+
 impl SnapshotRecord {
     pub fn untracked_entry_count(&self) -> usize {
         self.untracked_files.len()
@@ -54,6 +64,7 @@ impl SnapshotRecord {
             + self.untracked_fifos.len()
             + self.untracked_sockets.len()
             + self.untracked_symlinks.len()
+            + self.untracked_device_nodes.len()
     }
 }
 
@@ -128,6 +139,8 @@ impl RollbackStore {
             capture_empty_untracked_directories(Path::new(&git_root), &self.root)?;
         let untracked_fifos = capture_untracked_fifos(Path::new(&git_root), &self.root)?;
         let untracked_sockets = capture_untracked_sockets(Path::new(&git_root), &self.root)?;
+        let untracked_device_nodes =
+            capture_untracked_device_nodes(Path::new(&git_root), &self.root)?;
         let untracked_directory_metadata = capture_untracked_directory_metadata(
             Path::new(&git_root),
             &self.root,
@@ -136,13 +149,15 @@ impl RollbackStore {
             &untracked_fifos,
             &untracked_sockets,
             &untracked_symlinks,
+            &untracked_device_nodes,
         )?;
         let tracked_only = untracked_files.is_empty()
             && untracked_directories.is_empty()
             && untracked_directory_metadata.is_empty()
             && untracked_fifos.is_empty()
             && untracked_sockets.is_empty()
-            && untracked_symlinks.is_empty();
+            && untracked_symlinks.is_empty()
+            && untracked_device_nodes.is_empty();
         let record = SnapshotRecord {
             id,
             label: if label.trim().is_empty() {
@@ -165,6 +180,7 @@ impl RollbackStore {
             untracked_fifos,
             untracked_sockets,
             untracked_symlinks,
+            untracked_device_nodes,
             tracked_only,
             runtime_thread_id: None,
             runtime_turn_id: None,
@@ -318,6 +334,7 @@ impl RollbackStore {
                 &record.untracked_fifos,
                 &record.untracked_sockets,
                 &record.untracked_symlinks,
+                &record.untracked_device_nodes,
             )?;
         }
         let mut changed_files = if apply {
@@ -330,6 +347,12 @@ impl RollbackStore {
             changed_files.extend(record.untracked_directories.iter().cloned());
             changed_files.extend(record.untracked_fifos.iter().cloned());
             changed_files.extend(record.untracked_sockets.iter().cloned());
+            changed_files.extend(
+                record
+                    .untracked_device_nodes
+                    .iter()
+                    .map(|entry| entry.path.clone()),
+            );
             changed_files.extend(
                 record
                     .untracked_symlinks
@@ -484,6 +507,16 @@ pub fn snapshot_to_json(record: &SnapshotRecord) -> JsonValue {
                 .collect(),
         ),
     );
+    value.insert(
+        "untracked_device_nodes".to_string(),
+        JsonValue::Array(
+            record
+                .untracked_device_nodes
+                .iter()
+                .map(untracked_device_node_to_json)
+                .collect(),
+        ),
+    );
     JsonValue::Object(value)
 }
 
@@ -497,6 +530,16 @@ fn untracked_symlink_to_json(record: &UntrackedSymlinkRecord) -> JsonValue {
 fn untracked_directory_metadata_to_json(record: &UntrackedDirectoryMetadataRecord) -> JsonValue {
     JsonValue::Object(object([
         ("path", JsonValue::String(record.path.clone())),
+        ("mode", JsonValue::Number(record.mode.to_string())),
+    ]))
+}
+
+fn untracked_device_node_to_json(record: &UntrackedDeviceNodeRecord) -> JsonValue {
+    JsonValue::Object(object([
+        ("path", JsonValue::String(record.path.clone())),
+        ("kind", JsonValue::String(record.kind.clone())),
+        ("major", JsonValue::Number(record.major.to_string())),
+        ("minor", JsonValue::Number(record.minor.to_string())),
         ("mode", JsonValue::Number(record.mode.to_string())),
     ]))
 }
@@ -520,6 +563,7 @@ fn parse_snapshot_record(root: &BTreeMap<String, JsonValue>) -> AppResult<Snapsh
         untracked_fifos: optional_string_array(root, "untracked_fifos")?,
         untracked_sockets: optional_string_array(root, "untracked_sockets")?,
         untracked_symlinks: optional_untracked_symlinks(root)?,
+        untracked_device_nodes: optional_untracked_device_nodes(root)?,
         tracked_only: matches!(root.get("tracked_only"), Some(JsonValue::Bool(true))),
         runtime_thread_id: optional_safe_string(root, "runtime_thread_id")?,
         runtime_turn_id: optional_safe_string(root, "runtime_turn_id")?,
@@ -789,6 +833,7 @@ fn capture_untracked_directory_metadata(
     fifos: &[String],
     sockets: &[String],
     symlinks: &[UntrackedSymlinkRecord],
+    device_nodes: &[UntrackedDeviceNodeRecord],
 ) -> AppResult<Vec<UntrackedDirectoryMetadataRecord>> {
     use std::collections::BTreeSet;
     use std::os::unix::fs::PermissionsExt;
@@ -803,6 +848,9 @@ fn capture_untracked_directory_metadata(
     }
     for symlink in symlinks {
         collect_parent_directory_candidates(&symlink.path, &mut candidates)?;
+    }
+    for device in device_nodes {
+        collect_parent_directory_candidates(&device.path, &mut candidates)?;
     }
 
     let mut records = Vec::new();
@@ -843,6 +891,7 @@ fn capture_untracked_directory_metadata(
     _fifos: &[String],
     _sockets: &[String],
     _symlinks: &[UntrackedSymlinkRecord],
+    _device_nodes: &[UntrackedDeviceNodeRecord],
 ) -> AppResult<Vec<UntrackedDirectoryMetadataRecord>> {
     Ok(Vec::new())
 }
@@ -914,6 +963,32 @@ fn capture_untracked_sockets(_git_root: &Path, _store_root: &Path) -> AppResult<
 }
 
 #[cfg(unix)]
+fn capture_untracked_device_nodes(
+    git_root: &Path,
+    store_root: &Path,
+) -> AppResult<Vec<UntrackedDeviceNodeRecord>> {
+    let store_prefix = store_root_relative_prefix(git_root, store_root);
+    let mut device_nodes = Vec::new();
+    collect_untracked_device_nodes(
+        git_root,
+        git_root,
+        store_prefix.as_deref(),
+        &mut device_nodes,
+    )?;
+    device_nodes.sort_by(|a, b| a.path.cmp(&b.path));
+    device_nodes.dedup_by(|a, b| a.path == b.path);
+    Ok(device_nodes)
+}
+
+#[cfg(not(unix))]
+fn capture_untracked_device_nodes(
+    _git_root: &Path,
+    _store_root: &Path,
+) -> AppResult<Vec<UntrackedDeviceNodeRecord>> {
+    Ok(Vec::new())
+}
+
+#[cfg(unix)]
 fn collect_untracked_fifos(
     git_root: &Path,
     current: &Path,
@@ -974,6 +1049,52 @@ fn collect_untracked_sockets(
         } else if file_type.is_socket() && !is_git_tracked_path(git_root, &relative)? {
             safe_relative_path(&relative)?;
             sockets.push(relative);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn collect_untracked_device_nodes(
+    git_root: &Path,
+    current: &Path,
+    store_prefix: Option<&str>,
+    device_nodes: &mut Vec<UntrackedDeviceNodeRecord>,
+) -> AppResult<()> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+
+    for entry in fs::read_dir(current)? {
+        let entry = entry?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)?;
+        let Some(relative) = relative_git_path(git_root, &path)? else {
+            continue;
+        };
+        if is_rollback_internal_path(&relative, store_prefix)
+            || is_git_internal_path(&relative)
+            || is_git_ignored_path(git_root, &relative)?
+        {
+            continue;
+        }
+        let file_type = metadata.file_type();
+        if file_type.is_dir() && !file_type.is_symlink() {
+            collect_untracked_device_nodes(git_root, &path, store_prefix, device_nodes)?;
+        } else if (file_type.is_char_device() || file_type.is_block_device())
+            && !is_git_tracked_path(git_root, &relative)?
+        {
+            safe_relative_path(&relative)?;
+            let (major, minor) = device_major_minor(metadata.rdev());
+            device_nodes.push(UntrackedDeviceNodeRecord {
+                path: relative,
+                kind: if file_type.is_char_device() {
+                    "char".to_string()
+                } else {
+                    "block".to_string()
+                },
+                major,
+                minor,
+                mode: metadata.permissions().mode() & 0o7777,
+            });
         }
     }
     Ok(())
@@ -1104,6 +1225,18 @@ fn directory_has_tracked_descendants(git_root: &Path, path: &str) -> AppResult<b
     Ok(!output.stdout.is_empty())
 }
 
+#[cfg(all(unix, target_os = "linux"))]
+fn device_major_minor(rdev: u64) -> (u64, u64) {
+    let major = ((rdev >> 8) & 0x0fff) | ((rdev >> 32) & !0x0fff);
+    let minor = (rdev & 0x00ff) | ((rdev >> 12) & !0x00ff);
+    (major, minor)
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn device_major_minor(rdev: u64) -> (u64, u64) {
+    ((rdev >> 8) & 0xff, rdev & 0xff)
+}
+
 fn restore_untracked_entries(
     git_root: &Path,
     snapshot_dir: &Path,
@@ -1113,6 +1246,7 @@ fn restore_untracked_entries(
     fifos: &[String],
     sockets: &[String],
     symlinks: &[UntrackedSymlinkRecord],
+    device_nodes: &[UntrackedDeviceNodeRecord],
 ) -> AppResult<()> {
     for directory in directories {
         let relative = safe_relative_path(directory)?;
@@ -1162,6 +1296,20 @@ fn restore_untracked_entries(
         create_socket(&target).map_err(|error| {
             app_error(format!(
                 "failed to restore untracked socket `{socket}`: {error}"
+            ))
+        })?;
+    }
+    for device in device_nodes {
+        let relative = safe_relative_path(&device.path)?;
+        let target = git_root.join(&relative);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        remove_existing_restore_target(&target)?;
+        create_device_node(&target, device).map_err(|error| {
+            app_error(format!(
+                "failed to restore untracked device node `{}`: {error}",
+                device.path
             ))
         })?;
     }
@@ -1362,6 +1510,46 @@ fn create_socket(_target: &Path) -> AppResult<()> {
     Err(app_error("Unix socket restore is only supported on Unix"))
 }
 
+#[cfg(unix)]
+fn create_device_node(target: &Path, record: &UntrackedDeviceNodeRecord) -> AppResult<()> {
+    let node_type = match record.kind.as_str() {
+        "char" => "c",
+        "block" => "b",
+        other => {
+            return Err(app_error(format!(
+                "unsupported device node kind `{other}`; expected char or block"
+            )))
+        }
+    };
+    let output = Command::new("mknod")
+        .arg(target)
+        .arg(node_type)
+        .arg(record.major.to_string())
+        .arg(record.minor.to_string())
+        .output()
+        .map_err(|error| app_error(format!("could not invoke mknod: {error}")))?;
+    if !output.status.success() {
+        return Err(app_error(format!(
+            "mknod failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    set_device_node_mode(target, record.mode)
+}
+
+#[cfg(not(unix))]
+fn create_device_node(_target: &Path, _record: &UntrackedDeviceNodeRecord) -> AppResult<()> {
+    Err(app_error("device node restore is only supported on Unix"))
+}
+
+#[cfg(unix)]
+fn set_device_node_mode(target: &Path, mode: u32) -> AppResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::set_permissions(target, fs::Permissions::from_mode(mode))
+        .map_err(|error| app_error(format!("chmod failed: {error}")))
+}
+
 fn safe_relative_path(path: &str) -> AppResult<PathBuf> {
     let value = Path::new(path);
     if value.as_os_str().is_empty() || value.is_absolute() {
@@ -1485,6 +1673,54 @@ fn optional_untracked_directory_metadata(
         });
     }
     items.sort_by(|a, b| a.path.cmp(&b.path));
+    items.dedup_by(|a, b| a.path == b.path);
+    Ok(items)
+}
+
+fn optional_untracked_device_nodes(
+    root: &BTreeMap<String, JsonValue>,
+) -> AppResult<Vec<UntrackedDeviceNodeRecord>> {
+    let Some(value) = root.get("untracked_device_nodes") else {
+        return Ok(Vec::new());
+    };
+    let array = json_as_array(value)
+        .ok_or_else(|| app_error("rollback manifest `untracked_device_nodes` must be an array"))?;
+    let mut items = Vec::with_capacity(array.len());
+    for item in array {
+        let object = json_as_object(item).ok_or_else(|| {
+            app_error("rollback manifest `untracked_device_nodes` must contain objects")
+        })?;
+        let path = required_string(object, "path")?;
+        safe_relative_path(&path)?;
+        let kind = required_string(object, "kind")?;
+        if kind != "char" && kind != "block" {
+            return Err(app_error(format!(
+                "rollback manifest device node kind out of range for `{path}`: {kind}"
+            )));
+        }
+        let major = required_u64(object, "major")?;
+        let minor = required_u64(object, "minor")?;
+        let mode = required_u64(object, "mode")?;
+        if mode > 0o7777 {
+            return Err(app_error(format!(
+                "rollback manifest device node mode out of range for `{path}`: {mode}"
+            )));
+        }
+        items.push(UntrackedDeviceNodeRecord {
+            path,
+            kind,
+            major,
+            minor,
+            mode: mode as u32,
+        });
+    }
+    items.sort_by(|a, b| {
+        a.path
+            .cmp(&b.path)
+            .then_with(|| a.kind.cmp(&b.kind))
+            .then_with(|| a.major.cmp(&b.major))
+            .then_with(|| a.minor.cmp(&b.minor))
+    });
     items.dedup_by(|a, b| a.path == b.path);
     Ok(items)
 }
@@ -2026,6 +2262,63 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_manifest_round_trips_untracked_device_nodes() {
+        let manifest = r#"{
+            "id":"snapshot-device",
+            "label":"device",
+            "created_at":"epoch+7",
+            "workspace":".",
+            "git_root":".",
+            "git_head":"abc123",
+            "status_bytes":0,
+            "patch_bytes":0,
+            "tracked_only":false,
+            "untracked_files":[],
+            "untracked_device_nodes":[
+                {"path":"dev/nullish","kind":"char","major":1,"minor":3,"mode":438},
+                {"path":"dev/diskish","kind":"block","major":8,"minor":0,"mode":432}
+            ]
+        }"#;
+        let record = parse_snapshot_record(&parse_root_object(manifest).unwrap()).unwrap();
+
+        assert_eq!(
+            record.untracked_device_nodes,
+            vec![
+                UntrackedDeviceNodeRecord {
+                    path: "dev/diskish".to_string(),
+                    kind: "block".to_string(),
+                    major: 8,
+                    minor: 0,
+                    mode: 0o660,
+                },
+                UntrackedDeviceNodeRecord {
+                    path: "dev/nullish".to_string(),
+                    kind: "char".to_string(),
+                    major: 1,
+                    minor: 3,
+                    mode: 0o666,
+                },
+            ]
+        );
+        assert_eq!(record.untracked_entry_count(), 2);
+
+        let rendered = json_value_to_string(&snapshot_to_json(&record));
+        assert!(rendered.contains("\"untracked_device_nodes\""));
+        let reparsed = parse_snapshot_record(&parse_root_object(&rendered).unwrap()).unwrap();
+        assert_eq!(
+            reparsed.untracked_device_nodes,
+            record.untracked_device_nodes
+        );
+    }
+
+    #[cfg(all(unix, target_os = "linux"))]
+    #[test]
+    fn linux_device_major_minor_decodes_common_rdev_values() {
+        assert_eq!(device_major_minor((1 << 8) | 3), (1, 3));
+        assert_eq!(device_major_minor((8 << 8) | 0), (8, 0));
+    }
+
+    #[test]
     fn legacy_snapshot_manifest_without_symlinks_still_parses() {
         let manifest = r#"{
             "id":"snapshot-legacy",
@@ -2048,6 +2341,7 @@ mod tests {
         assert!(record.untracked_fifos.is_empty());
         assert!(record.untracked_sockets.is_empty());
         assert!(record.untracked_symlinks.is_empty());
+        assert!(record.untracked_device_nodes.is_empty());
     }
 
     #[test]

@@ -699,6 +699,9 @@ Landed first slice:
   FIFOs, and captured untracked Unix sockets and symlinks, while excluding
   rollback storage from untracked capture
 - Applied restores preserve the snapshot staged-index versus unstaged-worktree split for new split-patch snapshots
+- Applied restores now preserve captured Unix device node metadata in rollback
+  manifests and attempt best-effort `mknod` recreation for untracked character
+  and block devices when the OS/user permits it
 - `deepseek exec` creates a pre-run rollback snapshot in git worktrees and binds it to the successful assistant runtime turn id; restore/show accept either snapshot id or bound turn id
 - TUI-started agent runs create a pre-run rollback snapshot in git worktrees and bind it to the running assistant turn id as soon as the durable turn exists
 - TUI rollback commands now render list/show/revert results in the scrollable
@@ -720,8 +723,9 @@ Landed first slice:
 
 Remaining:
 
-- side-git/worktree snapshot strategy for special-file fidelity beyond Unix
-  FIFOs/sockets/symlinks, including device nodes and Windows symlink recreation
+- side-git/worktree snapshot strategy for platform-specific restore fidelity,
+  especially Windows symlink recreation and privilege-constrained device-node
+  restore validation
 
 ### Phase G: Subagent/RLM
 
