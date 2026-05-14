@@ -883,6 +883,13 @@ fn shell_supervisor_protocol_response(
     ]);
     if let Some(error) = active_jobs_error {
         response.insert("active_jobs_error".to_string(), JsonValue::String(error));
+    } else if let Err(error) =
+        refresh_shell_supervisor_manifest_if_present(cwd, socket, epoch, active_jobs)
+    {
+        response.insert(
+            "manifest_refresh_error".to_string(),
+            JsonValue::String(error.to_string()),
+        );
     }
     if !supported {
         response.insert(
@@ -972,6 +979,29 @@ fn shell_supervisor_protocol_error_response(
 #[cfg(unix)]
 fn write_shell_supervisor_manifest(cwd: &Path, socket: &Path, epoch: &str) -> AppResult<()> {
     let active_jobs = count_active_durable_shell_jobs(cwd)?;
+    write_shell_supervisor_manifest_snapshot(cwd, socket, epoch, epoch, active_jobs)
+}
+
+fn refresh_shell_supervisor_manifest_if_present(
+    cwd: &Path,
+    socket: &Path,
+    epoch: &str,
+    active_jobs: u64,
+) -> AppResult<()> {
+    if !cwd.join(".dscode/shell-supervisor").is_dir() {
+        return Ok(());
+    }
+    let updated_at = format_epoch_seconds(current_epoch_seconds());
+    write_shell_supervisor_manifest_snapshot(cwd, socket, epoch, &updated_at, active_jobs)
+}
+
+fn write_shell_supervisor_manifest_snapshot(
+    cwd: &Path,
+    socket: &Path,
+    epoch: &str,
+    updated_at: &str,
+    active_jobs: u64,
+) -> AppResult<()> {
     let manifest = JsonValue::Object(BTreeMap::from([
         (
             "kind".to_string(),
@@ -1011,7 +1041,7 @@ fn write_shell_supervisor_manifest(cwd: &Path, socket: &Path, epoch: &str) -> Ap
         ),
         (
             "updated_at".to_string(),
-            JsonValue::String(epoch.to_string()),
+            JsonValue::String(updated_at.to_string()),
         ),
         ("control_token_hash".to_string(), JsonValue::Null),
     ]));
@@ -2845,6 +2875,73 @@ mod tests {
             Some(JsonValue::Number(value)) if value == "1"
         ));
         assert!(!object.contains_key("active_jobs_error"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn shell_supervisor_protocol_refreshes_manifest_job_count() {
+        let root = temp_root("shell-supervisor-manifest-refresh");
+        let state_dir = root.join(".dscode/shell-supervisor");
+        let job_dir = root.join(".dscode/shell-jobs").join("shell-running");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::create_dir_all(&job_dir).unwrap();
+        std::fs::write(
+            state_dir.join("manifest.json"),
+            r#"{"kind":"deepseek.exec_shell.supervisor.v1","supervisor_pid":0,"supervisor_socket":"old.sock","supervisor_epoch":"epoch+old","protocol":"newline-json-v1","methods":["health","status","show","shutdown"],"unsupported_methods":["start"],"active_jobs":0,"started_at":"epoch+old","updated_at":"epoch+old","control_token_hash":"sha256:do-not-print"}"#,
+        )
+        .unwrap();
+        let manifest = JsonValue::Object(BTreeMap::from([
+            (
+                "id".to_string(),
+                JsonValue::String("shell-running".to_string()),
+            ),
+            (
+                "command".to_string(),
+                JsonValue::String("sleep 60".to_string()),
+            ),
+            (
+                "cwd".to_string(),
+                JsonValue::String(root.display().to_string()),
+            ),
+            (
+                "status".to_string(),
+                JsonValue::String("running".to_string()),
+            ),
+            (
+                "pid".to_string(),
+                JsonValue::Number(std::process::id().to_string()),
+            ),
+            (
+                "started_at".to_string(),
+                JsonValue::String("epoch+1".to_string()),
+            ),
+            (
+                "updated_at".to_string(),
+                JsonValue::String("epoch+2".to_string()),
+            ),
+        ]));
+        std::fs::write(
+            job_dir.join("manifest.json"),
+            json_value_to_string(&manifest),
+        )
+        .unwrap();
+
+        let socket = state_dir.join("supervisor.sock");
+        let response = shell_supervisor_protocol_response("status", &root, &socket, "epoch+fresh");
+        let object = json_as_object(&response).unwrap();
+        let refreshed = std::fs::read_to_string(state_dir.join("manifest.json")).unwrap();
+
+        assert_eq!(json_as_string(object.get("status").unwrap()), Some("ok"));
+        assert!(!object.contains_key("manifest_refresh_error"));
+        assert!(refreshed.contains(r#""active_jobs":1"#), "{refreshed}");
+        assert!(
+            refreshed.contains(r#""supervisor_socket":"#) && refreshed.contains("supervisor.sock"),
+            "{refreshed}"
+        );
+        assert!(refreshed.contains(r#""supervisor_epoch":"epoch+fresh""#));
+        assert!(refreshed.contains(r#""updated_at":"epoch+"#));
+        assert!(refreshed.contains(r#""control_token_hash":null"#));
+        assert!(!refreshed.contains("do-not-print"));
         let _ = std::fs::remove_dir_all(root);
     }
 

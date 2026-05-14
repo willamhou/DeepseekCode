@@ -1356,8 +1356,11 @@ reports absent/stale/ready status and supported method names, probes socket
 protocol health with a bounded `health` request, probes `status` for the
 daemon's active job count backed by durable shell job manifests, probes `show`
 for protocol job-inventory parity when the daemon is healthy, and never prints
-`control_token_hash`. Unsupported PTY methods return structured `unsupported`
-responses until native supervisor-owned PTY sessions land.
+`control_token_hash`. Each healthy protocol response also refreshes the
+workspace supervisor manifest's `active_jobs` and `updated_at` fields so
+manifest-only observers do not keep a startup-only job count. Unsupported PTY
+methods return structured `unsupported` responses until native
+supervisor-owned PTY sessions land.
 Local file-backed TUI sessions surface the same read-only protocol check through
 the command palette with `shell supervisor` and `jobs supervisor`, rendering the
 status plus durable shell job inventory in the shell detail panel.
