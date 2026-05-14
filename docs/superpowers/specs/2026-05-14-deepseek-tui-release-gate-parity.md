@@ -10,9 +10,9 @@ DeepSeek-TUI has public release evidence for installable versions. On
 topics `cli`, `deepseek`, `llm`, `rust`, `terminal`, and `tui`, and a public
 Cargo/npm install story. DeepSeekCode is now public with matching core topics.
 At the start of this work, `willamhou/DeepSeekCode` still had no tagged GitHub
-Release, GHCR image, npm package, or Homebrew tap evidence. The `v0.1.0`
-release now provides public GitHub Release assets and a GHCR image; npm and
-Homebrew remain blocked on registry/tap credentials.
+Release, GHCR image, npm package, or Homebrew tap evidence. The `v0.1.1`
+release now provides public GitHub Release assets and a verified GHCR image;
+npm and Homebrew remain blocked on registry/tap credentials.
 
 Before creating a public tag, the local release gate exposed a blocker:
 `cargo test` with default parallelism failed due existing process-global test
@@ -51,6 +51,9 @@ gate already used elsewhere is serial test execution.
   release gate.
 - Published tag `v0.1.0`; final Release Matrix run `25855954581`
   completed successfully and generated release notes from the tagged commit.
+- Published tag `v0.1.1`; Release Matrix run `25859387517` completed
+  successfully and generated release notes from commit
+  `4a47ada9c56dd54200fa71f5b94b930892038f5c`.
 
 ## Verification
 
@@ -85,6 +88,16 @@ gate already used elsewhere is serial test execution.
 - `docker run --rm ghcr.io/willamhou/deepseekcode:0.1.0 version`
 - `npm view @deepseek-code/cli version` returned `E404`, matching the release
   workflow log line `NPM_TOKEN is not configured; skipping npm publish.`
+- `gh release view v0.1.1 --repo willamhou/DeepSeekCode`
+- `docker pull ghcr.io/willamhou/deepseekcode:0.1.1`
+- `docker pull ghcr.io/willamhou/deepseekcode:v0.1.1`
+- `docker run --rm ghcr.io/willamhou/deepseekcode:0.1.1 version` printed
+  `deepseek 0.1.1`
+- `npm view @deepseek-code/cli version` returned `E404`; the `v0.1.1` release
+  workflow log again showed `NPM_TOKEN is not configured; skipping npm
+  publish.`
+- The `v0.1.1` `Publish Homebrew Tap` job skipped because
+  `HOMEBREW_TAP_REPOSITORY` and `HOMEBREW_TAP_TOKEN` were not configured.
 - Local Homebrew formula syntax smoke was not run because `ruby` is not
   installed in this workspace image; the GitHub-hosted release runner still
   performs `ruby -c packaging/homebrew/deepseek.rb`.

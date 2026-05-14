@@ -7,10 +7,10 @@ DeepSeekCode は DeepSeek-first のターミナル向けコーディングエー
 ファイルを編集する、チェックを走らせる、結果を確認する、そして同じターミナルで
 反復する流れを前提に作られています。
 
-> 状態: dogfood とリポジトリ内の開発作業には利用できます。`v0.1.0` では
-> GitHub Release のバイナリと GHCR イメージを公開済みです。npm と Homebrew
-> の公開には registry/tap の資格情報がまだ必要で、ネイティブ PTY と製品面の
-> 磨き込みは継続中です。
+> 状態: dogfood とリポジトリ内の開発作業には利用できます。`v0.1.1` では
+> GitHub Release のバイナリと検証済み GHCR イメージを公開済みです。npm と
+> Homebrew の公開には registry/tap の資格情報がまだ必要で、ネイティブ PTY
+> と製品面の磨き込みは継続中です。
 
 <p align="center">
   <img src="./docs/demo/deepseek-code-tui-demo.svg" alt="DeepSeekCode animated TUI demo recording" width="100%">
@@ -36,8 +36,8 @@ DeepSeekCode は DeepSeek-first のターミナル向けコーディングエー
   status、event replay、cancel、recover、drain control をサポートします。
 - LSP-backed diagnostics と fallback diagnostics を実行でき、JSON/JSONL watch
   出力にも対応します。
-- Linux x64、macOS x64、macOS arm64、Windows x64 の Release assets、
-  GHCR イメージ、npm/Homebrew 公開用メタデータがあります。
+- 検証済み `v0.1.1` の Linux x64、macOS x64、macOS arm64、Windows x64
+  Release assets、GHCR イメージ、npm/Homebrew 公開用メタデータがあります。
 
 ## クイックスタート
 
@@ -53,9 +53,9 @@ deepseek doctor --json
 
 ```bash
 curl -L -o deepseek-linux-x64.tar.gz \
-  https://github.com/willamhou/DeepSeekCode/releases/download/v0.1.0/deepseek-linux-x64.tar.gz
+  https://github.com/willamhou/DeepSeekCode/releases/download/v0.1.1/deepseek-linux-x64.tar.gz
 curl -L -o deepseek-linux-x64.tar.gz.sha256 \
-  https://github.com/willamhou/DeepSeekCode/releases/download/v0.1.0/deepseek-linux-x64.tar.gz.sha256
+  https://github.com/willamhou/DeepSeekCode/releases/download/v0.1.1/deepseek-linux-x64.tar.gz.sha256
 shasum -a 256 -c deepseek-linux-x64.tar.gz.sha256
 tar -xzf deepseek-linux-x64.tar.gz
 ./deepseek version
@@ -64,7 +64,7 @@ tar -xzf deepseek-linux-x64.tar.gz
 または公開済みコンテナを実行:
 
 ```bash
-docker run --rm ghcr.io/willamhou/deepseekcode:0.1.0 version
+docker run --rm ghcr.io/willamhou/deepseekcode:0.1.1 version
 ```
 
 またはローカル checkout からインストール:
@@ -107,8 +107,8 @@ DeepSeekCode は自身の開発に使える段階ですが、Claude Code CLI / C
 - ネイティブ supervisor-owned PTY の attach/stdin/resize/replay/wait/cancel。
 - 実リポジトリを使った live external write-fixture 検証。
 - npm registry 公開と Homebrew tap。どちらも資格情報が未設定です。
-- wizard completion/validation state、release channel install proof、
-  実運用に近い model-backed demo の製品化。
+- wizard completion/validation state と、実運用に近い model-backed demo
+  の製品化。
 
 ## Demo 素材
 

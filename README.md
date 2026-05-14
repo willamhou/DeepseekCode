@@ -7,9 +7,10 @@ workbench. It is built for the loop you actually use while programming:
 inspect a repository, edit files, run checks, review the result, and keep
 iterating from the same terminal.
 
-> Status: usable for dogfooding and repository work. `v0.1.0` has GitHub
-> Release binaries and a GHCR image; npm and Homebrew publishing still need
-> registry/tap credentials, and native PTY/product polish remains in progress.
+> Status: usable for dogfooding and repository work. `v0.1.1` has GitHub
+> Release binaries and a verified GHCR image; npm and Homebrew publishing still
+> need registry/tap credentials, and native PTY/product polish remains in
+> progress.
 
 <p align="center">
   <img src="./docs/demo/deepseek-code-tui-demo.svg" alt="DeepSeekCode animated TUI demo recording" width="100%">
@@ -34,8 +35,8 @@ iterating from the same terminal.
 - RLM helpers for recursive/long-input analysis, model-session context, live
   queue status, event replay, cancellation, recovery, and drain controls.
 - LSP-backed and fallback diagnostics runners with JSON/JSONL watch output.
-- Release assets for Linux x64, macOS x64, macOS arm64, and Windows x64,
-  plus a GHCR image and npm/Homebrew packaging metadata.
+- Verified `v0.1.1` release assets for Linux x64, macOS x64, macOS arm64, and
+  Windows x64, plus a GHCR image and npm/Homebrew packaging metadata.
 
 ## Quick Start
 
@@ -51,9 +52,9 @@ Or download a release archive:
 
 ```bash
 curl -L -o deepseek-linux-x64.tar.gz \
-  https://github.com/willamhou/DeepSeekCode/releases/download/v0.1.0/deepseek-linux-x64.tar.gz
+  https://github.com/willamhou/DeepSeekCode/releases/download/v0.1.1/deepseek-linux-x64.tar.gz
 curl -L -o deepseek-linux-x64.tar.gz.sha256 \
-  https://github.com/willamhou/DeepSeekCode/releases/download/v0.1.0/deepseek-linux-x64.tar.gz.sha256
+  https://github.com/willamhou/DeepSeekCode/releases/download/v0.1.1/deepseek-linux-x64.tar.gz.sha256
 shasum -a 256 -c deepseek-linux-x64.tar.gz.sha256
 tar -xzf deepseek-linux-x64.tar.gz
 ./deepseek version
@@ -62,7 +63,7 @@ tar -xzf deepseek-linux-x64.tar.gz
 Or run the published container:
 
 ```bash
-docker run --rm ghcr.io/willamhou/deepseekcode:0.1.0 version
+docker run --rm ghcr.io/willamhou/deepseekcode:0.1.1 version
 ```
 
 Or use a local checkout:
@@ -105,8 +106,8 @@ Claude Code CLI / Codex CLI polish. The largest remaining gaps are:
 - native supervisor-owned PTY attach/stdin/resize/replay/wait/cancel;
 - live external write-fixture validation across real repositories;
 - npm registry publishing and a Homebrew tap, both blocked on credentials;
-- product polish around wizard completion/validation states, release-channel
-  install proof, and richer model-backed demos.
+- product polish around wizard completion/validation states and richer
+  model-backed demos.
 
 ## Demo Asset
 
