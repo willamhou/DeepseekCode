@@ -1836,6 +1836,8 @@ fn render_shell_supervisor_status(cwd: &str) -> AppResult<String> {
         .unwrap_or(default_socket);
     let socket_kind = shell_supervisor_socket_kind(&socket_path);
     let protocol_health = shell_supervisor_protocol_health(&socket_path, socket_kind == "socket");
+    let (protocol_status, protocol_status_active_jobs) =
+        shell_supervisor_protocol_status(&socket_path, socket_kind == "socket", &protocol_health);
     let (protocol_show, protocol_job_inventory) =
         shell_supervisor_protocol_show(&socket_path, socket_kind == "socket", &protocol_health);
     let supervisor_alive = manifest
@@ -1849,7 +1851,7 @@ fn render_shell_supervisor_status(cwd: &str) -> AppResult<String> {
         &protocol_health,
     );
     Ok(format!(
-        "kind: deepseek.exec_shell.supervisor_status.v1\nstatus: {status}\nplatform: {}\ncwd: {}\nstate_dir: {}\nmanifest: {}\nmanifest_exists: {}\nmanifest_kind: {}\nsocket: {}\nsocket_kind: {socket_kind}\nprotocol_health: {protocol_health}\nprotocol_show: {protocol_show}\nsupervisor_pid: {}\nsupervisor_alive: {}\nsupervisor_epoch: {}\nprotocol: {}\nmethods: {}\nunsupported_methods: {}\nactive_jobs: {}\nstarted_at: {}\nupdated_at: {}\nprotocol_job_inventory:\n{}\nnote: this is the shell supervisor protocol/status skeleton; native PTY ownership, live attach, and TIOCSWINSZ resize are not implemented until a real supervisor process writes this state.\n",
+        "kind: deepseek.exec_shell.supervisor_status.v1\nstatus: {status}\nplatform: {}\ncwd: {}\nstate_dir: {}\nmanifest: {}\nmanifest_exists: {}\nmanifest_kind: {}\nsocket: {}\nsocket_kind: {socket_kind}\nprotocol_health: {protocol_health}\nprotocol_status: {protocol_status}\nprotocol_status_active_jobs: {}\nprotocol_show: {protocol_show}\nsupervisor_pid: {}\nsupervisor_alive: {}\nsupervisor_epoch: {}\nprotocol: {}\nmethods: {}\nunsupported_methods: {}\nactive_jobs: {}\nstarted_at: {}\nupdated_at: {}\nprotocol_job_inventory:\n{}\nnote: this is the shell supervisor protocol/status skeleton; native PTY ownership, live attach, and TIOCSWINSZ resize are not implemented until a real supervisor process writes this state.\n",
         shell_supervisor_platform_label(),
         cwd,
         state_dir.display(),
@@ -1857,6 +1859,7 @@ fn render_shell_supervisor_status(cwd: &str) -> AppResult<String> {
         manifest.is_some(),
         shell_optional_string_label(manifest.as_ref().and_then(|manifest| manifest.kind.as_deref())),
         socket_path.display(),
+        protocol_status_active_jobs.unwrap_or_else(|| "not_checked".to_string()),
         shell_optional_pid_label(manifest.as_ref().and_then(|manifest| manifest.supervisor_pid)),
         supervisor_alive
             .map(|alive| alive.to_string())
@@ -1950,6 +1953,57 @@ fn shell_supervisor_protocol_health_unix(socket_path: &Path) -> AppResult<String
             shell_compact_error_label(&json_value_to_string(&JsonValue::Object(root)))
         ))
     }
+}
+
+fn shell_supervisor_protocol_status(
+    socket_path: &Path,
+    socket_ready: bool,
+    protocol_health: &str,
+) -> (String, Option<String>) {
+    if !socket_ready {
+        return ("not_checked".to_string(), None);
+    }
+    if protocol_health != "ok" {
+        return ("not_checked".to_string(), None);
+    }
+    #[cfg(unix)]
+    {
+        match shell_supervisor_protocol_status_unix(socket_path) {
+            Ok((label, active_jobs)) => (label, active_jobs),
+            Err(error) => (
+                format!("error: {}", shell_compact_error_label(&error.to_string())),
+                None,
+            ),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = socket_path;
+        ("unsupported".to_string(), None)
+    }
+}
+
+#[cfg(unix)]
+fn shell_supervisor_protocol_status_unix(
+    socket_path: &Path,
+) -> AppResult<(String, Option<String>)> {
+    let root = shell_supervisor_protocol_request_unix(socket_path, "status")?;
+    if root.get("method").and_then(json_as_string) == Some("status")
+        && root.get("status").and_then(json_as_string) == Some("ok")
+    {
+        let active_jobs = root
+            .get("active_jobs")
+            .and_then(json_as_u64)
+            .map(|count| count.to_string());
+        return Ok(("ok".to_string(), active_jobs));
+    }
+    Ok((
+        format!(
+            "unexpected_response: {}",
+            shell_compact_error_label(&json_value_to_string(&JsonValue::Object(root)))
+        ),
+        None,
+    ))
 }
 
 fn shell_supervisor_protocol_show(
@@ -3473,7 +3527,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn exec_shell_supervisor_status_probes_protocol_health_and_show() {
+    fn exec_shell_supervisor_status_probes_read_only_protocol_methods() {
         use std::io::{BufRead, BufReader, Write};
         use std::os::unix::net::UnixListener;
 
@@ -3505,6 +3559,10 @@ mod tests {
                     br#"{"kind":"deepseek.exec_shell.supervisor.response.v1","method":"health","status":"ok"}"#.as_slice(),
                 ),
                 (
+                    "status",
+                    br#"{"kind":"deepseek.exec_shell.supervisor.response.v1","method":"status","status":"ok","active_jobs":7}"#.as_slice(),
+                ),
+                (
                     "show",
                     br#"{"kind":"deepseek.exec_shell.supervisor.response.v1","method":"show","status":"ok","job_inventory":"No background shell jobs."}"#.as_slice(),
                 ),
@@ -3533,6 +3591,16 @@ mod tests {
         );
         assert!(
             status.summary.contains("protocol_health: ok"),
+            "{}",
+            status.summary
+        );
+        assert!(
+            status.summary.contains("protocol_status: ok"),
+            "{}",
+            status.summary
+        );
+        assert!(
+            status.summary.contains("protocol_status_active_jobs: 7"),
             "{}",
             status.summary
         );

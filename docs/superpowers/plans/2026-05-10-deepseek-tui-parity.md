@@ -251,8 +251,8 @@ Landed first slice:
   PTY methods until supervisor-owned PTYs land; `deepseek agents service`
   and packaged systemd/launchd templates include that shell-supervisor service;
   `exec_shell_supervisor_status` now probes socket health before reporting a
-  daemon as ready and also reads healthy daemon `show` inventory into the
-  status summary;
+  daemon as ready, reads healthy daemon `status` active-job counts, and also
+  reads healthy daemon `show` inventory into the status summary;
   foreground `exec_shell timeout_ms` / `detach_after_ms` now uses the durable
   background job table and returns `meta.backgrounded=true` plus a `task_id`
   when the command is still running, approximating DeepSeek-TUI's
