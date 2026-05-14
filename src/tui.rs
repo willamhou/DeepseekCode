@@ -10467,6 +10467,10 @@ impl TuiApp {
         );
         let _ = writeln!(
             detail,
+            "If the completed local assistant message still appears English-heavy, DeepSeekCode makes a focused post-hoc translation request when an API key is available."
+        );
+        let _ = writeln!(
+            detail,
             "This is a session-local toggle; existing transcript items are not rewritten."
         );
         let _ = writeln!(detail);

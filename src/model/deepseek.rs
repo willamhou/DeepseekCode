@@ -66,6 +66,117 @@ impl ModelClient for DeepSeekClient {
 }
 
 impl DeepSeekClient {
+    pub fn translate_text(&self, text: &str, target_language: &str) -> AppResult<String> {
+        let api_key = env::var(&self.config.api_key_env)
+            .ok()
+            .filter(|key| !key.trim().is_empty())
+            .ok_or_else(|| app_error("translation requires a configured API key"))?;
+        let model = if is_auto_model(&self.config.model) {
+            "deepseek-v4-flash".to_string()
+        } else {
+            self.config.model.trim().to_string()
+        };
+        match api_flavor(&self.config.base_url) {
+            ApiFlavor::OpenAi => {
+                self.translate_text_openai(text, target_language, &model, &api_key)
+            }
+            ApiFlavor::Anthropic => {
+                self.translate_text_anthropic(text, target_language, &model, &api_key)
+            }
+        }
+    }
+
+    fn translate_text_openai(
+        &self,
+        text: &str,
+        target_language: &str,
+        model: &str,
+        api_key: &str,
+    ) -> AppResult<String> {
+        let endpoint = format!(
+            "{}/chat/completions",
+            self.config.base_url.trim_end_matches('/')
+        );
+        let body = format!(
+            concat!(
+                "{{",
+                "\"model\":\"{}\",",
+                "\"temperature\":0.1,",
+                "\"max_tokens\":4096,",
+                "\"stream\":false,",
+                "{}",
+                "\"messages\":[",
+                "{{\"role\":\"system\",\"content\":\"{}\"}},",
+                "{{\"role\":\"user\",\"content\":\"{}\"}}",
+                "]",
+                "}}"
+            ),
+            json_escape(model),
+            ReasoningTier::Off.openai_fields(),
+            json_escape(&translation_system_prompt(target_language)),
+            json_escape(text),
+        );
+        let auth = format!("Authorization: Bearer {api_key}");
+        let args = [
+            "-sS",
+            "--max-time",
+            "60",
+            "-X",
+            "POST",
+            endpoint.as_str(),
+            "-H",
+            auth.as_str(),
+            "-H",
+            "Content-Type: application/json",
+            "--data-binary",
+            "@-",
+        ];
+        let output = run_curl_json(&args, &body)?;
+        parse_openai_translation_response(&output)
+    }
+
+    fn translate_text_anthropic(
+        &self,
+        text: &str,
+        target_language: &str,
+        model: &str,
+        api_key: &str,
+    ) -> AppResult<String> {
+        let endpoint = format!("{}/messages", self.config.base_url.trim_end_matches('/'));
+        let body = format!(
+            concat!(
+                "{{",
+                "\"model\":\"{}\",",
+                "\"max_tokens\":4096,",
+                "\"system\":\"{}\",",
+                "\"messages\":[{{\"role\":\"user\",\"content\":\"{}\"}}]",
+                "}}"
+            ),
+            json_escape(model),
+            json_escape(&translation_system_prompt(target_language)),
+            json_escape(text),
+        );
+        let api_header = format!("x-api-key: {api_key}");
+        let args = [
+            "-sS",
+            "--max-time",
+            "60",
+            "-X",
+            "POST",
+            endpoint.as_str(),
+            "-H",
+            api_header.as_str(),
+            "-H",
+            "anthropic-version: 2023-06-01",
+            "-H",
+            "Content-Type: application/json",
+            "--data-binary",
+            "@-",
+        ];
+        let output = run_curl_json(&args, &body)?;
+        parse_anthropic_translation_response(&output)
+    }
+
     fn respond_remote(
         &self,
         input: &ModelRequest,
@@ -1129,6 +1240,72 @@ fn api_flavor(base_url: &str) -> ApiFlavor {
     } else {
         ApiFlavor::OpenAi
     }
+}
+
+fn translation_system_prompt(target_language: &str) -> String {
+    format!(
+        "You are a professional translator. Your ONLY task is to translate text to {target_language}. \
+Rules:\n\
+1. Output ONLY the translation, with no explanations, notes, quotes, prefixes, or suffixes.\n\
+2. Preserve code blocks, URLs, file paths, command names, API names, function names, and library names unchanged.\n\
+3. Keep Markdown structure, links, headings, lists, bold, and italics intact.\n\
+4. Translate natural-language prose naturally and professionally.\n\
+5. If the input is already in {target_language} or contains no prose to translate, return it as-is."
+    )
+}
+
+fn run_curl_json(args: &[&str], body: &str) -> AppResult<String> {
+    let mut process = crate::util::process::spawn_streaming_with_stdin("curl", args, body)?;
+    let mut output = String::new();
+    {
+        let mut stdout = process.take_stdout()?;
+        stdout.read_to_string(&mut output)?;
+    }
+    let (status, stderr_tail) = process.finish()?;
+    if !status.success() {
+        return Err(tool_failure(format!(
+            "translation request failed (exit {:?}): {}",
+            status.code(),
+            stderr_tail.trim()
+        )));
+    }
+    Ok(output)
+}
+
+fn parse_openai_translation_response(raw: &str) -> AppResult<String> {
+    let root = parse_root_object(raw)?;
+    let choices = root
+        .get("choices")
+        .and_then(json_as_array)
+        .ok_or_else(|| app_error("translation response missing choices"))?;
+    let choice = choices
+        .first()
+        .and_then(json_as_object)
+        .ok_or_else(|| app_error("translation response missing first choice"))?;
+    let message = choice
+        .get("message")
+        .and_then(json_as_object)
+        .ok_or_else(|| app_error("translation response missing message"))?;
+    let content = message
+        .get("content")
+        .and_then(json_as_string)
+        .ok_or_else(|| app_error("translation response missing content"))?;
+    Ok(content.trim().to_string())
+}
+
+fn parse_anthropic_translation_response(raw: &str) -> AppResult<String> {
+    let root = parse_root_object(raw)?;
+    let content = root
+        .get("content")
+        .and_then(json_as_array)
+        .ok_or_else(|| app_error("translation response missing content"))?;
+    let text = content
+        .iter()
+        .filter_map(json_as_object)
+        .find(|item| item.get("type").and_then(json_as_string) == Some("text"))
+        .and_then(|item| item.get("text").and_then(json_as_string))
+        .ok_or_else(|| app_error("translation response missing text content"))?;
+    Ok(text.trim().to_string())
 }
 
 fn build_openai_tool_system_prompt(base: &str) -> String {
@@ -4558,8 +4735,9 @@ mod tests {
         anthropic_tool_fields, api_flavor, build_anthropic_tools, build_openai_tools,
         child_files_from_summary, derive_edit_request, derive_github_pr_context_request,
         derive_search_query, last_patched_file_path, openai_tool_fields, parse_anthropic_messages,
-        parse_anthropic_usage, parse_openai_chat_completion, parse_openai_usage, ApiFlavor,
-        DeepSeekClient, GithubPrContextRequest, ReasoningTier,
+        parse_anthropic_translation_response, parse_anthropic_usage, parse_openai_chat_completion,
+        parse_openai_translation_response, parse_openai_usage, translation_system_prompt,
+        ApiFlavor, DeepSeekClient, GithubPrContextRequest, ReasoningTier,
     };
     use crate::config::types::ModelConfig;
     use crate::model::client::ModelClient;
@@ -4578,6 +4756,21 @@ mod tests {
             api_flavor("https://api.deepseek.com"),
             ApiFlavor::OpenAi
         ));
+    }
+
+    #[test]
+    fn parses_translation_responses_and_prompt_rules() {
+        let openai = r#"{"choices":[{"message":{"role":"assistant","content":" 已翻译 "}}]}"#;
+        assert_eq!(parse_openai_translation_response(openai).unwrap(), "已翻译");
+        let anthropic = r#"{"content":[{"type":"text","text":" Traduction "}],"model":"m"}"#;
+        assert_eq!(
+            parse_anthropic_translation_response(anthropic).unwrap(),
+            "Traduction"
+        );
+        let prompt = translation_system_prompt("Simplified Chinese");
+        assert!(prompt.contains("ONLY task"));
+        assert!(prompt.contains("Preserve code blocks"));
+        assert!(prompt.contains("Simplified Chinese"));
     }
 
     #[test]

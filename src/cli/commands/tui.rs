@@ -48,6 +48,8 @@ use crate::core::runtime::{
     RuntimeStore, SessionRecord, TaskRecord, ThreadForkRecord, ThreadRecord, TurnRecord,
 };
 use crate::error::{app_error, AppResult};
+use crate::model::deepseek::DeepSeekClient;
+use crate::model::protocol::ObservationStatus;
 use crate::repl::slash::load_custom_slash_command_from_config;
 use crate::skills::paths::resolve_repo_skills_dir;
 use crate::skills::registry::SkillRegistry;
@@ -5292,12 +5294,14 @@ fn run_tui_agent_turn(
         assistant_item.id.clone(),
         live_tx,
     );
+    let translation_config = config.clone();
     let agent = AgentLoop::new(config);
     let mut context = TaskContext::new(prompt, None);
+    let translation_target_for_result = translation_target_language.clone();
     if let Some(target_language) = translation_target_language {
         context = context.with_translation_target_language(target_language);
     }
-    let result = match agent.run_with(
+    let mut result = match agent.run_with(
         context,
         AgentLoopOptions {
             emit_progress: false,
@@ -5337,6 +5341,11 @@ fn run_tui_agent_turn(
             return Ok(());
         }
     };
+    apply_tui_posthoc_translation(
+        &translation_config,
+        &mut result,
+        translation_target_for_result.as_deref(),
+    );
     record_tui_agent_result_into(
         &store,
         &thread_id,
@@ -5347,6 +5356,99 @@ fn run_tui_agent_turn(
         &result,
     )?;
     Ok(())
+}
+
+fn apply_tui_posthoc_translation(
+    config: &AppConfig,
+    result: &mut RunResult,
+    target_language: Option<&str>,
+) {
+    let Some(target_language) = target_language
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    if !tui_output_needs_translation(&result.final_message, target_language) {
+        return;
+    }
+
+    let client = DeepSeekClient {
+        config: config.model.clone(),
+    };
+    match client.translate_text(&result.final_message, target_language) {
+        Ok(translated) if !translated.trim().is_empty() => {
+            result.final_message = translated.trim().to_string();
+            result.tool_events.push(translation_tool_event(
+                target_language,
+                "translated final assistant message",
+                ObservationStatus::Ok,
+            ));
+        }
+        Ok(_) => {
+            result.tool_events.push(translation_tool_event(
+                target_language,
+                "translation returned empty output; kept original final assistant message",
+                ObservationStatus::Failed,
+            ));
+        }
+        Err(error) => {
+            result.tool_events.push(translation_tool_event(
+                target_language,
+                &format!("translation failed; kept original final assistant message: {error}"),
+                ObservationStatus::Failed,
+            ));
+        }
+    }
+}
+
+fn translation_tool_event(
+    target_language: &str,
+    output: &str,
+    status: ObservationStatus,
+) -> ToolEvent {
+    ToolEvent {
+        tool_name: "posthoc_translate".to_string(),
+        input: BTreeMap::from([("target_language".to_string(), target_language.to_string())]),
+        output: output.to_string(),
+        status,
+    }
+}
+
+fn tui_output_needs_translation(text: &str, target_language: &str) -> bool {
+    if target_language.eq_ignore_ascii_case("english") {
+        return false;
+    }
+    let mut latin_count = 0usize;
+    let mut cjk_count = 0usize;
+    for ch in text.chars() {
+        if ch.is_ascii_alphabetic() {
+            latin_count += 1;
+        } else if is_cjk_translation_char(ch) {
+            cjk_count += 1;
+        }
+    }
+    let weighted_total = latin_count + cjk_count.saturating_mul(3);
+    if weighted_total < 10 {
+        return false;
+    }
+    if cjk_count.saturating_mul(3) > latin_count {
+        return false;
+    }
+    (latin_count as f64 / weighted_total as f64) >= 0.6
+}
+
+fn is_cjk_translation_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{4E00}'..='\u{9FFF}'
+            | '\u{3400}'..='\u{4DBF}'
+            | '\u{2E80}'..='\u{2EFF}'
+            | '\u{3000}'..='\u{303F}'
+            | '\u{FF00}'..='\u{FFEF}'
+            | '\u{3040}'..='\u{309F}'
+            | '\u{30A0}'..='\u{30FF}'
+    )
 }
 
 fn create_tui_rollback_snapshot(store: &RollbackStore, prompt: &str) -> Option<String> {
@@ -7542,6 +7644,46 @@ export DSCODE_TEST_LOGOUT_VISION_KEY="vision-secret"
             .contains("logged out: cleared"));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn posthoc_translation_heuristic_detects_english_leaks() {
+        assert!(tui_output_needs_translation(
+            "This answer is mostly English prose that should be translated for the user.",
+            "Simplified Chinese",
+        ));
+        assert!(!tui_output_needs_translation(
+            "这个回答已经是中文，只有 API 和 run_shell 这类技术词。",
+            "Simplified Chinese",
+        ));
+        assert!(!tui_output_needs_translation(
+            "This answer is already English.",
+            "English",
+        ));
+    }
+
+    #[test]
+    fn posthoc_translation_failure_keeps_original_message() {
+        let _guard = env_lock();
+        std::env::remove_var("DSCODE_TEST_TRANSLATE_KEY");
+        let mut config = AppConfig::default();
+        config.model.api_key_env = "DSCODE_TEST_TRANSLATE_KEY".to_string();
+        let mut result = RunResult {
+            final_message: "This final answer is mostly English and needs fallback translation."
+                .to_string(),
+            ..RunResult::default()
+        };
+
+        apply_tui_posthoc_translation(&config, &mut result, Some("Simplified Chinese"));
+
+        assert_eq!(
+            result.final_message,
+            "This final answer is mostly English and needs fallback translation."
+        );
+        assert_eq!(result.tool_events.len(), 1);
+        assert_eq!(result.tool_events[0].tool_name, "posthoc_translate");
+        assert_eq!(result.tool_events[0].status, ObservationStatus::Failed);
+        assert!(result.tool_events[0].output.contains("kept original"));
     }
 
     #[test]

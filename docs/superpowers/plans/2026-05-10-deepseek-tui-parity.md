@@ -536,6 +536,10 @@ Landed first slice:
   future local agent turns add a `## Language Output Requirement` system prompt
   block for the detected UI locale while preserving code, paths, URLs, and
   identifiers
+- TUI `/translate` now also has DeepSeek-TUI-style post-hoc fallback for local
+  agent runs: English-heavy completed assistant messages are translated through
+  a focused no-tools model request when an API key is available, while failures
+  keep the original answer and record a `posthoc_translate` tool result
 - TUI now supports DeepSeek-TUI-style `/context` plus `/ctx`, rendering an
   active-thread context inspector with context window, compaction strategy,
   token/cache telemetry, item counts, and reasoning replay state
@@ -548,8 +552,8 @@ Remaining:
 
 - source-level command audit no longer shows unmatched DeepSeek-TUI slash
   command names in DeepSeekCode's built-in TUI command layer; `/translate` now
-  has prompt-level locale-output parity, while DeepSeek-TUI's second-stage
-  post-hoc translation API fallback remains a semantic refinement gap
+  has prompt-level locale-output parity plus a focused post-hoc fallback for
+  completed local TUI assistant messages
 - harder cross-process/platform/external buckets remain: dedicated shell
   supervisor ownership after owner-process exit and attachable terminal replay
   beyond durable terminal attach snapshots now have an explicit

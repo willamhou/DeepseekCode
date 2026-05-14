@@ -19,8 +19,8 @@ to project custom slash commands.
   forms.
 - Pass the enabled state into local TUI agent turns so the runtime system prompt
   includes a language-output requirement.
-- Document the remaining semantic delta: DeepSeekCode does not yet run a second
-  post-hoc translation API call over completed assistant messages.
+- Document the initially remaining semantic delta: DeepSeekCode did not yet run
+  a second post-hoc translation API call over completed assistant messages.
 
 ## Acceptance
 
@@ -30,3 +30,8 @@ to project custom slash commands.
   `## Language Output Requirement` and the detected target language.
 - Help, slash completions, settings, and TUI docs mention the command.
 - Unit tests cover command toggling and prompt-instruction injection.
+
+## Follow-Up
+
+The post-hoc fallback delta was closed in
+`2026-05-14-deepseek-tui-tui-translate-posthoc-fallback.md`.

@@ -63,7 +63,7 @@ Current surfaces:
   full live thinking text on demand
 - locale output switching with `translate` / `/translate` and
   `translate on|off|show`, adding a language-output requirement to future
-  local agent turns
+  local agent turns plus a post-hoc translator for English-heavy final replies
 - context inspection with `context` / `/context` and `ctx` / `/ctx`, showing
   active-thread context window, compaction strategy, token/cache telemetry, and
   reasoning replay state
@@ -429,7 +429,7 @@ Command palette commands currently implemented:
 | `lsp off`, `/lsp off` | Disable post-edit diagnostics for successful file edits in the selected workspace project config |
 | `status`, `/status` | Show selected session, active thread, task/input, usage, cache, context, and cost status in the right-side detail panel |
 | `tokens`, `/tokens` | Show active-thread context, last input/output tokens, cache hit/miss, cumulative token usage, and approximate cost |
-| `translate`, `/translate`, `translation`, `/translation`, `transale`, `/transale` | Toggle future local agent turns to answer natural-language prose in the detected UI locale while preserving code, paths, URLs, and identifiers |
+| `translate`, `/translate`, `translation`, `/translation`, `transale`, `/transale` | Toggle future local agent turns to answer natural-language prose in the detected UI locale, with a post-hoc fallback translator for English-heavy final replies while preserving code, paths, URLs, and identifiers |
 | `cost`, `/cost` | Show active-thread approximate total, input, and output cost with telemetry caveats |
 | `cache`, `/cache`, `cache <count>` | Show active-thread durable cache hit/miss summary, hit rate, cache chart, context, and approximate cost |
 | `cache inspect`, `cache warmup` | Explain durable read-only cache limits: no persisted prompt layer hashes and no TUI-issued warmup request |
