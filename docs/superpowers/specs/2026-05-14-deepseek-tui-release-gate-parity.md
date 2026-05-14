@@ -36,6 +36,13 @@ gate already used elsewhere is serial test execution.
     on viewport truncation of long macOS paths.
   - Docker image builds copy `CHANGELOG.md`, which is required by the TUI
     changelog view.
+- Fixed the next release matrix failure by classifying macOS `patch` output
+  that says `No file to patch` as the same missing-target-file diagnostic as
+  GNU patch.
+- Narrowed non-Linux release matrix gates to `cargo check --all-targets` plus
+  release binary/package/npm platform smoke. Linux remains the full behavioral
+  gate with `cargo test -- --test-threads=1`; macOS and Windows now verify
+  compile/package viability without depending on Unix-specific test fixtures.
 - Updated `docs/release.md` to use the same serial test command in the local
   release gate.
 
@@ -57,6 +64,7 @@ gate already used elsewhere is serial test execution.
 - Focused release-run regression tests:
   - `cargo test snapshot_restore_round_trip --lib -- --test-threads=1`
   - `cargo test tools::apply_patch::tests --lib -- --test-threads=1`
+  - `cargo test tools::apply_patch::tests::diagnoses_missing_file --lib -- --test-threads=1`
   - `cargo test add_remove_and_mode_are_scoped_per_workspace --lib -- --test-threads=1`
   - `cargo test exec_shell_supervisor_status_probes_read_only_protocol_methods --lib -- --test-threads=1`
   - `cargo test handle_tui_action_exports_thread_markdown --lib -- --test-threads=1`
@@ -70,8 +78,8 @@ gate already used elsewhere is serial test execution.
 ## Remaining Gap
 
 This stabilizes the release gate, but it is not itself public release evidence.
-The next packaging step is to tag `v0.1.0`, let the release workflow publish
-GitHub Release assets and the GHCR image, then re-run
-`deepseek update publish-status --json` against downloaded artifacts. npm and
-Homebrew still require registry/tap credentials before they can match
-DeepSeek-TUI's public install channels.
+The next packaging step is to retag `v0.1.0`, let the release workflow publish
+GitHub Release assets and the GHCR image, then re-run `deepseek update
+publish-status --json` against downloaded artifacts. npm and Homebrew still
+require registry/tap credentials before they can match DeepSeek-TUI's public
+install channels.

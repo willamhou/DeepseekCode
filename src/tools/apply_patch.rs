@@ -548,6 +548,7 @@ fn classify_patch_failure(stdout: &str, stderr: &str) -> Option<String> {
     let combined = format!("{stdout}\n{stderr}").to_lowercase();
 
     if combined.contains("can't find file to patch")
+        || combined.contains("no file to patch")
         || combined.contains("no such file or directory")
     {
         return Some(
@@ -871,6 +872,15 @@ mod tests {
     #[test]
     fn classify_failure_recognizes_missing_file() {
         let category = classify_patch_failure("", "patch: **** can't find file to patch");
+        assert!(category.unwrap().contains("does not exist"));
+    }
+
+    #[test]
+    fn classify_failure_recognizes_macos_missing_file() {
+        let category = classify_patch_failure(
+            "No file to patch.  Skipping...\n1 out of 1 hunks ignored while patching ghost.txt",
+            "",
+        );
         assert!(category.unwrap().contains("does not exist"));
     }
 

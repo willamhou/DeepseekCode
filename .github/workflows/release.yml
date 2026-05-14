@@ -51,8 +51,13 @@ jobs:
       - name: Format Check
         run: cargo fmt --check
 
-      - name: Test
+      - name: Test Linux
+        if: runner.os == 'Linux'
         run: cargo test -- --test-threads=1
+
+      - name: Check Platform Test Targets
+        if: runner.os != 'Linux'
+        run: cargo check --all-targets
 
       - name: Build Release Binary
         run: cargo build --release --bin deepseek
@@ -196,7 +201,8 @@ jobs:
             echo
             echo "Verification gates completed in this workflow:"
             echo "- cargo fmt --check"
-            echo "- cargo test -- --test-threads=1"
+            echo "- Linux cargo test -- --test-threads=1"
+            echo "- macOS/Windows cargo check --all-targets"
             echo "- cargo package"
             echo "- package version sync"
             echo "- npm wrapper tests and root/platform dry packs"

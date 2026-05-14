@@ -159,11 +159,16 @@ gh workflow run "Release Matrix"
 gh run watch
 ```
 
-The workflow builds and tests release binaries for Linux x64, macOS x64,
-macOS arm64, and Windows x64. It also runs packaging checks for Cargo metadata,
-`cargo package`, Cargo/npm/Homebrew version sync, the npm wrapper, root/platform
-npm dry packaging, Homebrew formula syntax, Docker image build/run smoke, and
-runtime service template rendering.
+The workflow builds release binaries for Linux x64, macOS x64, macOS arm64,
+and Windows x64. Linux runs the full serial test suite with
+`cargo test -- --test-threads=1`; macOS and Windows run
+`cargo check --all-targets` before the release binary/package smoke so the
+platform matrix still catches compile drift without depending on Unix-specific
+test fixtures.
+The workflow also runs packaging checks for Cargo metadata, `cargo package`,
+Cargo/npm/Homebrew version sync, the npm wrapper, root/platform npm dry
+packaging, Homebrew formula syntax, Docker image build/run smoke, and runtime
+service template rendering.
 Each platform build also smoke-runs the binary after staging it into the
 matching npm platform package, before packing the tarball that may be published
 to npm.
