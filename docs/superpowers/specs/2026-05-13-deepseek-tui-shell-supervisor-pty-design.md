@@ -152,7 +152,8 @@ Attach is an API-level terminal stream, not a full UI widget:
 3. Replay and attach:
    - `stream=terminal`
    - event cursor support
-   - MCP/ACP schema exposure remains open
+   - MCP/ACP schema exposure landed through ACP `session/shell/subscribe` and
+     MCP `exec_shell_terminal_events`
 4. Resize:
    - `exec_shell_resize`
    - `TIOCSWINSZ`
@@ -201,7 +202,7 @@ The supervisor protocol skeleton, terminal event replay/attach plumbing, and
 the first Linux `native-supervisor` PTY backend have landed. Normal
 `exec_shell tty=true` still uses `script`; shell-supervisor `tty=true` starts
 own a native PTY master, write `terminal-events.jsonl`, and support live
-`TIOCSWINSZ` resize through the in-process supervisor. Remaining hard slices
-are MCP-side attach push/progress beyond the HTTP shell terminal SSE endpoint
-and ACP `session/shell/subscribe`, service-manager lifecycle coverage, and
-Windows ConPTY.
+`TIOCSWINSZ` resize through the in-process supervisor. HTTP shell terminal SSE,
+ACP `session/shell/subscribe`, and MCP `exec_shell_terminal_events` progress
+notifications now cover protocol-level terminal event consumption. Remaining
+hard slices are service-manager lifecycle coverage and Windows ConPTY.

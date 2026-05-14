@@ -48,6 +48,7 @@ usability gap was a human-facing CLI entry point for those protocol controls.
 ## Residual
 
 This is a command/response wrapper, not a full-screen terminal UI. Remaining
-shell-supervisor parity work is MCP-side attach push/progress beyond the HTTP
-shell terminal SSE endpoint and ACP `session/shell/subscribe`, broader
-service-manager lifecycle coverage, and Windows ConPTY.
+shell-supervisor parity work is broader service-manager lifecycle coverage and
+Windows ConPTY. HTTP shell terminal SSE, ACP `session/shell/subscribe`, and
+MCP `exec_shell_terminal_events` progress notifications now cover protocol
+terminal event consumption.

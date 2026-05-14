@@ -43,6 +43,7 @@ responses.
 ## Remaining
 
 This closes the HTTP runtime streaming surface for shell terminal event logs.
-Remaining shell-supervisor parity work is MCP-side terminal push/progress
-integration, broader service-manager lifecycle coverage, and Windows ConPTY.
-ACP push-frame integration is now covered by `session/shell/subscribe`.
+ACP push-frame integration is covered by `session/shell/subscribe`, and MCP
+progress integration is covered by `exec_shell_terminal_events` with
+`notifications/progress`. Remaining shell-supervisor parity work is broader
+service-manager lifecycle coverage and Windows ConPTY.

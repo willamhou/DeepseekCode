@@ -50,6 +50,7 @@ surface behind the HTTP runtime for attach-style shell terminal updates.
 
 ## Remaining
 
-ACP now has a first-order shell terminal push subscription. Remaining
-shell-supervisor protocol parity is MCP-side push/progress integration, broader
-service-manager lifecycle coverage, and Windows ConPTY.
+ACP now has a first-order shell terminal push subscription. MCP terminal
+progress is covered separately by `exec_shell_terminal_events` plus
+`notifications/progress`. Remaining shell-supervisor parity is broader
+service-manager lifecycle coverage and Windows ConPTY.

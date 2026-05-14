@@ -1078,6 +1078,10 @@ Landed first slice:
   shell-supervisor terminal event logs by terminal-event cursor and receive
   standard `session/update` `tool_call_update` notifications before the final
   `nextCursor` response
+- MCP `exec_shell_terminal_events` now lets MCP clients consume the same
+  shell-supervisor terminal event logs by cursor, and emits standard
+  `notifications/progress` frames when callers provide
+  `params._meta.progressToken`
 - `deepseek serve --acp --workspace <path>` starts ACP from an explicit
   workspace
 - `deepseek mcp add/get/remove/enable/disable/validate` covers common MCP
@@ -1112,9 +1116,8 @@ Landed first slice:
 Remaining:
 
 - no open general Phase G2 MCP/ACP parity gaps identified; shell-supervisor
-  MCP-side terminal push/progress remains tracked under the shell hard-slice
-  residuals, and upstream protocol drift/client interoperability still need
-  monitoring
+  HTTP SSE, ACP subscribe, and MCP progress/replay paths are covered; upstream
+  protocol drift/client interoperability still need monitoring
 
 ### Phase H: Packaging
 

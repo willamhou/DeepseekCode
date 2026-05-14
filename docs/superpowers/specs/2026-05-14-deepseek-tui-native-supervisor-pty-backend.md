@@ -59,5 +59,6 @@ This is not the final PTY parity endpoint. Still open:
 
 - broader service-manager lifecycle coverage for packaged systemd/launchd
   supervisors and restarted controller CLIs;
-- streaming attach frames over MCP/ACP/HTTP instead of single-response replay;
+- deeper native PTY takeover polish beyond the covered HTTP SSE, ACP
+  subscribe, and MCP progress/replay terminal event surfaces;
 - Windows ConPTY.

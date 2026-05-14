@@ -157,7 +157,7 @@ fn run_mcp_stdio(args: ServeMcpArgs) -> AppResult<()> {
         if line.trim().is_empty() {
             continue;
         }
-        if let Some(response) = mcp_response_for_message(&line, &state) {
+        for response in mcp_responses_for_message(&line, &state) {
             stdout.write_all(json_value_to_string(&response).as_bytes())?;
             stdout.write_all(b"\n")?;
             stdout.flush()?;
@@ -199,48 +199,53 @@ fn mcp_approval_thread_from_env(
     Ok(Some(thread.id))
 }
 
+#[cfg(test)]
 fn mcp_response_for_message(message: &str, state: &McpStdioState) -> Option<JsonValue> {
+    mcp_responses_for_message(message, state).into_iter().last()
+}
+
+fn mcp_responses_for_message(message: &str, state: &McpStdioState) -> Vec<JsonValue> {
     let root = match parse_root_object(message) {
         Ok(root) => root,
         Err(error) => {
-            return Some(mcp_error_response(
+            return vec![mcp_error_response(
                 JsonValue::Null,
                 -32700,
                 "Parse error",
                 &error.to_string(),
-            ))
+            )]
         }
     };
     let id = root.get("id").cloned();
     let Some(method) = root.get("method").and_then(json_as_string) else {
-        return Some(mcp_error_response(
+        return vec![mcp_error_response(
             id.unwrap_or(JsonValue::Null),
             -32600,
             "Invalid Request",
             "request field `method` must be a string",
-        ));
+        )];
     };
     if id.is_none() && method.starts_with("notifications/") {
-        return None;
+        return Vec::new();
     }
     let response_id = id.unwrap_or(JsonValue::Null);
 
     match method {
-        "initialize" => Some(mcp_success_response(response_id, mcp_initialize_result())),
-        "tools/list" => Some(mcp_success_response(
+        "initialize" => vec![mcp_success_response(response_id, mcp_initialize_result())],
+        "tools/list" => vec![mcp_success_response(
             response_id,
             object([("tools", JsonValue::Array(mcp_tool_definitions(state)))]),
-        )),
-        "tools/call" => Some(mcp_tools_call_response(response_id, &root, state)),
-        "prompts/list" => Some(mcp_success_response(
+        )],
+        "tools/call" => mcp_tools_call_responses(response_id, &root, state),
+        "prompts/list" => vec![mcp_success_response(
             response_id,
             object([
                 ("prompts", JsonValue::Array(mcp_prompt_definitions())),
                 ("nextCursor", JsonValue::Null),
             ]),
-        )),
-        "prompts/get" => Some(mcp_prompts_get_response(response_id, &root)),
-        "resources/list" => Some(mcp_success_response(
+        )],
+        "prompts/get" => vec![mcp_prompts_get_response(response_id, &root)],
+        "resources/list" => vec![mcp_success_response(
             response_id,
             object([
                 (
@@ -249,8 +254,8 @@ fn mcp_response_for_message(message: &str, state: &McpStdioState) -> Option<Json
                 ),
                 ("nextCursor", JsonValue::Null),
             ]),
-        )),
-        "resources/templates/list" => Some(mcp_success_response(
+        )],
+        "resources/templates/list" => vec![mcp_success_response(
             response_id,
             object([
                 (
@@ -259,15 +264,15 @@ fn mcp_response_for_message(message: &str, state: &McpStdioState) -> Option<Json
                 ),
                 ("nextCursor", JsonValue::Null),
             ]),
-        )),
-        "resources/read" => Some(mcp_resources_read_response(response_id, &root, state)),
-        "notifications/initialized" => None,
-        other => Some(mcp_error_response(
+        )],
+        "resources/read" => vec![mcp_resources_read_response(response_id, &root, state)],
+        "notifications/initialized" => Vec::new(),
+        other => vec![mcp_error_response(
             response_id,
             -32601,
             "Method not found",
             &format!("unsupported MCP method `{other}`"),
-        )),
+        )],
     }
 }
 
@@ -298,40 +303,40 @@ fn mcp_initialize_result() -> JsonValue {
     ])
 }
 
-fn mcp_tools_call_response(
+fn mcp_tools_call_responses(
     response_id: JsonValue,
     root: &BTreeMap<String, JsonValue>,
     state: &McpStdioState,
-) -> JsonValue {
+) -> Vec<JsonValue> {
     let params = match root.get("params").and_then(json_as_object) {
         Some(params) => params,
         None => {
-            return mcp_error_response(
+            return vec![mcp_error_response(
                 response_id,
                 -32602,
                 "Invalid params",
                 "tools/call requires object params",
-            )
+            )]
         }
     };
     let Some(name) = params.get("name").and_then(json_as_string) else {
-        return mcp_error_response(
+        return vec![mcp_error_response(
             response_id,
             -32602,
             "Invalid params",
             "tools/call requires string params.name",
-        );
+        )];
     };
     let arguments = match params.get("arguments") {
         Some(value) => match json_as_object(value) {
             Some(arguments) => arguments,
             None => {
-                return mcp_error_response(
+                return vec![mcp_error_response(
                     response_id,
                     -32602,
                     "Invalid params",
                     "tools/call params.arguments must be an object",
-                )
+                )]
             }
         },
         None => {
@@ -341,12 +346,36 @@ fn mcp_tools_call_response(
         }
     };
 
+    let progress_token = mcp_progress_token(params);
+    if name == "exec_shell_terminal_events" {
+        let input = mcp_input_with_workspace_defaults(name, tool_input_from_json(arguments), state);
+        return match execute_mcp_shell_terminal_events(input, state) {
+            Ok((text, snapshot)) => {
+                let mut responses =
+                    mcp_shell_terminal_progress_notifications(progress_token.as_ref(), &snapshot);
+                responses.push(mcp_success_response(
+                    response_id,
+                    mcp_tool_text_result(text, false),
+                ));
+                responses
+            }
+            Err(error) => vec![mcp_success_response(
+                response_id,
+                mcp_tool_text_result(error.to_string(), true),
+            )],
+        };
+    }
+
     let result = execute_mcp_tool(name, arguments, state);
     match result {
-        Ok(text) => mcp_success_response(response_id, mcp_tool_text_result(text, false)),
-        Err(error) => {
-            mcp_success_response(response_id, mcp_tool_text_result(error.to_string(), true))
-        }
+        Ok(text) => vec![mcp_success_response(
+            response_id,
+            mcp_tool_text_result(text, false),
+        )],
+        Err(error) => vec![mcp_success_response(
+            response_id,
+            mcp_tool_text_result(error.to_string(), true),
+        )],
     }
 }
 
@@ -801,6 +830,9 @@ fn execute_mcp_tool(
         "exec_shell_show" => ExecShellShowTool.execute(input)?,
         "exec_shell_replay" => ExecShellReplayTool.execute(input)?,
         "exec_shell_attach" => ExecShellAttachTool.execute(input)?,
+        "exec_shell_terminal_events" => {
+            return execute_mcp_shell_terminal_events(input, state).map(|(text, _)| text);
+        }
         "exec_shell_supervisor_status" => ExecShellSupervisorStatusTool.execute(input)?,
         "exec_shell_wait" => ExecShellWaitTool {
             tool_name: "exec_shell_wait",
@@ -2415,6 +2447,168 @@ fn execute_mcp_shell_tool(
     Ok(output.summary)
 }
 
+fn execute_mcp_shell_terminal_events(
+    input: ToolInput,
+    _state: &McpStdioState,
+) -> AppResult<(String, ShellTerminalEventSnapshot)> {
+    let task_id = mcp_input_required_any(&input, &["task_id", "id"], "exec_shell_terminal_events")?;
+    validate_record_id(&task_id)?;
+    let cwd = mcp_input_optional(&input, "cwd")
+        .ok_or_else(|| app_error("exec_shell_terminal_events requires `cwd`"))?;
+    let cursor = mcp_input_optional_u64(&input, &["cursor", "since_seq", "sinceSeq"]).unwrap_or(0);
+    let limit = mcp_input_optional_u64(&input, &["limit"])
+        .map(|limit| limit.clamp(1, 500) as usize)
+        .unwrap_or(50);
+    let limit_bytes = mcp_input_optional_u64(&input, &["limit_bytes", "limitBytes"])
+        .map(|limit| limit.clamp(1, 100_000) as usize)
+        .unwrap_or(20_000);
+    let wait_ms = mcp_input_optional_u64(&input, &["wait_ms", "waitMs"])
+        .map(|wait| wait.min(SSE_MAX_WAIT_MS))
+        .unwrap_or(0);
+    let poll_ms = mcp_input_optional_u64(&input, &["poll_ms", "pollMs"])
+        .map(|poll| poll.clamp(SSE_MIN_POLL_MS, SSE_MAX_POLL_MS))
+        .unwrap_or(100);
+    let tail = mcp_input_optional_bool(&input, "tail").unwrap_or(false);
+
+    let mut snapshot = read_shell_terminal_events_with_wait(
+        &cwd,
+        &task_id,
+        cursor,
+        limit_bytes,
+        tail,
+        wait_ms,
+        poll_ms,
+    )?;
+    let limit_truncated = snapshot.events.len() > limit;
+    if limit_truncated {
+        snapshot.events.truncate(limit);
+    }
+    snapshot.next_cursor = snapshot
+        .events
+        .iter()
+        .map(|event| event.seq)
+        .max()
+        .unwrap_or(cursor);
+    snapshot.truncated = snapshot.truncated || limit_truncated;
+    let text = render_mcp_shell_terminal_events(&snapshot, tail, wait_ms);
+    Ok((text, snapshot))
+}
+
+fn render_mcp_shell_terminal_events(
+    snapshot: &ShellTerminalEventSnapshot,
+    tail: bool,
+    wait_ms: u64,
+) -> String {
+    let timed_out = wait_ms > 0 && snapshot.events.is_empty() && snapshot.running;
+    let mut out = format!(
+        "schema: deepseek.exec_shell.terminal_events.v1\ntask_id: {}\nstatus: {}\nstream: terminal\ncursor: {}\nnext_cursor: {}\nevents: {}\nrunning: {}\ntail: {tail}\nwait_ms: {wait_ms}\ntimed_out: {timed_out}\ntruncated: {}\n",
+        snapshot.task_id,
+        snapshot.status,
+        snapshot.cursor,
+        snapshot.next_cursor,
+        snapshot.events.len(),
+        snapshot.running,
+        snapshot.truncated
+    );
+    if !snapshot.events.is_empty() {
+        out.push_str("data:\n");
+        for event in &snapshot.events {
+            out.push_str(&mcp_shell_terminal_event_line(event));
+            out.push('\n');
+        }
+    }
+    out.trim_end().to_string()
+}
+
+fn mcp_shell_terminal_event_line(event: &ShellTerminalEvent) -> String {
+    let timestamp = event
+        .timestamp
+        .as_deref()
+        .map(|value| format!(" {value}"))
+        .unwrap_or_default();
+    if event.preview.is_empty() {
+        format!("[{} {}{}]", event.seq, event.kind, timestamp)
+    } else {
+        format!(
+            "[{} {}{}] {}",
+            event.seq,
+            event.kind,
+            timestamp,
+            event.preview.trim_end()
+        )
+    }
+}
+
+fn mcp_shell_terminal_progress_notifications(
+    progress_token: Option<&JsonValue>,
+    snapshot: &ShellTerminalEventSnapshot,
+) -> Vec<JsonValue> {
+    let Some(progress_token) = progress_token else {
+        return Vec::new();
+    };
+    let total = snapshot.events.len();
+    snapshot
+        .events
+        .iter()
+        .enumerate()
+        .map(|(index, event)| {
+            mcp_progress_notification(
+                progress_token,
+                index + 1,
+                Some(total),
+                format!(
+                    "shell {} {}",
+                    snapshot.task_id,
+                    mcp_shell_terminal_event_line(event)
+                ),
+                Some(object([(
+                    "deepseek",
+                    object([
+                        (
+                            "kind",
+                            JsonValue::String("deepseek.mcp.shell_terminal_event.v1".to_string()),
+                        ),
+                        ("taskId", JsonValue::String(snapshot.task_id.clone())),
+                        ("status", JsonValue::String(snapshot.status.clone())),
+                        ("seq", JsonValue::Number(event.seq.to_string())),
+                        ("eventKind", JsonValue::String(event.kind.clone())),
+                    ]),
+                )])),
+            )
+        })
+        .collect()
+}
+
+fn mcp_progress_notification(
+    progress_token: &JsonValue,
+    progress: usize,
+    total: Option<usize>,
+    message: String,
+    meta: Option<JsonValue>,
+) -> JsonValue {
+    let mut params = BTreeMap::new();
+    params.insert("progressToken".to_string(), progress_token.clone());
+    params.insert(
+        "progress".to_string(),
+        JsonValue::Number(progress.to_string()),
+    );
+    if let Some(total) = total {
+        params.insert("total".to_string(), JsonValue::Number(total.to_string()));
+    }
+    params.insert("message".to_string(), JsonValue::String(message));
+    if let Some(meta) = meta {
+        params.insert("_meta".to_string(), meta);
+    }
+    object([
+        ("jsonrpc", JsonValue::String("2.0".to_string())),
+        (
+            "method",
+            JsonValue::String("notifications/progress".to_string()),
+        ),
+        ("params", JsonValue::Object(params)),
+    ])
+}
+
 fn execute_mcp_rlm_python_session(input: ToolInput, state: &McpStdioState) -> AppResult<String> {
     if let Some(thread_id) = state.approval_thread_id.as_deref() {
         if state.approval.require_write_confirmation && !env_flag("DSCODE_AUTO_APPROVE_WRITES") {
@@ -2734,6 +2928,27 @@ fn mcp_input_optional_bool(input: &ToolInput, key: &str) -> Option<bool> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| matches!(value, "1" | "true" | "TRUE" | "yes" | "on"))
+}
+
+fn mcp_input_optional_u64(input: &ToolInput, keys: &[&str]) -> Option<u64> {
+    keys.iter().find_map(|key| {
+        input
+            .get(key)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .and_then(|value| value.parse::<u64>().ok())
+    })
+}
+
+fn mcp_progress_token(params: &BTreeMap<String, JsonValue>) -> Option<JsonValue> {
+    let token = params
+        .get("_meta")
+        .and_then(json_as_object)
+        .and_then(|meta| meta.get("progressToken"))?;
+    match token {
+        JsonValue::String(_) | JsonValue::Number(_) => Some(token.clone()),
+        _ => None,
+    }
 }
 
 fn mcp_success_response(id: JsonValue, result: JsonValue) -> JsonValue {
@@ -3355,6 +3570,32 @@ fn mcp_tool_definitions(state: &McpStdioState) -> Vec<JsonValue> {
                     ("limit_bytes", number_property("Maximum bytes to return, capped at 100000.")),
                     ("tail", string_property("Set true to attach to the last limit_bytes bytes.")),
                     ("wait_ms", number_property("Wait milliseconds for new terminal bytes.")),
+                ],
+                &["task_id"],
+            ),
+        ),
+        mcp_tool_definition(
+            "exec_shell_terminal_events",
+            "Replay or bounded-wait shell-supervisor terminal event records by cursor; emits MCP notifications/progress updates when a progressToken is supplied.",
+            mcp_schema(
+                vec![
+                    ("task_id", string_property("Background shell task id.")),
+                    ("id", string_property("Alias for task_id.")),
+                    (
+                        "cwd",
+                        string_property("Working directory used to find detached durable records."),
+                    ),
+                    ("cursor", number_property("Terminal event sequence cursor.")),
+                    ("since_seq", number_property("Alias for cursor.")),
+                    ("sinceSeq", number_property("Alias for cursor.")),
+                    ("limit", number_property("Maximum events to return, capped at 500.")),
+                    ("limit_bytes", number_property("Maximum preview bytes to read, capped at 100000.")),
+                    ("limitBytes", number_property("Alias for limit_bytes.")),
+                    ("tail", string_property("Set true to read the tail of the terminal event log.")),
+                    ("wait_ms", number_property("Bounded wait milliseconds for new terminal events.")),
+                    ("waitMs", number_property("Alias for wait_ms.")),
+                    ("poll_ms", number_property("Polling interval while waiting.")),
+                    ("pollMs", number_property("Alias for poll_ms.")),
                 ],
                 &["task_id"],
             ),
@@ -9507,6 +9748,7 @@ mod tests {
         assert!(rendered.contains(r#""name":"exec_shell_show""#));
         assert!(rendered.contains(r#""name":"exec_shell_replay""#));
         assert!(rendered.contains(r#""name":"exec_shell_attach""#));
+        assert!(rendered.contains(r#""name":"exec_shell_terminal_events""#));
         assert!(rendered.contains(r#""name":"exec_shell_supervisor_status""#));
         assert!(rendered.contains(r#""name":"exec_shell_wait""#));
         assert!(rendered.contains(r#""name":"exec_wait""#));
@@ -10326,6 +10568,48 @@ shell_allowlist = ["cargo test"]
         };
         assert!(shell_request_for("task_shell_start"));
         assert!(shell_request_for("exec_shell_cancel"));
+    }
+
+    #[test]
+    fn mcp_tools_call_shell_terminal_events_emits_progress_notifications() {
+        let state = mcp_state("mcp-shell-terminal-events");
+        let task_id = "shell-mcp-1";
+        write_shell_terminal_event_job(&state.workspace, task_id);
+        let request = format!(
+            r#"{{"jsonrpc":"2.0","id":61,"method":"tools/call","params":{{"_meta":{{"progressToken":"shell-progress-1"}},"name":"exec_shell_terminal_events","arguments":{{"task_id":"{task_id}","cursor":0,"limit":10}}}}}}"#
+        );
+
+        let responses = mcp_responses_for_message(&request, &state);
+
+        assert_eq!(responses.len(), 3);
+        let first_progress = json_value_to_string(&responses[0]);
+        assert!(first_progress.contains(r#""method":"notifications/progress""#));
+        assert!(first_progress.contains(r#""progressToken":"shell-progress-1""#));
+        assert!(first_progress.contains(r#""progress":1"#));
+        assert!(first_progress.contains(r#""total":2"#));
+        assert!(first_progress.contains("deepseek.mcp.shell_terminal_event.v1"));
+        assert!(first_progress.contains("hello from pty"));
+        let second_progress = json_value_to_string(&responses[1]);
+        assert!(second_progress.contains(r#""progress":2"#));
+        assert!(second_progress.contains(r#""eventKind":"resize""#));
+        assert!(second_progress.contains("rows=33 cols=101"));
+        let final_text = mcp_response_text(&responses[2]);
+        assert!(final_text.contains("schema: deepseek.exec_shell.terminal_events.v1"));
+        assert!(final_text.contains("task_id: shell-mcp-1"));
+        assert!(final_text.contains("next_cursor: 2"));
+        assert!(final_text.contains("events: 2"));
+        assert!(final_text.contains("[1 output epoch+1] hello from pty"));
+        assert!(final_text.contains("[2 resize epoch+2] rows=33 cols=101"));
+
+        let replay_request = format!(
+            r#"{{"jsonrpc":"2.0","id":62,"method":"tools/call","params":{{"name":"exec_shell_terminal_events","arguments":{{"task_id":"{task_id}","sinceSeq":1,"limit":10}}}}}}"#
+        );
+        let replay_responses = mcp_responses_for_message(&replay_request, &state);
+        assert_eq!(replay_responses.len(), 1);
+        let replay_text = mcp_response_text(&replay_responses[0]);
+        assert!(!replay_text.contains("hello from pty"));
+        assert!(replay_text.contains("[2 resize epoch+2] rows=33 cols=101"));
+        assert!(replay_text.contains("events: 1"));
     }
 
     #[test]

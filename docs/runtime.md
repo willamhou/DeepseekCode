@@ -304,6 +304,12 @@ The default surface is intentionally read-only. It supports:
 - `resources/templates/list`
 - `resources/read`
 
+For long-running calls, MCP clients can include
+`params._meta.progressToken`; DeepSeekCode emits standard
+`notifications/progress` frames when a supported tool has incremental status.
+`exec_shell_terminal_events` uses this path to push shell-supervisor terminal
+events before the final `tools/call` response.
+
 Exposed tools:
 
 | Tool | Purpose |
@@ -346,6 +352,7 @@ Exposed tools:
 | `exec_shell_show` | Show one in-process or detached durable background shell job snapshot |
 | `exec_shell_replay` | Replay durable stdout/stderr shell log slices by byte offset |
 | `exec_shell_attach` | Return a terminal-oriented durable stdout PTY/log attach snapshot by cursor |
+| `exec_shell_terminal_events` | Replay or bounded-wait shell-supervisor terminal event records by cursor, with optional MCP `notifications/progress` updates when `params._meta.progressToken` is supplied |
 | `exec_shell_supervisor_status` | Inspect workspace-local shell supervisor protocol state without starting a supervisor |
 | `exec_shell_wait` | Wait for or poll one background shell job and return incremental output, or show a detached durable snapshot |
 | `exec_wait` | Alias for `exec_shell_wait` |
@@ -1417,13 +1424,23 @@ durable stdout PTY/log bytes, including command/status/TTY geometry metadata,
 `next_offset`, optional `tail=true`, and bounded `wait_ms` for new terminal
 bytes. It is intended for attach-style terminal viewers; stderr-only logs remain
 available through `exec_shell_replay stream=stderr`.
+For supervisor-backed terminal event logs, `exec_shell_terminal_events
+cwd=<path> task_id=<id> cursor=<seq>` returns `schema:
+deepseek.exec_shell.terminal_events.v1`, `next_cursor`, `events`,
+`running`, `timed_out`, and `[seq kind timestamp] preview` lines from
+`terminal-events.jsonl`. It also supports `sinceSeq`, `limit`, `limit_bytes`,
+`tail`, `wait_ms`, and `poll_ms`. When an MCP `tools/call` request includes
+`params._meta.progressToken`, each returned terminal event is also emitted as a
+standard `notifications/progress` frame with
+`_meta.deepseek.kind = deepseek.mcp.shell_terminal_event.v1`.
 `exec_shell_interact` distinguishes older detached durable records without FIFO
 stdin from unknown task ids and returns an explicit diagnostic instead of a
 generic missing-task error. MCP server mode
 exposes `exec_shell_list`, `exec_shell_show`, `exec_shell_replay`,
-`exec_shell_attach`, `exec_shell_supervisor_status`, `exec_shell_wait`,
-`exec_wait`, and `task_shell_wait` as read-only tools by default, while
-`exec_shell`, `task_shell_start`, `exec_shell_interact`, `exec_interact`,
+`exec_shell_attach`, `exec_shell_terminal_events`,
+`exec_shell_supervisor_status`, `exec_shell_wait`, `exec_wait`, and
+`task_shell_wait` as read-only tools by default, while `exec_shell`,
+`task_shell_start`, `exec_shell_interact`, `exec_interact`,
 `exec_shell_resize`, and `exec_shell_cancel` require trusted side effects or
 durable runtime approvals.
 
