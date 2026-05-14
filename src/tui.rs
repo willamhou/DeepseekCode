@@ -1191,6 +1191,12 @@ pub enum TuiTranslationCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TuiSessionsCommand {
+    Show,
+    Filter { query: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TuiProviderCommand {
     Show,
     List,
@@ -1377,6 +1383,30 @@ fn parse_tui_translation_command(line: &str) -> Option<Result<TuiTranslationComm
         ["off" | "false" | "0" | "no"] => Some(Ok(TuiTranslationCommand::Set(false))),
         _ => Some(Err(
             "usage: translate [on|off|toggle|show] or /translate [on|off|toggle|show]".to_string(),
+        )),
+    }
+}
+
+fn parse_tui_sessions_command(line: &str) -> Option<Result<TuiSessionsCommand, String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/sessions")
+        .or_else(|| strip_tui_command_prefix(trimmed, "sessions"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "/session"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "session"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "/resume"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "resume"))?;
+    let args = rest.split_whitespace().collect::<Vec<_>>();
+    match args.as_slice() {
+        [] | ["show" | "list" | "open"] => Some(Ok(TuiSessionsCommand::Show)),
+        ["filter"] => Some(Ok(TuiSessionsCommand::Filter {
+            query: String::new(),
+        })),
+        ["filter", query @ ..] => Some(Ok(TuiSessionsCommand::Filter {
+            query: query.join(" "),
+        })),
+        _ => Some(Err(
+            "usage: sessions [filter <query>], resume, /sessions [filter <query>], or /resume"
+                .to_string(),
         )),
     }
 }
@@ -2630,6 +2660,13 @@ struct TuiHelpCommandInfo {
 const TUI_HELP_COMMANDS: &[TuiHelpCommandInfo] = &[
     TuiHelpCommandInfo {
         category: "Workbench",
+        name: "help",
+        aliases: &["?"],
+        usage: "/help [command]",
+        description: "Show the command index or command-specific usage.",
+    },
+    TuiHelpCommandInfo {
+        category: "Workbench",
         name: "mode",
         aliases: &[],
         usage: "/mode [agent|plan|yolo|1|2|3]",
@@ -2707,6 +2744,13 @@ const TUI_HELP_COMMANDS: &[TuiHelpCommandInfo] = &[
     },
     TuiHelpCommandInfo {
         category: "Interaction",
+        name: "sessions",
+        aliases: &["session", "resume"],
+        usage: "/sessions [filter <query>]",
+        description: "Open or filter the session picker.",
+    },
+    TuiHelpCommandInfo {
+        category: "Interaction",
         name: "share",
         aliases: &[],
         usage: "/share",
@@ -2718,6 +2762,27 @@ const TUI_HELP_COMMANDS: &[TuiHelpCommandInfo] = &[
         aliases: &[],
         usage: "/export [path]",
         description: "Write the active thread transcript to a local Markdown file.",
+    },
+    TuiHelpCommandInfo {
+        category: "Interaction",
+        name: "save",
+        aliases: &[],
+        usage: "/save [path]",
+        description: "Save the active thread as a portable JSON snapshot.",
+    },
+    TuiHelpCommandInfo {
+        category: "Interaction",
+        name: "load",
+        aliases: &[],
+        usage: "/load <path>",
+        description: "Import a saved thread snapshot into the runtime store.",
+    },
+    TuiHelpCommandInfo {
+        category: "Interaction",
+        name: "attach",
+        aliases: &["image", "media"],
+        usage: "/attach <path>",
+        description: "Insert a media reference block into the composer.",
     },
     TuiHelpCommandInfo {
         category: "Config",
@@ -3060,6 +3125,8 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "agent",
     "yolo",
     "sessions",
+    "resume",
+    "resume filter ",
     "session filter ",
     "sessions filter ",
     "threads",
@@ -3294,6 +3361,10 @@ const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
     "/help links",
     "/help mcp",
     "/?",
+    "/sessions",
+    "/session",
+    "/resume",
+    "/sessions filter ",
     "/settings",
     "/config",
     "/diff",
@@ -4484,6 +4555,19 @@ impl TuiApp {
         } else {
             let count = self.filtered_session_indices().len();
             self.status = format!("session filter: {filter} ({count} match)");
+        }
+    }
+
+    fn handle_sessions_command(&mut self, command: TuiSessionsCommand) {
+        match command {
+            TuiSessionsCommand::Show => {
+                self.show_session_picker = true;
+                self.show_thread_picker = false;
+                self.status = "session picker opened".to_string();
+            }
+            TuiSessionsCommand::Filter { query } => {
+                self.set_session_picker_filter(query);
+            }
         }
     }
 
@@ -6368,6 +6452,19 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(command) = parse_tui_sessions_command(&content) {
+                    match command {
+                        Ok(command) => {
+                            self.handle_sessions_command(command);
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some((command, args)) = parse_tui_custom_slash_command(&content) {
                     if self.request_custom_slash_command(command, args) {
                         self.composer.clear();
@@ -7083,6 +7180,17 @@ impl TuiApp {
             match command {
                 Ok(()) => {
                     self.request_project_instructions_init();
+                }
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_sessions_command(command) {
+            match command {
+                Ok(command) => {
+                    self.handle_sessions_command(command);
                 }
                 Err(message) => {
                     self.status = message;
@@ -14931,6 +15039,10 @@ mod tests {
         assert!(detail.contains("DeepSeekCode Help"));
         assert!(detail.contains("/mode"));
         assert!(detail.contains("/links"));
+        assert!(detail.contains("/sessions"));
+        assert!(detail.contains("/save"));
+        assert!(detail.contains("/load"));
+        assert!(detail.contains("/attach"));
 
         run_palette_command(&mut app, "help mode");
 
@@ -19639,6 +19751,59 @@ mod tests {
         let output = render_once(&app, 120, 36).unwrap();
         assert!(output.contains("Alpha"));
         assert!(output.contains("Gamma"));
+    }
+
+    #[test]
+    fn sessions_slash_commands_open_picker_before_custom_slash_fallback() {
+        let mut app = TuiApp::with_runtime(
+            vec![TuiSession {
+                id: "session-api".to_string(),
+                title: "API Work".to_string(),
+                workspace: "/tmp/api".to_string(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-api".to_string()),
+                thread_count: 1,
+            }],
+            vec![TuiThread {
+                id: "thread-api".to_string(),
+                session_id: Some("session-api".to_string()),
+                title: "API thread".to_string(),
+                mode: "agent".to_string(),
+                status: "active".to_string(),
+                latest_turn_id: None,
+                event_seq: 1,
+            }],
+            Vec::new(),
+        );
+
+        app.composer_focused = true;
+        app.composer = "/sessions".to_string();
+        app.composer_cursor = app.composer.len();
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert!(app.show_session_picker);
+        assert_eq!(app.status, "session picker opened");
+        assert!(app.composer.is_empty());
+        assert!(app.drain_actions().is_empty());
+
+        app.show_session_picker = false;
+        app.composer_focused = true;
+        app.composer = "/sessions filter api".to_string();
+        app.composer_cursor = app.composer.len();
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert!(app.show_session_picker);
+        assert_eq!(app.session_picker_filter, "api");
+        assert!(app.status.contains("session filter: api (1 match)"));
+        assert!(app.drain_actions().is_empty());
+
+        app.show_session_picker = false;
+        app.composer_focused = false;
+        run_palette_command(&mut app, "/resume");
+
+        assert!(app.show_session_picker);
+        assert_eq!(app.status, "session picker opened");
+        assert!(app.drain_actions().is_empty());
     }
 
     #[test]

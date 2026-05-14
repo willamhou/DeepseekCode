@@ -132,8 +132,9 @@ Current surfaces:
   item timelines
 - thread navigator populated from the selected session's durable runtime
   threads
-- session picker and thread navigator filters through `session filter <query>`
-  and `thread filter <query>` for large durable runtime lists
+- session picker and thread navigator filters through `session filter <query>` /
+  `/sessions filter <query>` and `thread filter <query>` for large durable
+  runtime lists
 - mouse capture for workbench navigation: click Plan/Agent/YOLO tabs to switch
   modes, click visible session/thread picker rows to select them, scroll the
   wheel to reuse the active scroll/navigation target, and click the transcript
@@ -338,8 +339,8 @@ Command palette commands currently implemented:
 | `mode plan`, `plan` | Switch to Plan mode |
 | `mode agent`, `agent` | Switch to Agent mode |
 | `mode yolo`, `yolo` | Switch to YOLO mode |
-| `sessions` | Open the session picker |
-| `session filter <query>`, `session filter` | Filter or clear visible sessions in the session picker |
+| `sessions`, `session`, `resume`, `/sessions`, `/session`, `/resume` | Open the session picker |
+| `session filter <query>`, `sessions filter <query>`, `/sessions filter <query>`, `session filter` | Filter or clear visible sessions in the session picker |
 | `threads`, `thread` | Open the thread navigator |
 | `thread filter <query>`, `thread filter` | Filter or clear visible threads in the thread navigator |
 | `thread next`, `thread prev` | Move between durable threads in the selected session |

@@ -330,6 +330,10 @@ Landed first slice:
 - TUI session picker and thread navigator now support command-palette filters
   (`session filter <query>` and `thread filter <query>`) that narrow visible
   durable runtime lists while keeping keyboard navigation bounded to matches
+- TUI composer and command palette now treat `sessions` / `/sessions`,
+  `session` / `/session`, and `resume` / `/resume` as built-in session-picker
+  commands, including `/sessions filter <query>`, so they no longer fall
+  through to custom slash command execution
 - TUI now enables terminal mouse capture for first-line workbench navigation:
   click Plan/Agent/YOLO tabs to switch mode, click visible session/thread
   picker rows to select them, scroll the wheel through the active
