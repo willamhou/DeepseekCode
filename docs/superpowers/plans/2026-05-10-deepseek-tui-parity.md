@@ -33,7 +33,9 @@ current native-supervisor PTY protocol surface instead of the earlier
 pre-native-PTY limitation. TUI composer slash routing now also preserves
 absolute slash-prefixed filesystem paths such as `/usr/lib/...` as ordinary
 user messages while keeping registered path-like custom slash commands such as
-`/pr/fix` executable.
+`/pr/fix` executable. Opening the TUI MCP manager now also refreshes MCP
+discovery/health output so the manager surface does not show stale server-tool
+state.
 The largest remaining DeepSeek-TUI / Claude Code CLI / Codex CLI gaps are now:
 
 - native supervisor-owned PTY attach/stdin/resize/replay/wait/cancel polish and

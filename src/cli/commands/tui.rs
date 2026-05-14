@@ -3009,6 +3009,11 @@ fn mcp_manager_summary(config: &AppConfig) -> AppResult<String> {
     output.push_str(&mcp_status_summary(config)?);
     output.push_str("\n\n");
     output.push_str(&list_servers_summary(config)?);
+    output.push_str("\nDiscovery refresh\n");
+    match validate_servers_summary(config) {
+        Ok(summary) => output.push_str(&summary),
+        Err(error) => output.push_str(&format!("MCP discovery refresh failed: {error}\n")),
+    }
     output.push_str("\nAvailable actions:\n");
     output.push_str("- mcp init [--force]\n");
     output.push_str("- mcp add stdio <name> <command> [args...]\n");
@@ -10465,6 +10470,8 @@ shell_allowlist = ["git diff"]
         let output = render_once(&app, 160, 48).unwrap();
         assert!(output.contains("MCP Manager"));
         assert!(output.contains("example-filesystem"));
+        assert!(output.contains("Discovery refresh"));
+        assert!(output.contains("mcp validate: ok"));
         assert!(output.contains("Available actions"));
         assert!(!output.contains("Transcript"));
 
