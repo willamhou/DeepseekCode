@@ -385,6 +385,10 @@ Landed first slice:
 - local file-backed TUI now supports DeepSeek-TUI-style `/export [path]`
   active-thread Markdown export, resolving relative paths inside the selected
   workspace and defaulting to `chat_export_<timestamp>.md`
+- local file-backed TUI now supports DeepSeek-TUI-style `/save [path]` and
+  `/load <path>` session snapshots, writing active durable session/thread JSON
+  under the selected workspace by default and importing snapshots into fresh
+  runtime session/thread ids without overwriting existing history
 - local file-backed TUI now supports DeepSeek-TUI-style `/clear` conversation
   reset by creating and switching to a fresh empty active thread in the selected
   durable session without deleting older thread history

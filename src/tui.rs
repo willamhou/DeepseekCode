@@ -585,6 +585,8 @@ pub enum TuiMcpDetailKind {
     Queue,
     Share,
     Export,
+    Save,
+    Load,
     Mode,
     Help,
     Settings,
@@ -631,6 +633,8 @@ impl TuiMcpDetailKind {
             Self::Queue => "queue",
             Self::Share => "share",
             Self::Export => "export",
+            Self::Save => "save",
+            Self::Load => "load",
             Self::Mode => "mode",
             Self::Help => "help",
             Self::Settings => "settings",
@@ -677,6 +681,8 @@ impl TuiMcpDetailKind {
             Self::Queue => "Queue",
             Self::Share => "Share",
             Self::Export => "Export",
+            Self::Save => "Save",
+            Self::Load => "Load",
             Self::Mode => "Mode",
             Self::Help => "Help",
             Self::Settings => "Settings",
@@ -723,6 +729,8 @@ impl TuiMcpDetailKind {
             Self::Queue => Self::Manager,
             Self::Export => Self::Manager,
             Self::Share => Self::Manager,
+            Self::Save => Self::Manager,
+            Self::Load => Self::Manager,
             Self::Mode => Self::Manager,
             Self::Help => Self::Manager,
             Self::Settings => Self::Manager,
@@ -769,6 +777,8 @@ impl TuiMcpDetailKind {
             Self::Queue => Self::Manager,
             Self::Export => Self::Manager,
             Self::Share => Self::Manager,
+            Self::Save => Self::Manager,
+            Self::Load => Self::Manager,
             Self::Mode => Self::Manager,
             Self::Help => Self::Manager,
             Self::Settings => Self::Manager,
@@ -993,6 +1003,18 @@ pub enum TuiShareCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TuiExportCommand {
     Export { path: Option<String> },
+    Help,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TuiSaveCommand {
+    Save { path: Option<String> },
+    Help,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TuiLoadCommand {
+    Load { path: String },
     Help,
 }
 
@@ -1607,6 +1629,34 @@ fn parse_tui_export_command(line: &str) -> Option<Result<TuiExportCommand, Strin
     }
 }
 
+fn parse_tui_save_command(line: &str) -> Option<Result<TuiSaveCommand, String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/save")
+        .or_else(|| strip_tui_command_prefix(trimmed, "save"))?;
+    let path = rest.trim();
+    match path {
+        "" => Some(Ok(TuiSaveCommand::Save { path: None })),
+        "help" | "--help" | "-h" => Some(Ok(TuiSaveCommand::Help)),
+        value => Some(Ok(TuiSaveCommand::Save {
+            path: Some(value.to_string()),
+        })),
+    }
+}
+
+fn parse_tui_load_command(line: &str) -> Option<Result<TuiLoadCommand, String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/load")
+        .or_else(|| strip_tui_command_prefix(trimmed, "load"))?;
+    let path = rest.trim();
+    match path {
+        "" => Some(Err("usage: load <path> or /load <path>".to_string())),
+        "help" | "--help" | "-h" => Some(Ok(TuiLoadCommand::Help)),
+        value => Some(Ok(TuiLoadCommand::Load {
+            path: value.to_string(),
+        })),
+    }
+}
+
 fn parse_tui_clear_command(line: &str) -> Option<Result<TuiClearCommand, String>> {
     let trimmed = line.trim();
     let rest = strip_tui_command_prefix(trimmed, "/clear")
@@ -1895,6 +1945,15 @@ pub enum TuiAction {
     ExportThread {
         thread_id: String,
         path: Option<String>,
+    },
+    SaveSession {
+        session_id: String,
+        thread_id: String,
+        path: Option<String>,
+    },
+    LoadSession {
+        workspace: String,
+        path: String,
     },
     ClearConversation {
         session_id: String,
@@ -2489,6 +2548,11 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "export",
     "export ",
     "export help",
+    "save",
+    "save ",
+    "save help",
+    "load ",
+    "load help",
     "hooks",
     "hooks list",
     "hooks events",
@@ -2664,6 +2728,11 @@ const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
     "/export",
     "/export ",
     "/export help",
+    "/save",
+    "/save ",
+    "/save help",
+    "/load ",
+    "/load help",
     "/hooks",
     "/hooks list",
     "/hooks events",
@@ -5084,6 +5153,32 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(command) = parse_tui_save_command(&content) {
+                    match command {
+                        Ok(command) => {
+                            self.handle_save_command(command);
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
+                if let Some(command) = parse_tui_load_command(&content) {
+                    match command {
+                        Ok(command) => {
+                            self.handle_load_command(command);
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some(command) = parse_tui_clear_command(&content) {
                     match command {
                         Ok(command) => {
@@ -5719,6 +5814,24 @@ impl TuiApp {
         if let Some(command) = parse_tui_export_command(command) {
             match command {
                 Ok(command) => self.handle_export_command(command),
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_save_command(command) {
+            match command {
+                Ok(command) => self.handle_save_command(command),
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_load_command(command) {
+            match command {
+                Ok(command) => self.handle_load_command(command),
                 Err(message) => {
                     self.status = message;
                 }
@@ -7910,6 +8023,138 @@ impl TuiApp {
             None => {
                 let _ = writeln!(detail, "No active durable thread selected.");
             }
+        }
+        detail
+    }
+
+    fn handle_save_command(&mut self, command: TuiSaveCommand) {
+        match command {
+            TuiSaveCommand::Save { path } => self.request_save_session(path),
+            TuiSaveCommand::Help => {
+                self.set_mcp_detail(TuiMcpDetailKind::Save, self.render_save_help_detail());
+                self.status = "save help shown".to_string();
+            }
+        }
+    }
+
+    fn request_save_session(&mut self, path: Option<String>) {
+        let Some(session) = self.selected_session().cloned() else {
+            self.status = "no durable session to save".to_string();
+            return;
+        };
+        if session.status == "empty" && session.id == "local" {
+            self.status = "no durable session to save".to_string();
+            return;
+        }
+        let Some(thread_id) = self.selected_thread_id.clone() else {
+            self.status = "no active durable thread to save".to_string();
+            return;
+        };
+        self.pending_actions.push(TuiAction::SaveSession {
+            session_id: session.id,
+            thread_id,
+            path: path.clone(),
+        });
+        self.status = match path {
+            Some(path) => format!("session snapshot save queued: {path}"),
+            None => "session snapshot save queued".to_string(),
+        };
+    }
+
+    fn render_save_help_detail(&self) -> String {
+        let mut detail = String::new();
+        let _ = writeln!(detail, "DeepSeekCode Save");
+        let _ = writeln!(detail, "=================");
+        let _ = writeln!(detail);
+        let _ = writeln!(
+            detail,
+            "/save [path] writes the active durable session and thread to a JSON snapshot."
+        );
+        let _ = writeln!(detail);
+        let _ = writeln!(detail, "Paths");
+        let _ = writeln!(detail, "-----");
+        let _ = writeln!(
+            detail,
+            "- No path: writes session_<timestamp>.json in the selected workspace."
+        );
+        let _ = writeln!(
+            detail,
+            "- Relative path: resolved inside the selected workspace."
+        );
+        let _ = writeln!(detail, "- Absolute path or ~/path: used directly.");
+        let _ = writeln!(detail);
+        match (self.selected_session(), self.active_thread()) {
+            (Some(session), Some(thread)) => {
+                push_status_row(
+                    &mut detail,
+                    "Session:",
+                    &format!("{} [{}]", session.title, session.id),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Thread:",
+                    &format!("{} [{}]", thread.title, thread.id),
+                );
+                push_status_row(
+                    &mut detail,
+                    "Transcript items:",
+                    &self.active_thread_items().len().to_string(),
+                );
+            }
+            _ => {
+                let _ = writeln!(detail, "No active durable session and thread selected.");
+            }
+        }
+        detail
+    }
+
+    fn handle_load_command(&mut self, command: TuiLoadCommand) {
+        match command {
+            TuiLoadCommand::Load { path } => self.request_load_session(path),
+            TuiLoadCommand::Help => {
+                self.set_mcp_detail(TuiMcpDetailKind::Load, self.render_load_help_detail());
+                self.status = "load help shown".to_string();
+            }
+        }
+    }
+
+    fn request_load_session(&mut self, path: String) {
+        let workspace = self
+            .selected_session()
+            .map(|session| session.workspace.clone())
+            .unwrap_or_else(|| ".".to_string());
+        self.pending_actions.push(TuiAction::LoadSession {
+            workspace,
+            path: path.clone(),
+        });
+        self.status = format!("session snapshot load queued: {path}");
+    }
+
+    fn render_load_help_detail(&self) -> String {
+        let mut detail = String::new();
+        let _ = writeln!(detail, "DeepSeekCode Load");
+        let _ = writeln!(detail, "=================");
+        let _ = writeln!(detail);
+        let _ = writeln!(
+            detail,
+            "/load <path> imports a DeepSeekCode TUI session snapshot into a new durable session."
+        );
+        let _ = writeln!(detail);
+        let _ = writeln!(detail, "Paths");
+        let _ = writeln!(detail, "-----");
+        let _ = writeln!(
+            detail,
+            "- Relative path: resolved inside the selected workspace."
+        );
+        let _ = writeln!(detail, "- Absolute path or ~/path: used directly.");
+        let _ = writeln!(detail);
+        let _ = writeln!(
+            detail,
+            "Import creates fresh runtime ids instead of overwriting existing sessions."
+        );
+        if let Some(session) = self.selected_session() {
+            let _ = writeln!(detail);
+            push_status_row(&mut detail, "Selected workspace:", &session.workspace);
         }
         detail
     }
@@ -14914,6 +15159,82 @@ mod tests {
         assert!(detail.contains("/export [path]"));
         assert!(detail.contains("Transcript items:"));
         assert_eq!(app.composer, "");
+    }
+
+    #[test]
+    fn save_and_load_commands_queue_session_snapshot_actions() {
+        let mut app = TuiApp::with_runtime(
+            vec![TuiSession {
+                id: "session-one".to_string(),
+                title: "One".to_string(),
+                workspace: "/workspace/project".to_string(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-one".to_string()),
+                thread_count: 1,
+            }],
+            vec![TuiThread {
+                id: "thread-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                title: "First thread".to_string(),
+                mode: "agent".to_string(),
+                status: "active".to_string(),
+                latest_turn_id: None,
+                event_seq: 1,
+            }],
+            vec![TuiItem {
+                id: "item-one".to_string(),
+                thread_id: "thread-one".to_string(),
+                turn_id: None,
+                index: 1,
+                item_type: "message".to_string(),
+                role: Some("user".to_string()),
+                content: "hello".to_string(),
+                status: "completed".to_string(),
+            }],
+        );
+
+        run_palette_command(&mut app, "save snapshots/thread.json");
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::SaveSession {
+                session_id: "session-one".to_string(),
+                thread_id: "thread-one".to_string(),
+                path: Some("snapshots/thread.json".to_string()),
+            }]
+        );
+
+        run_palette_command(&mut app, "load snapshots/thread.json");
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::LoadSession {
+                workspace: "/workspace/project".to_string(),
+                path: "snapshots/thread.json".to_string(),
+            }]
+        );
+
+        app.composer_focused = true;
+        app.composer = "/save help".to_string();
+        app.composer_cursor = app.composer.len();
+        assert!(app.handle_key(KeyCode::Enter));
+        let (kind, detail) = app.mcp_detail.as_ref().expect("save help detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Save);
+        assert!(detail.contains("/save [path]"));
+        assert!(detail.contains("Transcript items:"));
+        assert_eq!(app.composer, "");
+
+        app.composer_focused = true;
+        app.composer = "/load help".to_string();
+        app.composer_cursor = app.composer.len();
+        assert!(app.handle_key(KeyCode::Enter));
+        let (kind, detail) = app.mcp_detail.as_ref().expect("load help detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Load);
+        assert!(detail.contains("/load <path>"));
+        assert!(detail.contains("fresh runtime ids"));
+        assert_eq!(app.composer, "");
+
+        app.composer_focused = false;
+        run_palette_command(&mut app, "load");
+        assert_eq!(app.status, "usage: load <path> or /load <path>");
     }
 
     #[test]

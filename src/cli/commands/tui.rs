@@ -40,9 +40,10 @@ use crate::core::loop_runtime::{
 };
 use crate::core::rollback::{RestorePlan, RollbackStore, SnapshotRecord};
 use crate::core::runtime::{
-    json_object, parse_automation_record, parse_item_record, parse_runtime_event,
-    parse_session_record, parse_task_record, parse_thread_record, parse_usage_record, ItemRecord,
-    RuntimeEvent, RuntimeStore, SessionRecord, TaskRecord, ThreadRecord,
+    item_to_json, json_object, parse_automation_record, parse_item_record, parse_runtime_event,
+    parse_session_record, parse_task_record, parse_thread_record, parse_turn_record,
+    parse_usage_record, session_to_json, thread_to_json, turn_to_json, ItemRecord, RuntimeEvent,
+    RuntimeStore, SessionRecord, TaskRecord, ThreadRecord, TurnRecord,
 };
 use crate::error::{app_error, AppResult};
 use crate::repl::slash::load_custom_slash_command_from_config;
@@ -67,7 +68,7 @@ use crate::tui::{
 use crate::ui::stream::StreamEvents;
 use crate::util::json::{
     json_as_array, json_as_object, json_as_string, json_value_to_string, parse_json_value,
-    JsonValue,
+    parse_root_object, JsonValue,
 };
 use crate::util::sse;
 
@@ -797,6 +798,12 @@ fn handle_tui_http_action(
         TuiAction::ExportThread { .. } => {
             app.set_status("export commands require local file-backed TUI".to_string());
         }
+        TuiAction::SaveSession { .. } => {
+            app.set_status("save commands require local file-backed TUI".to_string());
+        }
+        TuiAction::LoadSession { .. } => {
+            app.set_status("load commands require local file-backed TUI".to_string());
+        }
         TuiAction::ClearConversation { .. } => {
             app.set_status("clear conversation requires local file-backed TUI".to_string());
         }
@@ -1249,6 +1256,8 @@ fn mcp_detail_summary(
         TuiMcpDetailKind::Queue => Err(app_error("queue details are not MCP details")),
         TuiMcpDetailKind::Share => Err(app_error("share details are not MCP details")),
         TuiMcpDetailKind::Export => Err(app_error("export details are not MCP details")),
+        TuiMcpDetailKind::Save => Err(app_error("save details are not MCP details")),
+        TuiMcpDetailKind::Load => Err(app_error("load details are not MCP details")),
         TuiMcpDetailKind::Hooks => Err(app_error("hooks details are not MCP details")),
         TuiMcpDetailKind::Goal => Err(app_error("goal details are not MCP details")),
         TuiMcpDetailKind::Mode => Err(app_error("mode details are not MCP details")),
@@ -1887,6 +1896,16 @@ fn handle_tui_action_with_live(
         }
         TuiAction::ExportThread { thread_id, path } => {
             run_tui_export_thread(store, app, &thread_id, path.as_deref())?;
+        }
+        TuiAction::SaveSession {
+            session_id,
+            thread_id,
+            path,
+        } => {
+            run_tui_save_session(store, app, &session_id, &thread_id, path.as_deref())?;
+        }
+        TuiAction::LoadSession { workspace, path } => {
+            run_tui_load_session(store, app, &workspace, &path)?;
         }
         TuiAction::ClearConversation {
             session_id,
@@ -2916,6 +2935,250 @@ fn run_tui_export_thread(
     Ok(())
 }
 
+const TUI_SESSION_SNAPSHOT_KIND: &str = "deepseek.tui.session_snapshot.v1";
+
+struct TuiSessionSnapshotImport {
+    session: SessionRecord,
+    thread: ThreadRecord,
+    turn_count: usize,
+    item_count: usize,
+}
+
+fn run_tui_save_session(
+    store: &RuntimeStore,
+    app: &mut TuiApp,
+    session_id: &str,
+    thread_id: &str,
+    requested_path: Option<&str>,
+) -> AppResult<()> {
+    let session = store.load_session(session_id)?;
+    let thread = store.load_thread(thread_id)?;
+    if thread.session_id.as_deref() != Some(session.id.as_str()) {
+        return Err(app_error(format!(
+            "thread `{thread_id}` does not belong to session `{session_id}`"
+        )));
+    }
+    let turns = store.list_turns(thread_id)?;
+    let items = store.list_items(thread_id, None)?;
+    let path = resolve_tui_save_path(&session, &thread, requested_path);
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    let snapshot = tui_session_snapshot_json(&session, &thread, &turns, &items);
+    let mut content = json_value_to_string(&snapshot);
+    content.push('\n');
+    std::fs::write(&path, content)?;
+    app.set_status(format!("saved session snapshot: {}", path.display()));
+    app.set_mcp_detail(
+        TuiMcpDetailKind::Save,
+        format!(
+            "Save complete\n\nPath: {}\nSession: {}\nThread: {}\nTurns: {}\nItems: {}",
+            path.display(),
+            session.title,
+            thread.title,
+            turns.len(),
+            items.len()
+        ),
+    );
+    Ok(())
+}
+
+fn run_tui_load_session(
+    store: &RuntimeStore,
+    app: &mut TuiApp,
+    workspace: &str,
+    requested_path: &str,
+) -> AppResult<()> {
+    let path = resolve_tui_load_path(workspace, requested_path);
+    let content = std::fs::read_to_string(&path)?;
+    let imported = import_tui_session_snapshot(store, workspace, &content)?;
+    refresh_app_from_store(store, app)?;
+    app.select_thread_by_id(&imported.thread.id);
+    app.set_status(format!("loaded session snapshot: {}", path.display()));
+    app.set_mcp_detail(
+        TuiMcpDetailKind::Load,
+        format!(
+            "Load complete\n\nPath: {}\nNew session: {} [{}]\nNew thread: {} [{}]\nTurns: {}\nItems: {}",
+            path.display(),
+            imported.session.title,
+            imported.session.id,
+            imported.thread.title,
+            imported.thread.id,
+            imported.turn_count,
+            imported.item_count
+        ),
+    );
+    Ok(())
+}
+
+fn tui_session_snapshot_json(
+    session: &SessionRecord,
+    thread: &ThreadRecord,
+    turns: &[TurnRecord],
+    items: &[ItemRecord],
+) -> JsonValue {
+    json_object([
+        (
+            "kind",
+            JsonValue::String(TUI_SESSION_SNAPSHOT_KIND.to_string()),
+        ),
+        ("session", session_to_json(session)),
+        ("thread", thread_to_json(thread)),
+        (
+            "turns",
+            JsonValue::Array(turns.iter().map(turn_to_json).collect()),
+        ),
+        (
+            "items",
+            JsonValue::Array(items.iter().map(item_to_json).collect()),
+        ),
+    ])
+}
+
+fn import_tui_session_snapshot(
+    store: &RuntimeStore,
+    fallback_workspace: &str,
+    content: &str,
+) -> AppResult<TuiSessionSnapshotImport> {
+    let root = parse_root_object(content)?;
+    let kind = root
+        .get("kind")
+        .and_then(json_as_string)
+        .ok_or_else(|| app_error("session snapshot missing kind"))?;
+    if kind != TUI_SESSION_SNAPSHOT_KIND {
+        return Err(app_error(format!(
+            "unsupported session snapshot kind `{kind}`"
+        )));
+    }
+
+    let saved_session = parse_session_record(snapshot_object(&root, "session")?)?;
+    let saved_thread = parse_thread_record(snapshot_object(&root, "thread")?)?;
+    let mut saved_turns = snapshot_array(&root, "turns")?
+        .iter()
+        .map(|value| {
+            let object = json_as_object(value)
+                .ok_or_else(|| app_error("session snapshot turns entry must be an object"))?;
+            parse_turn_record(object)
+        })
+        .collect::<AppResult<Vec<_>>>()?;
+    let mut saved_items = snapshot_array(&root, "items")?
+        .iter()
+        .map(|value| {
+            let object = json_as_object(value)
+                .ok_or_else(|| app_error("session snapshot items entry must be an object"))?;
+            parse_item_record(object)
+        })
+        .collect::<AppResult<Vec<_>>>()?;
+
+    saved_turns.sort_by_key(|turn| turn.index);
+    saved_items.sort_by_key(|item| item.index);
+
+    let session_workspace = non_empty_or(&saved_session.workspace, fallback_workspace);
+    let imported_session = store.create_session(
+        format_imported_title(&saved_session.title),
+        session_workspace.to_string(),
+    )?;
+    let thread_workspace = non_empty_or(&saved_thread.workspace, session_workspace);
+    let imported_thread = store.create_thread_for_session(
+        &imported_session.id,
+        format_imported_title(&saved_thread.title),
+        thread_workspace.to_string(),
+        saved_thread.model.clone(),
+        saved_thread.mode.clone(),
+    )?;
+
+    let mut turn_id_map = BTreeMap::<String, String>::new();
+    for saved_turn in &saved_turns {
+        let imported_turn = store.append_turn(
+            &imported_thread.id,
+            saved_turn.role.clone(),
+            saved_turn.content.clone(),
+        )?;
+        if saved_turn.status != "completed" {
+            store.update_turn(
+                &imported_thread.id,
+                &imported_turn.id,
+                saved_turn.content.clone(),
+                saved_turn.status.clone(),
+            )?;
+        }
+        turn_id_map.insert(saved_turn.id.clone(), imported_turn.id);
+    }
+
+    for saved_item in &saved_items {
+        let mapped_turn_id = saved_item
+            .turn_id
+            .as_ref()
+            .and_then(|turn_id| turn_id_map.get(turn_id));
+        store.append_item(
+            &imported_thread.id,
+            mapped_turn_id.map(String::as_str),
+            saved_item.item_type.clone(),
+            saved_item.role.clone(),
+            saved_item.content.clone(),
+            saved_item.status.clone(),
+        )?;
+    }
+    store.append_thread_event(
+        &imported_thread.id,
+        "session_snapshot_loaded",
+        json_object([
+            ("source_session_id", JsonValue::String(saved_session.id)),
+            ("source_thread_id", JsonValue::String(saved_thread.id)),
+            ("turns", JsonValue::Number(saved_turns.len().to_string())),
+            ("items", JsonValue::Number(saved_items.len().to_string())),
+        ]),
+    )?;
+
+    let session = store.load_session(&imported_session.id)?;
+    let thread = store.load_thread(&imported_thread.id)?;
+    Ok(TuiSessionSnapshotImport {
+        session,
+        thread,
+        turn_count: saved_turns.len(),
+        item_count: saved_items.len(),
+    })
+}
+
+fn snapshot_object<'a>(
+    root: &'a BTreeMap<String, JsonValue>,
+    key: &str,
+) -> AppResult<&'a BTreeMap<String, JsonValue>> {
+    root.get(key)
+        .and_then(json_as_object)
+        .ok_or_else(|| app_error(format!("session snapshot missing object `{key}`")))
+}
+
+fn snapshot_array<'a>(
+    root: &'a BTreeMap<String, JsonValue>,
+    key: &str,
+) -> AppResult<&'a Vec<JsonValue>> {
+    root.get(key)
+        .and_then(json_as_array)
+        .ok_or_else(|| app_error(format!("session snapshot missing array `{key}`")))
+}
+
+fn non_empty_or<'a>(value: &'a str, fallback: &'a str) -> &'a str {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        fallback
+    } else {
+        trimmed
+    }
+}
+
+fn format_imported_title(title: &str) -> String {
+    let title = title.trim();
+    if title.is_empty() {
+        "Imported session".to_string()
+    } else {
+        format!("Imported: {title}")
+    }
+}
+
 fn resolve_tui_export_path(
     session: Option<&SessionRecord>,
     thread: &ThreadRecord,
@@ -2933,6 +3196,35 @@ fn resolve_tui_export_path(
         expanded
     } else {
         workspace.join(expanded)
+    }
+}
+
+fn resolve_tui_save_path(
+    session: &SessionRecord,
+    thread: &ThreadRecord,
+    requested_path: Option<&str>,
+) -> PathBuf {
+    let workspace = tui_export_workspace(Some(session), thread);
+    let Some(requested_path) = requested_path
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    else {
+        return workspace.join(format!("session_{}.json", epoch_millis_label()));
+    };
+    let expanded = expand_tilde(requested_path);
+    if expanded.is_absolute() {
+        expanded
+    } else {
+        workspace.join(expanded)
+    }
+}
+
+fn resolve_tui_load_path(workspace: &str, requested_path: &str) -> PathBuf {
+    let expanded = expand_tilde(requested_path.trim());
+    if expanded.is_absolute() {
+        expanded
+    } else {
+        PathBuf::from(workspace).join(expanded)
     }
 }
 
@@ -5549,6 +5841,39 @@ description = "Review pull requests."
     }
 
     #[test]
+    fn handle_tui_http_action_rejects_save_load_commands_as_local_only() {
+        let client = RuntimeHttpClient::from_url("http://127.0.0.1:9").unwrap();
+        let mut app = TuiApp::new(Vec::new());
+
+        handle_tui_http_action(
+            &client,
+            &mut app,
+            TuiAction::SaveSession {
+                session_id: "session-one".to_string(),
+                thread_id: "thread-one".to_string(),
+                path: Some("session.json".to_string()),
+            },
+        )
+        .unwrap();
+        assert!(render_once(&app, 120, 36)
+            .unwrap()
+            .contains("save commands require local file-backed TUI"));
+
+        handle_tui_http_action(
+            &client,
+            &mut app,
+            TuiAction::LoadSession {
+                workspace: ".".to_string(),
+                path: "session.json".to_string(),
+            },
+        )
+        .unwrap();
+        assert!(render_once(&app, 120, 36)
+            .unwrap()
+            .contains("load commands require local file-backed TUI"));
+    }
+
+    #[test]
     fn handle_tui_http_action_rejects_clear_conversation_as_local_only() {
         let client = RuntimeHttpClient::from_url("http://127.0.0.1:9").unwrap();
         let mut app = TuiApp::new(Vec::new());
@@ -7395,6 +7720,102 @@ shell_allowlist = ["git diff"]
         let output = render_once(&app, 160, 48).unwrap();
         assert!(output.contains("Export complete"));
         assert!(output.contains("exports/chat.md"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn handle_tui_action_saves_and_loads_session_snapshot() {
+        let root = temp_root("save-load-action");
+        fs::create_dir_all(&root).unwrap();
+        let store = RuntimeStore::new(root.join(".dscode/runtime"));
+        let session = store
+            .create_session("Daily work".to_string(), root.display().to_string())
+            .unwrap();
+        let thread = store
+            .create_thread_for_session(
+                &session.id,
+                "Snapshot me".to_string(),
+                root.display().to_string(),
+                "deepseek-v4-pro".to_string(),
+                "agent".to_string(),
+            )
+            .unwrap();
+        let user_turn = store
+            .append_turn(&thread.id, "user".to_string(), "hello".to_string())
+            .unwrap();
+        store
+            .append_item(
+                &thread.id,
+                Some(&user_turn.id),
+                "message".to_string(),
+                Some("user".to_string()),
+                "hello from user".to_string(),
+                "completed".to_string(),
+            )
+            .unwrap();
+        store
+            .append_item(
+                &thread.id,
+                None,
+                "message".to_string(),
+                Some("assistant".to_string()),
+                "hello from assistant".to_string(),
+                "completed".to_string(),
+            )
+            .unwrap();
+        let mut app = app_from_store(&store).unwrap();
+
+        handle_tui_action(
+            &store,
+            None,
+            &mut app,
+            TuiAction::SaveSession {
+                session_id: session.id.clone(),
+                thread_id: thread.id.clone(),
+                path: Some("snapshots/session.json".to_string()),
+            },
+        )
+        .unwrap();
+
+        let snapshot_path = root.join("snapshots/session.json");
+        let snapshot = fs::read_to_string(&snapshot_path).unwrap();
+        assert!(snapshot.contains(TUI_SESSION_SNAPSHOT_KIND));
+        assert!(snapshot.contains("Daily work"));
+        assert!(snapshot.contains("hello from assistant"));
+        assert!(render_once(&app, 160, 48)
+            .unwrap()
+            .contains("Save complete"));
+
+        handle_tui_action(
+            &store,
+            None,
+            &mut app,
+            TuiAction::LoadSession {
+                workspace: root.display().to_string(),
+                path: "snapshots/session.json".to_string(),
+            },
+        )
+        .unwrap();
+
+        let sessions = store.list_sessions(20).unwrap();
+        assert!(sessions
+            .iter()
+            .any(|record| record.title == "Imported: Daily work"));
+        let imported_thread = store
+            .list_threads(20)
+            .unwrap()
+            .into_iter()
+            .find(|record| record.title == "Imported: Snapshot me")
+            .expect("imported thread");
+        let imported_items = store.list_items(&imported_thread.id, None).unwrap();
+        assert_eq!(imported_items.len(), 2);
+        assert!(imported_items
+            .iter()
+            .any(|item| item.content == "hello from assistant"));
+        assert!(render_once(&app, 160, 48)
+            .unwrap()
+            .contains("Load complete"));
 
         let _ = fs::remove_dir_all(root);
     }

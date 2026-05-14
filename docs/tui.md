@@ -22,6 +22,8 @@ Current surfaces:
   transcript to standalone HTML and attempting a public GitHub Gist via `gh`
 - active thread Markdown export with `export` / `/export [path]`, defaulting
   to `chat_export_<timestamp>.md` in the selected workspace
+- active session JSON snapshots with `save` / `/save [path]` and
+  `load` / `/load <path>`, importing snapshots into fresh durable runtime ids
 - runtime-backed sub-agent task inspection and queueing with `subagents` /
   `/subagents`, `agents` / `/agents`, and `agent [0-3] <task>` /
   `/agent [0-3] <task>`
@@ -367,6 +369,10 @@ Command palette commands currently implemented:
 | `share help`, `/share help` | Show share export requirements and current-thread export metadata |
 | `export`, `/export`, `export <path>`, `/export <path>` | Write the active durable thread transcript to Markdown; relative paths resolve under the selected workspace |
 | `export help`, `/export help` | Show export path rules and current-thread export metadata |
+| `save`, `/save`, `save <path>`, `/save <path>` | Write the active durable session/thread to a JSON snapshot; relative paths resolve under the selected workspace |
+| `save help`, `/save help` | Show snapshot save path rules and current session/thread metadata |
+| `load <path>`, `/load <path>` | Import a DeepSeekCode TUI session snapshot into a new durable session/thread with fresh runtime ids |
+| `load help`, `/load help` | Show snapshot import behavior and path rules |
 | `hooks`, `/hooks`, `hooks list`, `/hooks list` | Show hook enabled state, timeout, project/user roots, event directories, and executable scripts |
 | `hooks events`, `/hooks events`, `hook events`, `/hook events` | Show supported hook event directory names |
 | `network`, `network list`, `/network list` | Show `network.default`, `network.allow`, and `network.deny` in the right-side detail panel |
