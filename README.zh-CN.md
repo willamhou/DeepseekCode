@@ -67,6 +67,7 @@ docker run --rm ghcr.io/willamhou/deepseekcode:0.1.0 version
 ```bash
 cargo install --path .
 deepseek config init
+printf '%s\n' '<api-key>' | deepseek config auth DEEPSEEK_API_KEY --stdin
 deepseek doctor --json
 ```
 
@@ -100,7 +101,7 @@ Codex CLI 的产品成熟度。最大差距集中在：
 - 原生 supervisor-owned PTY 的 attach/stdin/resize/replay/wait/cancel；
 - 真实外部仓库上的 live write-fixture 验证；
 - npm registry 发布和 Homebrew tap，这两项还缺少对应凭据；
-- API key/auth 凭据录入与持久化、比 guided `/setup` 更完整的 first-run wizard，
+- 超出 CLI stdin auth 与 guided `/setup` 的 TUI 内 masked credential wizard，
   以及更真实的 model-backed demo 展示。
 
 ## Demo 素材

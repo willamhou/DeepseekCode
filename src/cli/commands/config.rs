@@ -4,6 +4,7 @@ use crate::config::types::AppConfig;
 use crate::core::network_policy::{decide, normalize_host, NetworkDecision};
 use crate::error::app_error;
 use crate::error::AppResult;
+use std::io::Read as _;
 
 pub fn run(args: ConfigArgs) -> AppResult<()> {
     if let Some(host) = args.network_allow {
@@ -26,6 +27,24 @@ pub fn run(args: ConfigArgs) -> AppResult<()> {
     }
 
     let config = load_or_default()?;
+    if args.auth_stdin {
+        let env_name = args
+            .auth_env
+            .unwrap_or_else(|| config.model.api_key_env.clone());
+        let mut secret = String::new();
+        std::io::stdin().read_to_string(&mut secret)?;
+        let result = persist_auth_secret_at(&std::env::current_dir()?, &env_name, &secret)?;
+        println!(
+            "stored {} in {}",
+            result.env_name,
+            result.dotenv_path.display()
+        );
+        println!("value: present (hidden)");
+        if !result.changed {
+            println!("unchanged: existing value already matched");
+        }
+        return Ok(());
+    }
     if args.print_default {
         print_config(&config);
     } else {
@@ -168,6 +187,13 @@ impl LogoutCredentialSummary {
 pub(crate) struct LogoutEnvVarSummary {
     pub(crate) name: String,
     pub(crate) was_present: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AuthCredentialResult {
+    pub(crate) dotenv_path: std::path::PathBuf,
+    pub(crate) env_name: String,
+    pub(crate) changed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -550,6 +576,31 @@ pub(crate) fn logout_credentials_at(root: &std::path::Path) -> AppResult<LogoutC
         env_vars,
         dotenv_removed,
         dotenv_changed,
+    })
+}
+
+pub(crate) fn persist_auth_secret_at(
+    root: &std::path::Path,
+    env_name: &str,
+    secret: &str,
+) -> AppResult<AuthCredentialResult> {
+    let env_name = normalize_env_name(env_name)?;
+    let secret = normalize_secret_from_stdin(secret)?;
+    let dotenv_path = root.join(".env");
+    let content = if dotenv_path.exists() {
+        std::fs::read_to_string(&dotenv_path)?
+    } else {
+        String::new()
+    };
+    let updated = replace_or_append_dotenv_assignment(&content, &env_name, &secret);
+    let changed = updated != content;
+    if changed {
+        std::fs::write(&dotenv_path, updated)?;
+    }
+    Ok(AuthCredentialResult {
+        dotenv_path,
+        env_name,
+        changed,
     })
 }
 
@@ -1033,6 +1084,61 @@ fn remove_dotenv_assignments(content: &str, env_names: &[String]) -> (String, Ve
     (updated, removed)
 }
 
+fn replace_or_append_dotenv_assignment(content: &str, env_name: &str, secret: &str) -> String {
+    let rendered = format!("{env_name}={secret}");
+    let mut replaced = false;
+    let mut lines = Vec::new();
+    for line in content.lines() {
+        if let Some((key, _)) = parse_dotenv_assignment(line) {
+            if key == env_name {
+                lines.push(rendered.clone());
+                replaced = true;
+                continue;
+            }
+        }
+        lines.push(line.to_string());
+    }
+    if !replaced {
+        if !lines.is_empty() && !lines.last().is_some_and(|line| line.is_empty()) {
+            lines.push(String::new());
+        }
+        lines.push(rendered);
+    }
+    let mut updated = lines.join("\n");
+    updated.push('\n');
+    updated
+}
+
+fn normalize_env_name(env_name: &str) -> AppResult<String> {
+    let env_name = env_name.trim();
+    if parse_dotenv_assignment(&format!("{env_name}=x"))
+        .map(|(key, _)| key == env_name)
+        .unwrap_or(false)
+    {
+        Ok(env_name.to_string())
+    } else {
+        Err(app_error(
+            "auth env name must be a valid environment variable name",
+        ))
+    }
+}
+
+fn normalize_secret_from_stdin(secret: &str) -> AppResult<String> {
+    let secret = secret.trim_end_matches(['\r', '\n']).trim();
+    if secret.is_empty() {
+        return Err(app_error("auth secret from stdin must not be empty"));
+    }
+    if secret
+        .chars()
+        .any(|ch| ch.is_whitespace() || matches!(ch, '\0' | '"' | '\''))
+    {
+        return Err(app_error(
+            "auth secret from stdin must be a single non-whitespace token",
+        ));
+    }
+    Ok(secret.to_string())
+}
+
 fn read_string_key(content: &str, key: &str) -> Option<String> {
     for line in content.lines() {
         let trimmed = line.trim_start();
@@ -1421,6 +1527,34 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("network.deny already matches"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn persist_auth_secret_updates_dotenv_without_printable_secret() {
+        let root = temp_root("auth-secret");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(".env"), "KEEP_ME=1\nDEEPSEEK_API_KEY=old\n").unwrap();
+
+        let result = persist_auth_secret_at(&root, "DEEPSEEK_API_KEY", "sk-new-secret\n").unwrap();
+
+        assert!(result.changed);
+        assert_eq!(result.env_name, "DEEPSEEK_API_KEY");
+        assert_eq!(result.dotenv_path, root.join(".env"));
+        let dotenv = std::fs::read_to_string(root.join(".env")).unwrap();
+        assert!(dotenv.contains("KEEP_ME=1"));
+        assert!(dotenv.contains("DEEPSEEK_API_KEY=sk-new-secret"));
+        assert!(!dotenv.contains("old"));
+
+        let unchanged =
+            persist_auth_secret_at(&root, "DEEPSEEK_API_KEY", "sk-new-secret\n").unwrap();
+        assert!(!unchanged.changed);
+
+        let invalid = persist_auth_secret_at(&root, "1BAD", "sk-value").unwrap_err();
+        assert!(invalid.to_string().contains("valid environment variable"));
+        let invalid = persist_auth_secret_at(&root, "DEEPSEEK_API_KEY", "two words").unwrap_err();
+        assert!(invalid.to_string().contains("single non-whitespace token"));
 
         let _ = std::fs::remove_dir_all(root);
     }

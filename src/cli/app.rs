@@ -613,6 +613,8 @@ pub struct ConfigArgs {
     pub force: bool,
     pub network_allow: Option<String>,
     pub network_deny: Option<String>,
+    pub auth_env: Option<String>,
+    pub auth_stdin: bool,
 }
 
 #[derive(Debug, Default)]
@@ -1089,6 +1091,8 @@ fn parse_config_args(args: Vec<String>) -> Result<ConfigArgs, String> {
         force: false,
         network_allow: None,
         network_deny: None,
+        auth_env: None,
+        auth_stdin: false,
     };
 
     let mut index = 0;
@@ -1117,9 +1121,29 @@ fn parse_config_args(args: Vec<String>) -> Result<ConfigArgs, String> {
             "network" => {
                 return Err("config network requires allow|deny <host>".to_string());
             }
+            "auth" => {
+                index += 1;
+                while index < args.len() {
+                    match args[index].as_str() {
+                        "--stdin" => {
+                            parsed.auth_stdin = true;
+                            index += 1;
+                        }
+                        value if parsed.auth_env.is_none() && !value.starts_with('-') => {
+                            parsed.auth_env = Some(value.to_string());
+                            index += 1;
+                        }
+                        other => {
+                            return Err(format!(
+                                "unknown config auth argument `{other}`; expected [ENV] --stdin"
+                            ));
+                        }
+                    }
+                }
+            }
             other => {
                 return Err(format!(
-                    "unknown config argument `{other}`; expected init|network allow|network deny|--force|--print-default"
+                    "unknown config argument `{other}`; expected init|auth [ENV] --stdin|network allow|network deny|--force|--print-default"
                 ));
             }
         }
@@ -1127,6 +1151,7 @@ fn parse_config_args(args: Vec<String>) -> Result<ConfigArgs, String> {
 
     let network_mutations =
         usize::from(parsed.network_allow.is_some()) + usize::from(parsed.network_deny.is_some());
+    let auth_mutation = parsed.auth_env.is_some() || parsed.auth_stdin;
     if network_mutations > 1 {
         return Err("config accepts only one network allow/deny mutation at a time".to_string());
     }
@@ -1134,6 +1159,17 @@ fn parse_config_args(args: Vec<String>) -> Result<ConfigArgs, String> {
         return Err(
             "config network allow|deny cannot be combined with init, --force, or --print-default"
                 .to_string(),
+        );
+    }
+    if auth_mutation && !parsed.auth_stdin {
+        return Err("config auth requires --stdin so secrets are not passed in argv".to_string());
+    }
+    if auth_mutation && network_mutations > 0 {
+        return Err("config auth cannot be combined with config network mutations".to_string());
+    }
+    if auth_mutation && (parsed.print_default || parsed.init || parsed.force) {
+        return Err(
+            "config auth cannot be combined with init, --force, or --print-default".to_string(),
         );
     }
     if parsed.print_default && parsed.init {
@@ -4216,6 +4252,39 @@ mod tests {
             }
             other => panic!("expected Command::Config, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn cli_from_argv_routes_config_auth_stdin() {
+        let cli = Cli::from_argv(vec![
+            "config".to_string(),
+            "auth".to_string(),
+            "DEEPSEEK_API_KEY".to_string(),
+            "--stdin".to_string(),
+        ])
+        .expect("parse should succeed");
+
+        match cli.command {
+            Some(Command::Config(args)) => {
+                assert_eq!(args.auth_env.as_deref(), Some("DEEPSEEK_API_KEY"));
+                assert!(args.auth_stdin);
+                assert!(!args.init);
+                assert!(!args.print_default);
+            }
+            other => panic!("expected Command::Config, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_from_argv_rejects_config_auth_without_stdin() {
+        let error = Cli::from_argv(vec![
+            "config".to_string(),
+            "auth".to_string(),
+            "DEEPSEEK_API_KEY".to_string(),
+        ])
+        .unwrap_err();
+
+        assert!(error.contains("config auth requires --stdin"));
     }
 
     #[test]

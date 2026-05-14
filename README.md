@@ -68,6 +68,7 @@ Or use a local checkout:
 ```bash
 cargo install --path .
 deepseek config init
+printf '%s\n' '<api-key>' | deepseek config auth DEEPSEEK_API_KEY --stdin
 deepseek doctor --json
 ```
 
@@ -102,8 +103,8 @@ Claude Code CLI / Codex CLI polish. The largest remaining gaps are:
 - native supervisor-owned PTY attach/stdin/resize/replay/wait/cancel;
 - live external write-fixture validation across real repositories;
 - npm registry publishing and a Homebrew tap, both blocked on credentials;
-- product polish around credential entry/persistence, a fuller first-run wizard
-  beyond guided `/setup`, and richer model-backed demos.
+- product polish around a masked in-TUI credential wizard beyond CLI stdin
+  auth and guided `/setup`, plus richer model-backed demos.
 
 ## Demo Asset
 

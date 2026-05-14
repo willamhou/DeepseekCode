@@ -11636,6 +11636,11 @@ impl TuiApp {
             let _ = writeln!(detail, "- deepseek config init");
         }
         if !api_key_present {
+            let _ = writeln!(
+                detail,
+                "- printf '%s\\n' '<api-key>' | deepseek config auth {} --stdin",
+                config.model.api_key_env
+            );
             let _ = writeln!(detail, "- export {}=...", config.model.api_key_env);
         }
         let _ = writeln!(detail, "- deepseek doctor");

@@ -218,8 +218,11 @@ fn build_onboarding_json(config: &AppConfig) -> BTreeMap<String, JsonValue> {
                 onboarding_step_json(
                     "api_key",
                     if api_key_present { "done" } else { "missing" },
-                    "Export the provider API key for live model calls.",
-                    &format!("export {}=...", config.model.api_key_env),
+                    "Persist or export the provider API key for live model calls.",
+                    &format!(
+                        "printf '%s\\n' '<api-key>' | deepseek config auth {} --stdin",
+                        config.model.api_key_env
+                    ),
                 ),
                 onboarding_step_json(
                     "smoke",
@@ -543,6 +546,10 @@ fn onboarding_next_commands(
         commands.push("deepseek config init".to_string());
     }
     if !api_key_present {
+        commands.push(format!(
+            "printf '%s\\n' '<api-key>' | deepseek config auth {} --stdin",
+            config.model.api_key_env
+        ));
         commands.push(format!("export {}=...", config.model.api_key_env));
     }
     commands.push("deepseek doctor".to_string());
