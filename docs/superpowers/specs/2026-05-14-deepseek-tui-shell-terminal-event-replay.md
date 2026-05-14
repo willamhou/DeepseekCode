@@ -35,5 +35,5 @@ event logs instead of only stdout/stderr byte logs.
 This replay/attach plumbing now has a Linux native PTY producer, but streaming
 terminal event consumption is now covered by HTTP runtime shell terminal SSE,
 ACP `session/shell/subscribe`, and MCP `exec_shell_terminal_events` progress
-notifications. Broader service-manager lifecycle coverage and Windows ConPTY
-remain open implementation slices.
+notifications. Actual installed systemd/launchd service smoke evidence and
+Windows ConPTY remain open slices.

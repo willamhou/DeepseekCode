@@ -190,9 +190,11 @@ deepseek agents service --kind launchd --out ./services --workdir "$PWD" --bin "
 
 Linux 用户通常把 `services/systemd/*.service` 安装到
 `~/.config/systemd/user/`，macOS 用户把 `services/launchd/*.plist` 安装到
-`~/Library/LaunchAgents/`。生成内容包括 `serve --http`、`agents daemon --json`
-和 `diagnostics --watch --changed --json`；命令只生成文件，不会自动 enable、
-load 或 start。
+`~/Library/LaunchAgents/`。生成内容包括 `serve --http`、`agents daemon --json`、
+`diagnostics --watch --changed --json` 和 `agents shell-supervisor --json`。
+`agents service --out` 同时写入 `SERVICES.md`，列出 systemd/launchd 的
+install、start、status、logs、restart、stop、disable/unload 和 runtime
+health-check 命令；命令只生成文件，不会自动 enable、load 或 start。
 
 ## Homebrew
 

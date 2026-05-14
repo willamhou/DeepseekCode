@@ -48,4 +48,5 @@ could not request MCP-native progress notifications for terminal event replay.
 
 MCP now has cursor-based shell terminal event replay plus MCP-native progress
 notifications for active `tools/call` requests. Remaining shell-supervisor
-parity is broader service-manager lifecycle coverage and Windows ConPTY.
+parity is actual installed systemd/launchd service smoke evidence and Windows
+ConPTY.

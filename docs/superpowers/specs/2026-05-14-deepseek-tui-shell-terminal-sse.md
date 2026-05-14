@@ -45,5 +45,5 @@ responses.
 This closes the HTTP runtime streaming surface for shell terminal event logs.
 ACP push-frame integration is covered by `session/shell/subscribe`, and MCP
 progress integration is covered by `exec_shell_terminal_events` with
-`notifications/progress`. Remaining shell-supervisor parity work is broader
-service-manager lifecycle coverage and Windows ConPTY.
+`notifications/progress`. Remaining shell-supervisor parity work is actual
+installed systemd/launchd service smoke evidence and Windows ConPTY.

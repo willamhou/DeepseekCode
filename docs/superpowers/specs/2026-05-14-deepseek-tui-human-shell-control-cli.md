@@ -48,7 +48,7 @@ usability gap was a human-facing CLI entry point for those protocol controls.
 ## Residual
 
 This is a command/response wrapper, not a full-screen terminal UI. Remaining
-shell-supervisor parity work is broader service-manager lifecycle coverage and
-Windows ConPTY. HTTP shell terminal SSE, ACP `session/shell/subscribe`, and
-MCP `exec_shell_terminal_events` progress notifications now cover protocol
-terminal event consumption.
+shell-supervisor parity work is actual installed systemd/launchd service smoke
+evidence and Windows ConPTY. HTTP shell terminal SSE, ACP
+`session/shell/subscribe`, and MCP `exec_shell_terminal_events` progress
+notifications now cover protocol terminal event consumption.

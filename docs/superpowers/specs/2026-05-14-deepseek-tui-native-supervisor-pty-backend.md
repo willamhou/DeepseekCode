@@ -57,8 +57,8 @@ instead of the short-lived command caller.
 
 This is not the final PTY parity endpoint. Still open:
 
-- broader service-manager lifecycle coverage for packaged systemd/launchd
-  supervisors and restarted controller CLIs;
+- actual installed systemd/launchd smoke evidence for packaged supervisors and
+  restarted controller CLIs;
 - deeper native PTY takeover polish beyond the covered HTTP SSE, ACP
   subscribe, and MCP progress/replay terminal event surfaces;
 - Windows ConPTY.

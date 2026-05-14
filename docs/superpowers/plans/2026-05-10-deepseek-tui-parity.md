@@ -1139,6 +1139,9 @@ Landed first slice:
 - Release matrix creates GitHub signed artifact attestations for each archive and checksum file with `actions/attest`
 - `packaging/homebrew/deepseek.rb` provides a Homebrew formula template for macOS arm64/x64 and Linux x64 release assets
 - `packaging/systemd/` and `packaging/launchd/` provide runtime service placeholders; `deepseek agents service` renders workspace-specific systemd/launchd files for `serve --http`, `agents daemon --json`, `diagnostics --watch --changed`, and `agents shell-supervisor --json`
+- `deepseek agents service --out <dir>` also writes a workspace-specific
+  `SERVICES.md` with systemd/launchd install/start/status/log/restart/stop
+  lifecycle commands and runtime health checks
 - `deepseek update package` includes `SERVICES.md` and packaged service templates under `services/`
 - Cargo registry distribution now has an explicit source-build/package-only
   decision: the release workflow skips Cargo registry publishing while
@@ -1167,6 +1170,7 @@ Remaining:
 - Published Homebrew tap with real release asset SHA-256 values
 - Tagged GitHub Release and GHCR image evidence for the public binary/container
   install channels
+- Actual installed systemd/launchd service smoke evidence on a clean machine
 
 ## Completion Audit Gate
 

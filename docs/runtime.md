@@ -171,7 +171,10 @@ shell supervisor service publishes workspace-local
 status/show/start/wait/replay/attach/stdin/resize/cancel over the protocol
 socket and controls durable safe shell jobs; native PTY sessions are still not
 implemented. The service set is still local template output, not a hosted
-multi-user runtime.
+multi-user runtime. When `--out` is used, `deepseek agents service` also writes
+`SERVICES.md` beside the generated units with install/start/status/logs/restart
+and stop/unload commands plus `curl /v1/health`, `doctor --json`,
+`agents rlm-status --json`, and `agents shell status --json` checks.
 
 ### Health Schema
 

@@ -205,4 +205,5 @@ own a native PTY master, write `terminal-events.jsonl`, and support live
 `TIOCSWINSZ` resize through the in-process supervisor. HTTP shell terminal SSE,
 ACP `session/shell/subscribe`, and MCP `exec_shell_terminal_events` progress
 notifications now cover protocol-level terminal event consumption. Remaining
-hard slices are service-manager lifecycle coverage and Windows ConPTY.
+hard slices are actual installed systemd/launchd service smoke evidence and
+Windows ConPTY.

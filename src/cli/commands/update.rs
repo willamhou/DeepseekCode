@@ -1093,14 +1093,19 @@ wrapper for those protocol controls.
 The agents daemon triggers due automations, executes pending runtime tasks,
 recovers stale live RLM ownership, and runs one queued live RLM turn per tick.
 Review the generated WorkingDirectory, bind address, poll interval, and budget
-before installing the files with systemd or launchd.
+before installing the files with systemd or launchd. The rendered output also
+writes a workspace-specific `SERVICES.md` with install, start, status, log,
+restart, stop, disable/unload, and runtime health-check commands.
 
 Useful RLM service checks after startup:
 
 ```bash
+curl -fsS http://127.0.0.1:13000/v1/health
+deepseek doctor --json
 deepseek agents rlm-status --json
 deepseek agents rlm-events <session_id> --cursor 0 --json
 deepseek agents rlm-wait <session_id> --cursor 0 --timeout-ms 5000 --json
+deepseek agents shell status --json
 ```
 "#
 }
@@ -1734,9 +1739,12 @@ mod tests {
         assert!(manifest.contains("\"version\":"));
         let services = std::fs::read_to_string(package.services_doc).unwrap();
         assert!(services.contains("deepseek agents service"));
+        assert!(services.contains("workspace-specific `SERVICES.md`"));
         assert!(services.contains("live RLM worker daemon"));
         assert!(services.contains("deepseek agents shell-supervisor --json"));
+        assert!(services.contains("curl -fsS http://127.0.0.1:13000/v1/health"));
         assert!(services.contains("deepseek agents rlm-status --json"));
+        assert!(services.contains("deepseek agents shell status --json"));
     }
 
     #[test]
