@@ -30,6 +30,8 @@ DeepSeekCode は DeepSeek-first のターミナル向けコーディングエー
   shell-supervisor protocol bridge をサポートします。
 - ローカル HTTP/SSE runtime、ACP stdio adapter、MCP client/server tooling、
   TUI 内の MCP 管理画面を備えています。
+- guided `/setup` onboarding、provider/model picker、TUI masked auth、CLI
+  stdin auth persistence をサポートします。
 - RLM helper による再帰/長文入力の分析、model-session context、live queue
   status、event replay、cancel、recover、drain control をサポートします。
 - LSP-backed diagnostics と fallback diagnostics を実行でき、JSON/JSONL watch
@@ -105,8 +107,8 @@ DeepSeekCode は自身の開発に使える段階ですが、Claude Code CLI / C
 - ネイティブ supervisor-owned PTY の attach/stdin/resize/replay/wait/cancel。
 - 実リポジトリを使った live external write-fixture 検証。
 - npm registry 公開と Homebrew tap。どちらも資格情報が未設定です。
-- CLI stdin auth と guided `/setup` を超える TUI 内 masked credential
-  wizard、より実運用に近い model-backed demo の製品化。
+- より完全な first-run wizard、release channel install proof、
+  実運用に近い model-backed demo の製品化。
 
 ## Demo 素材
 

@@ -14,6 +14,20 @@ DeepSeek-TUI is a multi-crate Rust workspace with a dedicated `deepseek` dispatc
 
 DeepseekCode is currently a mostly single-crate CLI with a strong deterministic test/benchmark/dogfood surface and about `36.8k` lines under `src/`. Its CLI core is relatively close, but the terminal product surface is still incomplete.
 
+## Current Gap Audit (2026-05-14)
+
+Recent parity slices landed public repo metadata, multilingual README/demo
+surface, TUI `/setup` onboarding, guided setup controls, CLI stdin auth
+persistence, and a masked in-TUI credential wizard. The largest remaining
+DeepSeek-TUI / Claude Code CLI / Codex CLI gaps are now:
+
+- native supervisor-owned PTY attach/stdin/resize/replay/wait/cancel polish;
+- live external write-fixture validation across real repositories;
+- release-channel proof for npm and Homebrew once credentials are available;
+- a linear first-run wizard that sequences provider, model, auth, trust, theme,
+  and language controls instead of separate focused commands;
+- richer model-backed demo evidence beyond deterministic TUI snapshots.
+
 ## Deliverables
 
 1. True TUI

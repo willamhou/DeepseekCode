@@ -19,11 +19,11 @@ use flate2::read::GzDecoder;
 use crate::cli::app::{McpConfigScope, TuiArgs};
 use crate::cli::commands::config::{
     diagnostics_config_summary_at, logout_credentials_at, model_config_summary_at,
-    network_policy_summary_at, profile_config_summary_at, provider_config_summary_at,
-    remove_network_rule_at, set_diagnostics_post_edit_at, set_model_at, set_network_default_at,
-    set_network_rule_at, set_provider_at, switch_profile_at, DiagnosticsConfigSummary,
-    LogoutCredentialSummary, ModelConfigSummary, NetworkPolicySummary, NetworkRuleTarget,
-    ProfileConfigSummary, ProviderConfigSummary,
+    network_policy_summary_at, persist_auth_secret_at, profile_config_summary_at,
+    provider_config_summary_at, remove_network_rule_at, set_diagnostics_post_edit_at, set_model_at,
+    set_network_default_at, set_network_rule_at, set_provider_at, switch_profile_at,
+    DiagnosticsConfigSummary, LogoutCredentialSummary, ModelConfigSummary, NetworkPolicySummary,
+    NetworkRuleTarget, ProfileConfigSummary, ProviderConfigSummary,
 };
 use crate::cli::commands::mcp::{
     add_mcp_server_at, init_mcp_config_at, list_remote_prompts_summary,
@@ -663,6 +663,9 @@ fn handle_tui_http_action(
         }
         TuiAction::Logout { .. } => {
             app.set_status("logout requires local file-backed TUI".to_string());
+        }
+        TuiAction::AuthCredential { .. } => {
+            app.set_status("auth credential wizard requires local file-backed TUI".to_string());
         }
         TuiAction::Skills { .. } => {
             app.set_status("skills commands require local file-backed TUI".to_string());
@@ -3402,6 +3405,31 @@ fn handle_tui_action_with_live(
                 "logout: no local API key state found".to_string()
             };
             app.set_mcp_detail(TuiMcpDetailKind::Logout, format_logout_summary(&summary));
+            app.set_status(status);
+        }
+        TuiAction::AuthCredential {
+            workspace,
+            env_name,
+            secret,
+        } => {
+            let result =
+                persist_auth_secret_at(Path::new(&workspace), &env_name, secret.expose_secret())?;
+            let mut detail = String::new();
+            detail.push_str("DeepSeekCode Auth\n");
+            detail.push_str("=================\n\n");
+            detail.push_str(&format!("Workspace: {workspace}\n"));
+            detail.push_str(&format!("Env var: {}\n", result.env_name));
+            detail.push_str(&format!(".env: {}\n", result.dotenv_path.display()));
+            detail.push_str("Value: present (hidden)\n");
+            detail.push_str("\nNext commands:\n");
+            detail.push_str("- deepseek doctor\n");
+            detail.push_str("- deepseek smoke\n");
+            let status = if result.changed {
+                format!("auth credential stored: {}", result.env_name)
+            } else {
+                format!("auth credential unchanged: {}", result.env_name)
+            };
+            app.set_mcp_detail(TuiMcpDetailKind::Setup, detail);
             app.set_status(status);
         }
         TuiAction::Skills { command } => {
@@ -9079,6 +9107,41 @@ export DSCODE_TEST_LOGOUT_VISION_KEY="vision-secret"
         assert!(render_once(&app, 120, 36)
             .unwrap()
             .contains("logged out: cleared"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn handle_tui_action_persists_masked_auth_credential() {
+        let root = temp_root("auth-credential");
+        fs::create_dir_all(root.join(".dscode")).unwrap();
+        fs::write(root.join(".env"), "KEEP_ME=1\nDEEPSEEK_API_KEY=old\n").unwrap();
+        let store = RuntimeStore::new(root.join("runtime"));
+        let mut app = TuiApp::new(Vec::new());
+
+        handle_tui_action(
+            &store,
+            None,
+            &mut app,
+            TuiAction::AuthCredential {
+                workspace: root.display().to_string(),
+                env_name: "DEEPSEEK_API_KEY".to_string(),
+                secret: crate::tui::TuiSecretString::new("sk-tui-secret".to_string()),
+            },
+        )
+        .unwrap();
+
+        let dotenv = fs::read_to_string(root.join(".env")).unwrap();
+        assert!(dotenv.contains("KEEP_ME=1"));
+        assert!(dotenv.contains("DEEPSEEK_API_KEY=sk-tui-secret"));
+        assert!(!dotenv.contains("old"));
+        let (kind, detail) = app.mcp_detail_for_test().expect("auth detail");
+        assert_eq!(kind, TuiMcpDetailKind::Setup);
+        assert!(detail.contains("Value: present (hidden)"));
+        assert!(!detail.contains("sk-tui-secret"));
+        assert!(render_once(&app, 120, 36)
+            .unwrap()
+            .contains("auth credential stored: DEEPSEEK_API_KEY"));
 
         let _ = fs::remove_dir_all(root);
     }

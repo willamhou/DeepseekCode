@@ -279,6 +279,9 @@ history：
 printf '%s\n' "$DEEPSEEK_API_KEY" | deepseek config auth DEEPSEEK_API_KEY --stdin
 ```
 
+在 TUI 中也可以运行 `/setup auth` 或 `/setup auth <ENV>`，使用 masked 输入框把
+密钥写入当前选中 workspace 的 `.env`。
+
 `deepseek` 会自动读取当前工作目录下的 `.env`，并在变量尚未存在于进程环境时注入。常用 DeepSeek/OpenAI-compatible 配置：
 
 ```bash

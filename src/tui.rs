@@ -35,6 +35,7 @@ use crate::util::json::{
 };
 
 const USER_INPUT_OTHER_MAX_CHARS: usize = 200;
+const TUI_AUTH_SECRET_MAX_CHARS: usize = 4096;
 const DEEPSEEK_CODE_REPO_URL: &str = "https://github.com/willamhou/DeepSeekCode";
 const DEEPSEEK_CODE_BUG_URL: &str =
     "https://github.com/willamhou/DeepSeekCode/issues/new?labels=bug";
@@ -1566,12 +1567,12 @@ enum TuiConfigCommand {
     Translation(TuiTranslationCommand),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum TuiSetupCommand {
     Show,
     Provider,
     Model,
-    Auth,
+    Auth { env_name: Option<String> },
     Trust,
     Theme,
     Language,
@@ -2903,11 +2904,18 @@ fn parse_tui_setup_command(line: &str) -> Option<Result<TuiSetupCommand, String>
     let args = rest.split_whitespace().collect::<Vec<_>>();
     match args.as_slice() {
         [] | ["show" | "status" | "help" | "--help" | "-h"] => Some(Ok(TuiSetupCommand::Show)),
-        ["provider" | "providers" | "api" | "api-key" | "apikey" | "credentials"] => {
-            Some(Ok(TuiSetupCommand::Provider))
-        }
+        ["provider" | "providers" | "api"] => Some(Ok(TuiSetupCommand::Provider)),
         ["model" | "models"] => Some(Ok(TuiSetupCommand::Model)),
-        ["auth" | "login" | "key" | "env"] => Some(Ok(TuiSetupCommand::Auth)),
+        ["auth" | "login" | "key" | "env" | "api-key" | "apikey" | "credentials"] => {
+            Some(Ok(TuiSetupCommand::Auth { env_name: None }))
+        }
+        ["auth" | "login" | "key" | "env" | "api-key" | "apikey" | "credentials", env_name]
+            if !env_name.starts_with('-') =>
+        {
+            Some(Ok(TuiSetupCommand::Auth {
+                env_name: Some((*env_name).to_string()),
+            }))
+        }
         ["trust" | "permissions"] => Some(Ok(TuiSetupCommand::Trust)),
         ["theme" | "appearance"] => Some(Ok(TuiSetupCommand::Theme)),
         ["language" | "locale" | "translate" | "translation"] => {
@@ -2915,7 +2923,7 @@ fn parse_tui_setup_command(line: &str) -> Option<Result<TuiSetupCommand, String>
         }
         ["settings" | "config"] => Some(Ok(TuiSetupCommand::Settings)),
         _ => Some(Err(
-            "usage: setup [provider|model|auth|trust|theme|language|settings]".to_string(),
+            "usage: setup [provider|model|auth [ENV]|trust|theme|language|settings]".to_string(),
         )),
     }
 }
@@ -2977,6 +2985,25 @@ fn palette_backed_composer_command(line: &str) -> Option<String> {
     match command {
         "mcp" | "jobs" | "job" | "restore" | "revert" => Some(normalized.to_string()),
         _ => None,
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct TuiSecretString(String);
+
+impl TuiSecretString {
+    pub(crate) fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    pub(crate) fn expose_secret(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for TuiSecretString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("\"<hidden>\"")
     }
 }
 
@@ -3048,6 +3075,11 @@ pub enum TuiAction {
     },
     Logout {
         workspace: String,
+    },
+    AuthCredential {
+        workspace: String,
+        env_name: String,
+        secret: TuiSecretString,
     },
     Skills {
         command: TuiSkillsCommand,
@@ -3463,7 +3495,7 @@ const TUI_HELP_COMMANDS: &[TuiHelpCommandInfo] = &[
         category: "Workbench",
         name: "setup",
         aliases: &["onboarding", "doctor"],
-        usage: "/setup [provider|model|auth|trust|theme|language|settings]",
+        usage: "/setup [provider|model|auth [ENV]|trust|theme|language|settings]",
         description: "Show onboarding status or jump into guided setup controls.",
     },
     TuiHelpCommandInfo {
@@ -3983,6 +4015,7 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "setup provider",
     "setup model",
     "setup auth",
+    "setup auth ",
     "setup trust",
     "setup theme",
     "setup language",
@@ -4023,6 +4056,7 @@ const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
     "/setup provider",
     "/setup model",
     "/setup auth",
+    "/setup auth ",
     "/setup trust",
     "/setup theme",
     "/setup language",
@@ -4545,6 +4579,10 @@ pub struct TuiApp {
     provider_picker_provider_index: usize,
     provider_picker_model_index: usize,
     provider_picker_focus: TuiProviderPickerFocus,
+    show_auth_modal: bool,
+    auth_env_name: String,
+    auth_secret: String,
+    auth_secret_cursor: usize,
     show_approval_modal: bool,
     show_user_input_modal: bool,
     show_mcp_manager: bool,
@@ -4729,6 +4767,10 @@ impl TuiApp {
             provider_picker_provider_index: 0,
             provider_picker_model_index: 0,
             provider_picker_focus: TuiProviderPickerFocus::Provider,
+            show_auth_modal: false,
+            auth_env_name: String::new(),
+            auth_secret: String::new(),
+            auth_secret_cursor: 0,
             show_approval_modal: false,
             show_user_input_modal: false,
             show_mcp_manager: false,
@@ -6268,6 +6310,14 @@ impl TuiApp {
                 self.stash_composer_draft();
                 return true;
             }
+            if self.show_auth_modal {
+                let _ = handle_text_control_key(
+                    &mut self.auth_secret,
+                    &mut self.auth_secret_cursor,
+                    key.code,
+                );
+                return true;
+            }
             if self.show_command_palette {
                 let _ = handle_text_control_key(
                     &mut self.command_query,
@@ -6584,6 +6634,9 @@ impl TuiApp {
         }
         if self.show_provider_picker {
             return self.handle_provider_picker_key(code);
+        }
+        if self.show_auth_modal {
+            return self.handle_auth_modal_key(code);
         }
         if self.show_user_input_modal {
             return self.handle_user_input_key(code);
@@ -11543,15 +11596,110 @@ impl TuiApp {
         self.status = "settings shown".to_string();
     }
 
+    fn selected_workspace_string(&self) -> String {
+        self.selected_session()
+            .map(|session| session.workspace.clone())
+            .unwrap_or_else(|| ".".to_string())
+    }
+
+    fn open_auth_modal(&mut self, env_name: Option<String>) {
+        let workspace = self.selected_workspace_string();
+        let config_path = tui_setup_config_path(Path::new(&workspace));
+        let (config, _) = read_tui_setup_config(&config_path);
+        self.auth_env_name = env_name.unwrap_or(config.model.api_key_env);
+        self.auth_secret.clear();
+        self.auth_secret_cursor = 0;
+        self.show_auth_modal = true;
+        self.show_session_picker = false;
+        self.show_thread_picker = false;
+        self.show_links_picker = false;
+        self.show_feedback_picker = false;
+        self.show_model_picker = false;
+        self.show_provider_picker = false;
+        self.show_command_palette = false;
+        self.status = format!("auth credential wizard opened: {}", self.auth_env_name);
+    }
+
+    fn handle_auth_modal_key(&mut self, code: KeyCode) -> bool {
+        match code {
+            KeyCode::Esc => {
+                self.cancel_auth_modal();
+            }
+            KeyCode::Enter => {
+                self.submit_auth_modal();
+            }
+            KeyCode::Backspace => {
+                backspace_at_cursor(&mut self.auth_secret, &mut self.auth_secret_cursor);
+            }
+            KeyCode::Delete => {
+                delete_at_cursor(&mut self.auth_secret, self.auth_secret_cursor);
+            }
+            KeyCode::Left => {
+                self.auth_secret_cursor =
+                    previous_char_boundary(&self.auth_secret, self.auth_secret_cursor);
+            }
+            KeyCode::Right => {
+                self.auth_secret_cursor =
+                    next_char_boundary(&self.auth_secret, self.auth_secret_cursor);
+            }
+            KeyCode::Home => {
+                self.auth_secret_cursor = 0;
+            }
+            KeyCode::End => {
+                self.auth_secret_cursor = self.auth_secret.len();
+            }
+            KeyCode::Char(ch) if !ch.is_control() => {
+                if self.auth_secret.chars().count() < TUI_AUTH_SECRET_MAX_CHARS {
+                    insert_char_at_cursor(&mut self.auth_secret, &mut self.auth_secret_cursor, ch);
+                } else {
+                    self.status =
+                        format!("auth secret limited to {TUI_AUTH_SECRET_MAX_CHARS} chars");
+                }
+            }
+            _ => {}
+        }
+        true
+    }
+
+    fn cancel_auth_modal(&mut self) {
+        self.auth_secret.clear();
+        self.auth_secret_cursor = 0;
+        self.show_auth_modal = false;
+        self.status = "auth credential wizard cancelled".to_string();
+    }
+
+    fn submit_auth_modal(&mut self) {
+        if self.auth_secret.trim().is_empty() {
+            self.status = "auth secret cannot be empty".to_string();
+            return;
+        }
+        if self
+            .auth_secret
+            .chars()
+            .any(|ch| ch.is_whitespace() || matches!(ch, '\0' | '"' | '\''))
+        {
+            self.status = "auth secret must be a single non-whitespace token".to_string();
+            return;
+        }
+        let workspace = self.selected_workspace_string();
+        let env_name = self.auth_env_name.clone();
+        let secret = std::mem::take(&mut self.auth_secret);
+        self.auth_secret_cursor = 0;
+        self.show_auth_modal = false;
+        self.pending_actions.push(TuiAction::AuthCredential {
+            workspace: workspace.clone(),
+            env_name: env_name.clone(),
+            secret: TuiSecretString::new(secret),
+        });
+        self.status = format!("auth credential queued for {env_name} ({workspace})");
+    }
+
     fn handle_setup_command(&mut self, command: TuiSetupCommand) {
         match command {
             TuiSetupCommand::Show => self.show_setup_detail(),
             TuiSetupCommand::Provider => self.request_provider_command(TuiProviderCommand::Pick),
             TuiSetupCommand::Model => self.request_model_command(TuiModelCommand::Pick),
-            TuiSetupCommand::Auth => {
-                self.show_setup_detail();
-                self.status = "setup auth guidance shown".to_string();
-            }
+            TuiSetupCommand::Auth { env_name } => self.open_auth_modal(env_name),
             TuiSetupCommand::Trust => self.request_trust_command(TuiTrustCommand::Show),
             TuiSetupCommand::Theme => self.show_theme_detail(),
             TuiSetupCommand::Language => self.show_translation_detail(),
@@ -11570,14 +11718,7 @@ impl TuiApp {
             .selected_session()
             .map(|session| session.workspace.as_str())
             .unwrap_or(".");
-        let workspace_path = PathBuf::from(workspace);
-        let default_config = AppConfig::default();
-        let config_dir = PathBuf::from(&default_config.workspace.config_dir);
-        let config_path = if config_dir.is_absolute() {
-            config_dir.join("config.toml")
-        } else {
-            workspace_path.join(config_dir).join("config.toml")
-        };
+        let config_path = tui_setup_config_path(Path::new(workspace));
         let config_present = config_path.exists();
         let (config, active_profile) = read_tui_setup_config(&config_path);
         let api_key_present = tui_env_var_nonempty(&config.model.api_key_env);
@@ -11636,6 +11777,7 @@ impl TuiApp {
             let _ = writeln!(detail, "- deepseek config init");
         }
         if !api_key_present {
+            let _ = writeln!(detail, "- /setup auth {}", config.model.api_key_env);
             let _ = writeln!(
                 detail,
                 "- printf '%s\\n' '<api-key>' | deepseek config auth {} --stdin",
@@ -11650,7 +11792,7 @@ impl TuiApp {
         let _ = writeln!(detail, "---------------------");
         let _ = writeln!(detail, "- /setup provider    Open provider picker");
         let _ = writeln!(detail, "- /setup model       Open model picker");
-        let _ = writeln!(detail, "- /setup auth        Show API key/env guidance");
+        let _ = writeln!(detail, "- /setup auth [ENV]  Open masked credential wizard");
         let _ = writeln!(detail, "- /setup trust       Inspect workspace trust");
         let _ = writeln!(detail, "- /setup theme       Show theme controls");
         let _ = writeln!(detail, "- /setup language    Show language-output controls");
@@ -14818,6 +14960,17 @@ fn display_with_cursor(value: &str, cursor: usize, show_cursor: bool) -> String 
     displayed
 }
 
+fn masked_secret_with_cursor(value: &str, cursor: usize) -> String {
+    let cursor = clamp_char_boundary(value, cursor);
+    let before = value[..cursor].chars().count();
+    let total = value.chars().count();
+    let mut displayed = String::with_capacity(total + 1);
+    displayed.push_str(&"*".repeat(before));
+    displayed.push('|');
+    displayed.push_str(&"*".repeat(total.saturating_sub(before)));
+    displayed
+}
+
 fn insert_char_at_cursor(value: &mut String, cursor: &mut usize, ch: char) {
     *cursor = clamp_char_boundary(value, *cursor);
     value.insert(*cursor, ch);
@@ -15101,6 +15254,16 @@ fn clamp_char_boundary(value: &str, cursor: usize) -> usize {
 
 fn push_status_row(out: &mut String, label: &str, value: &str) {
     let _ = writeln!(out, "  {label:<16} {value}");
+}
+
+fn tui_setup_config_path(workspace: &Path) -> PathBuf {
+    let default_config = AppConfig::default();
+    let config_dir = PathBuf::from(&default_config.workspace.config_dir);
+    if config_dir.is_absolute() {
+        config_dir.join("config.toml")
+    } else {
+        workspace.join(config_dir).join("config.toml")
+    }
 }
 
 fn format_context_usage(summary: &TuiUsageSummary) -> String {
@@ -15669,6 +15832,9 @@ fn draw(frame: &mut Frame, app: &TuiApp) {
     if app.rollback_apply_confirmation.is_some() {
         draw_rollback_apply_confirmation_modal(frame, app);
     }
+    if app.show_auth_modal {
+        draw_auth_modal(frame, app);
+    }
     if app.show_user_input_modal {
         draw_user_input_modal(frame, app);
     }
@@ -15766,6 +15932,9 @@ fn draw_sidebar(frame: &mut Frame, app: &TuiApp, area: Rect) {
     } else if app.show_provider_picker {
         lines.push(Line::from("Enter: apply provider"));
         lines.push(Line::from("Esc: close provider picker"));
+    } else if app.show_auth_modal {
+        lines.push(Line::from("Enter: save credential"));
+        lines.push(Line::from("Esc: cancel auth wizard"));
     } else if app.mcp_detail.is_some() {
         lines.push(Line::from("PgUp/PgDn: scroll detail"));
         lines.push(Line::from("Esc: close detail"));
@@ -16442,6 +16611,33 @@ fn draw_command_palette(frame: &mut Frame, app: &TuiApp) {
             .title("Command Palette"),
     );
     frame.render_widget(palette, area);
+}
+
+fn draw_auth_modal(frame: &mut Frame, app: &TuiApp) {
+    let area = bottom_center_rect(frame.area(), 78, 12);
+    frame.render_widget(Clear, area);
+    let workspace = app.selected_workspace_string();
+    let secret = if app.auth_secret.is_empty() {
+        "<empty>".to_string()
+    } else {
+        masked_secret_with_cursor(&app.auth_secret, app.auth_secret_cursor)
+    };
+    let lines = vec![
+        Line::from("Credential Setup"),
+        Line::from(format!("Workspace: {}", clip_line(&workspace, 58))),
+        Line::from(format!("Env var: {}", clip_line(&app.auth_env_name, 58))),
+        Line::from(""),
+        Line::from(format!("API key: {}", clip_line(&secret, 58))),
+        Line::from(""),
+        Line::from("The key is written to this workspace .env and never shown back."),
+        Line::from("[Enter] save    [Esc] cancel    [Backspace] edit    [Ctrl+U] clear"),
+    ];
+    let modal = Paragraph::new(lines).alignment(Alignment::Center).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Masked Auth Wizard"),
+    );
+    frame.render_widget(modal, area);
 }
 
 fn draw_approval_modal(frame: &mut Frame, app: &TuiApp) {
@@ -17383,6 +17579,36 @@ api_key_env = "{env_name}"
 
         app.show_model_picker = false;
         app.composer_focused = false;
+        run_palette_command(&mut app, "setup auth CUSTOM_API_KEY");
+        assert!(app.show_auth_modal);
+        assert_eq!(app.auth_env_name, "CUSTOM_API_KEY");
+        assert_eq!(app.status, "auth credential wizard opened: CUSTOM_API_KEY");
+        for ch in "sk-modal-secret".chars() {
+            assert!(app.handle_key(KeyCode::Char(ch)));
+        }
+        let rendered = render_once(&app, 100, 32).expect("auth modal renders");
+        assert!(rendered.contains("Masked Auth Wizard"));
+        assert!(rendered.contains("CUSTOM_API_KEY"));
+        assert!(!rendered.contains("sk-modal-secret"));
+        assert!(app.handle_key(KeyCode::Enter));
+        assert!(!app.show_auth_modal);
+        assert!(app.auth_secret.is_empty());
+        let actions = app.drain_actions();
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            TuiAction::AuthCredential {
+                workspace,
+                env_name,
+                secret,
+            } => {
+                assert_eq!(workspace, "/tmp/deepseek-guided-setup");
+                assert_eq!(env_name, "CUSTOM_API_KEY");
+                assert_eq!(secret.expose_secret(), "sk-modal-secret");
+            }
+            other => panic!("expected auth credential action, got {other:?}"),
+        }
+        assert!(!format!("{actions:?}").contains("sk-modal-secret"));
+
         run_palette_command(&mut app, "/setup trust");
         assert_eq!(
             app.drain_actions(),
