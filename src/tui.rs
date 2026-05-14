@@ -1431,6 +1431,65 @@ pub enum TuiFeedbackCommand {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TuiLinksCommand {
+    Pick,
+    Show,
+    Repository,
+    Issues,
+    Releases,
+    Docs,
+    Dashboard,
+    Api,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TuiLinksPickerSpec {
+    label: &'static str,
+    command: TuiLinksCommand,
+    url: &'static str,
+    hint: &'static str,
+}
+
+const TUI_LINKS_PICKER_SPECS: &[TuiLinksPickerSpec] = &[
+    TuiLinksPickerSpec {
+        label: "repo",
+        command: TuiLinksCommand::Repository,
+        url: DEEPSEEK_CODE_REPO_URL,
+        hint: "DeepSeekCode source repository",
+    },
+    TuiLinksPickerSpec {
+        label: "issues",
+        command: TuiLinksCommand::Issues,
+        url: DEEPSEEK_CODE_ISSUES_URL,
+        hint: "DeepSeekCode issue tracker",
+    },
+    TuiLinksPickerSpec {
+        label: "releases",
+        command: TuiLinksCommand::Releases,
+        url: DEEPSEEK_CODE_RELEASES_URL,
+        hint: "DeepSeekCode release assets",
+    },
+    TuiLinksPickerSpec {
+        label: "docs",
+        command: TuiLinksCommand::Docs,
+        url: DEEPSEEK_CODE_DOCS_URL,
+        hint: "DeepSeekCode TUI documentation",
+    },
+    TuiLinksPickerSpec {
+        label: "dashboard",
+        command: TuiLinksCommand::Dashboard,
+        url: DEEPSEEK_PLATFORM_URL,
+        hint: "DeepSeek platform dashboard",
+    },
+    TuiLinksPickerSpec {
+        label: "api",
+        command: TuiLinksCommand::Api,
+        url: DEEPSEEK_API_DOCS_URL,
+        hint: "DeepSeek API documentation",
+    },
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TuiFeedbackPickerSpec {
     label: &'static str,
     command: TuiFeedbackCommand,
@@ -2620,19 +2679,47 @@ fn parse_note_index_arg(value: &str) -> Option<usize> {
     value.parse::<usize>().ok().filter(|index| *index > 0)
 }
 
-fn parse_tui_links_command(line: &str) -> Option<Result<(), String>> {
+fn parse_tui_links_command(line: &str) -> Option<Result<TuiLinksCommand, String>> {
     let trimmed = line.trim();
-    let rest = strip_tui_command_prefix(trimmed, "/links")
-        .or_else(|| strip_tui_command_prefix(trimmed, "links"))
-        .or_else(|| strip_tui_command_prefix(trimmed, "/dashboard"))
+    if let Some(rest) = strip_tui_command_prefix(trimmed, "/dashboard")
         .or_else(|| strip_tui_command_prefix(trimmed, "dashboard"))
-        .or_else(|| strip_tui_command_prefix(trimmed, "/api"))
-        .or_else(|| strip_tui_command_prefix(trimmed, "api"))?;
+    {
+        let args = rest.split_whitespace().collect::<Vec<_>>();
+        return match args.as_slice() {
+            [] | ["help" | "--help" | "-h"] => Some(Ok(TuiLinksCommand::Dashboard)),
+            _ => Some(Err(
+                "usage: links [pick|show|repo|issues|releases|docs|dashboard|api], dashboard, api, /links, /dashboard, or /api"
+                    .to_string(),
+            )),
+        };
+    }
+    if let Some(rest) = strip_tui_command_prefix(trimmed, "/api")
+        .or_else(|| strip_tui_command_prefix(trimmed, "api"))
+    {
+        let args = rest.split_whitespace().collect::<Vec<_>>();
+        return match args.as_slice() {
+            [] | ["help" | "--help" | "-h"] => Some(Ok(TuiLinksCommand::Api)),
+            _ => Some(Err(
+                "usage: links [pick|show|repo|issues|releases|docs|dashboard|api], dashboard, api, /links, /dashboard, or /api"
+                    .to_string(),
+            )),
+        };
+    }
+    let rest = strip_tui_command_prefix(trimmed, "/links")
+        .or_else(|| strip_tui_command_prefix(trimmed, "links"))?;
     let args = rest.split_whitespace().collect::<Vec<_>>();
     match args.as_slice() {
-        [] | ["help" | "--help" | "-h"] => Some(Ok(())),
+        [] | ["pick" | "picker"] => Some(Ok(TuiLinksCommand::Pick)),
+        ["show" | "list" | "help" | "--help" | "-h"] => Some(Ok(TuiLinksCommand::Show)),
+        ["repo" | "repository" | "source"] => Some(Ok(TuiLinksCommand::Repository)),
+        ["issues" | "issue" | "bugs"] => Some(Ok(TuiLinksCommand::Issues)),
+        ["releases" | "release"] => Some(Ok(TuiLinksCommand::Releases)),
+        ["docs" | "doc"] => Some(Ok(TuiLinksCommand::Docs)),
+        ["dashboard" | "platform"] => Some(Ok(TuiLinksCommand::Dashboard)),
+        ["api" | "api-docs" | "api_docs"] => Some(Ok(TuiLinksCommand::Api)),
         _ => Some(Err(
-            "usage: links, dashboard, api, /links, /dashboard, or /api".to_string(),
+            "usage: links [pick|show|repo|issues|releases|docs|dashboard|api], dashboard, api, /links, /dashboard, or /api"
+                .to_string(),
         )),
     }
 }
@@ -3120,8 +3207,8 @@ const TUI_HELP_COMMANDS: &[TuiHelpCommandInfo] = &[
         category: "Workbench",
         name: "links",
         aliases: &["dashboard", "api"],
-        usage: "/links",
-        description: "Show DeepSeekCode and DeepSeek API links.",
+        usage: "/links [pick|show|repo|issues|releases|docs|dashboard|api]",
+        description: "Pick or show DeepSeekCode and DeepSeek API links.",
     },
     TuiHelpCommandInfo {
         category: "Workbench",
@@ -3724,6 +3811,13 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "feedback feature",
     "feedback security",
     "links",
+    "links show",
+    "links repo",
+    "links issues",
+    "links releases",
+    "links docs",
+    "links dashboard",
+    "links api",
     "dashboard",
     "api",
     "home",
@@ -4008,6 +4102,13 @@ const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
     "/feedback feature",
     "/feedback security",
     "/links",
+    "/links show",
+    "/links repo",
+    "/links issues",
+    "/links releases",
+    "/links docs",
+    "/links dashboard",
+    "/links api",
     "/dashboard",
     "/api",
     "/home",
@@ -4243,6 +4344,8 @@ pub struct TuiApp {
     show_command_palette: bool,
     show_session_picker: bool,
     show_thread_picker: bool,
+    show_links_picker: bool,
+    links_picker_index: usize,
     show_feedback_picker: bool,
     feedback_picker_index: usize,
     show_model_picker: bool,
@@ -4424,6 +4527,8 @@ impl TuiApp {
             show_command_palette: false,
             show_session_picker: false,
             show_thread_picker: false,
+            show_links_picker: false,
+            links_picker_index: 0,
             show_feedback_picker: false,
             feedback_picker_index: 0,
             show_model_picker: false,
@@ -5745,6 +5850,7 @@ impl TuiApp {
         self.composer.clear();
         self.composer_cursor = 0;
         self.edit_pending_thread_id = None;
+        self.show_links_picker = false;
         self.show_feedback_picker = false;
         self.show_model_picker = false;
         self.show_provider_picker = false;
@@ -5999,6 +6105,9 @@ impl TuiApp {
         if self.show_thread_picker && self.handle_thread_picker_mouse(mouse.column, mouse.row) {
             return true;
         }
+        if self.show_links_picker {
+            return true;
+        }
         if self.show_feedback_picker {
             return true;
         }
@@ -6245,6 +6354,9 @@ impl TuiApp {
         }
         if self.show_thread_picker {
             return self.handle_thread_picker_key(code);
+        }
+        if self.show_links_picker {
+            return self.handle_links_picker_key(code);
         }
         if self.show_feedback_picker {
             return self.handle_feedback_picker_key(code);
@@ -7009,8 +7121,8 @@ impl TuiApp {
                 }
                 if let Some(command) = parse_tui_links_command(&content) {
                     match command {
-                        Ok(()) => {
-                            self.show_links_detail();
+                        Ok(command) => {
+                            self.show_links_detail(command);
                             self.composer.clear();
                             self.composer_cursor = 0;
                         }
@@ -7785,8 +7897,8 @@ impl TuiApp {
         }
         if let Some(command) = parse_tui_links_command(command) {
             match command {
-                Ok(()) => {
-                    self.show_links_detail();
+                Ok(command) => {
+                    self.show_links_detail(command);
                 }
                 Err(message) => {
                     self.status = message;
@@ -8779,6 +8891,30 @@ impl TuiApp {
         true
     }
 
+    fn handle_links_picker_key(&mut self, code: KeyCode) -> bool {
+        match code {
+            KeyCode::Esc => {
+                self.show_links_picker = false;
+                self.status = "links picker closed".to_string();
+            }
+            KeyCode::Enter => self.apply_links_picker_selection(),
+            KeyCode::Down | KeyCode::Char('j') => self.select_relative_links_picker_item(1),
+            KeyCode::Up | KeyCode::Char('k') => self.select_relative_links_picker_item(-1),
+            KeyCode::Home => {
+                self.links_picker_index = 0;
+                let item = self.selected_links_picker_spec();
+                self.status = format!("links picker selected: {}", item.label);
+            }
+            KeyCode::End => {
+                self.links_picker_index = TUI_LINKS_PICKER_SPECS.len().saturating_sub(1);
+                let item = self.selected_links_picker_spec();
+                self.status = format!("links picker selected: {}", item.label);
+            }
+            _ => {}
+        }
+        true
+    }
+
     fn handle_approval_key(&mut self, code: KeyCode) -> bool {
         if self.pending_shell_approval.is_some() {
             match code {
@@ -9341,6 +9477,7 @@ impl TuiApp {
         self.show_model_picker = true;
         self.show_session_picker = false;
         self.show_thread_picker = false;
+        self.show_links_picker = false;
         self.show_feedback_picker = false;
         self.show_provider_picker = false;
         self.show_command_palette = false;
@@ -9388,6 +9525,7 @@ impl TuiApp {
         self.show_feedback_picker = true;
         self.show_session_picker = false;
         self.show_thread_picker = false;
+        self.show_links_picker = false;
         self.show_model_picker = false;
         self.show_provider_picker = false;
         self.show_command_palette = false;
@@ -9421,6 +9559,44 @@ impl TuiApp {
         self.show_feedback_detail(item.command);
     }
 
+    fn open_links_picker(&mut self) {
+        self.show_links_picker = true;
+        self.show_session_picker = false;
+        self.show_thread_picker = false;
+        self.show_feedback_picker = false;
+        self.show_model_picker = false;
+        self.show_provider_picker = false;
+        self.show_command_palette = false;
+        self.links_picker_index = self
+            .links_picker_index
+            .min(TUI_LINKS_PICKER_SPECS.len().saturating_sub(1));
+        self.status = "links picker opened".to_string();
+    }
+
+    fn selected_links_picker_spec(&self) -> &'static TuiLinksPickerSpec {
+        &TUI_LINKS_PICKER_SPECS[self
+            .links_picker_index
+            .min(TUI_LINKS_PICKER_SPECS.len() - 1)]
+    }
+
+    fn select_relative_links_picker_item(&mut self, delta: isize) {
+        let len = TUI_LINKS_PICKER_SPECS.len();
+        if len == 0 {
+            self.status = "links picker has no targets".to_string();
+            return;
+        }
+        self.links_picker_index =
+            relative_picker_index(self.links_picker_index.min(len - 1), len, delta);
+        let item = self.selected_links_picker_spec();
+        self.status = format!("links picker selected: {}", item.label);
+    }
+
+    fn apply_links_picker_selection(&mut self) {
+        let item = self.selected_links_picker_spec();
+        self.show_links_picker = false;
+        self.show_links_detail(item.command);
+    }
+
     fn request_provider_command(&mut self, command: TuiProviderCommand) {
         if command == TuiProviderCommand::Pick {
             self.open_provider_picker();
@@ -9441,6 +9617,7 @@ impl TuiApp {
         self.show_provider_picker = true;
         self.show_session_picker = false;
         self.show_thread_picker = false;
+        self.show_links_picker = false;
         self.show_feedback_picker = false;
         self.show_model_picker = false;
         self.show_command_palette = false;
@@ -10987,10 +11164,23 @@ impl TuiApp {
         };
     }
 
-    fn show_links_detail(&mut self) {
-        let detail = render_links_detail();
+    fn show_links_detail(&mut self, command: TuiLinksCommand) {
+        if command == TuiLinksCommand::Pick {
+            self.open_links_picker();
+            return;
+        }
+        let detail = render_links_detail(command);
         self.set_mcp_detail(TuiMcpDetailKind::Links, detail);
-        self.status = "links shown".to_string();
+        self.status = match command {
+            TuiLinksCommand::Pick => "links picker opened".to_string(),
+            TuiLinksCommand::Show => "links shown".to_string(),
+            TuiLinksCommand::Repository => "repository link shown".to_string(),
+            TuiLinksCommand::Issues => "issues link shown".to_string(),
+            TuiLinksCommand::Releases => "releases link shown".to_string(),
+            TuiLinksCommand::Docs => "docs link shown".to_string(),
+            TuiLinksCommand::Dashboard => "dashboard link shown".to_string(),
+            TuiLinksCommand::Api => "api docs link shown".to_string(),
+        };
     }
 
     fn show_home_detail(&mut self) {
@@ -14580,22 +14770,77 @@ fn render_feedback_detail(command: TuiFeedbackCommand) -> String {
     detail
 }
 
-fn render_links_detail() -> String {
+fn render_links_detail(command: TuiLinksCommand) -> String {
     let mut detail = String::new();
     let _ = writeln!(detail, "DeepSeekCode Links");
     let _ = writeln!(detail, "==================");
     let _ = writeln!(detail);
-    let _ = writeln!(detail, "DeepSeekCode");
-    let _ = writeln!(detail, "- Repository  {DEEPSEEK_CODE_REPO_URL}");
-    let _ = writeln!(detail, "- Issues      {DEEPSEEK_CODE_ISSUES_URL}");
-    let _ = writeln!(detail, "- Releases    {DEEPSEEK_CODE_RELEASES_URL}");
-    let _ = writeln!(detail, "- Docs        {DEEPSEEK_CODE_DOCS_URL}");
-    let _ = writeln!(detail);
-    let _ = writeln!(detail, "DeepSeek");
-    let _ = writeln!(detail, "- Platform    {DEEPSEEK_PLATFORM_URL}");
-    let _ = writeln!(detail, "- API docs    {DEEPSEEK_API_DOCS_URL}");
-    let _ = writeln!(detail);
-    let _ = writeln!(detail, "Aliases: links, dashboard, api");
+    match command {
+        TuiLinksCommand::Pick | TuiLinksCommand::Show => {
+            let _ = writeln!(detail, "DeepSeekCode");
+            let _ = writeln!(detail, "- Repository  {DEEPSEEK_CODE_REPO_URL}");
+            let _ = writeln!(detail, "- Issues      {DEEPSEEK_CODE_ISSUES_URL}");
+            let _ = writeln!(detail, "- Releases    {DEEPSEEK_CODE_RELEASES_URL}");
+            let _ = writeln!(detail, "- Docs        {DEEPSEEK_CODE_DOCS_URL}");
+            let _ = writeln!(detail);
+            let _ = writeln!(detail, "DeepSeek");
+            let _ = writeln!(detail, "- Platform    {DEEPSEEK_PLATFORM_URL}");
+            let _ = writeln!(detail, "- API docs    {DEEPSEEK_API_DOCS_URL}");
+            let _ = writeln!(detail);
+            let _ = writeln!(detail, "Aliases: links, dashboard, api");
+        }
+        TuiLinksCommand::Repository => {
+            let _ = writeln!(detail, "Repository");
+            let _ = writeln!(detail, "{DEEPSEEK_CODE_REPO_URL}");
+            let _ = writeln!(detail);
+            let _ = writeln!(
+                detail,
+                "Use this for source browsing, cloning, and repository metadata."
+            );
+        }
+        TuiLinksCommand::Issues => {
+            let _ = writeln!(detail, "Issues");
+            let _ = writeln!(detail, "{DEEPSEEK_CODE_ISSUES_URL}");
+            let _ = writeln!(detail);
+            let _ = writeln!(
+                detail,
+                "Use this for public bug reports and feature requests."
+            );
+        }
+        TuiLinksCommand::Releases => {
+            let _ = writeln!(detail, "Releases");
+            let _ = writeln!(detail, "{DEEPSEEK_CODE_RELEASES_URL}");
+            let _ = writeln!(detail);
+            let _ = writeln!(
+                detail,
+                "Use this for release notes, checksums, and packaged binaries."
+            );
+        }
+        TuiLinksCommand::Docs => {
+            let _ = writeln!(detail, "Documentation");
+            let _ = writeln!(detail, "{DEEPSEEK_CODE_DOCS_URL}");
+            let _ = writeln!(detail);
+            let _ = writeln!(detail, "Use this for DeepSeekCode TUI and runtime docs.");
+        }
+        TuiLinksCommand::Dashboard => {
+            let _ = writeln!(detail, "DeepSeek Platform");
+            let _ = writeln!(detail, "{DEEPSEEK_PLATFORM_URL}");
+            let _ = writeln!(detail);
+            let _ = writeln!(
+                detail,
+                "Use this for DeepSeek account, billing, and platform settings."
+            );
+        }
+        TuiLinksCommand::Api => {
+            let _ = writeln!(detail, "DeepSeek API docs");
+            let _ = writeln!(detail, "{DEEPSEEK_API_DOCS_URL}");
+            let _ = writeln!(detail);
+            let _ = writeln!(
+                detail,
+                "Use this for provider API reference and model documentation."
+            );
+        }
+    }
     detail
 }
 
@@ -14878,6 +15123,9 @@ fn draw(frame: &mut Frame, app: &TuiApp) {
     if app.show_thread_picker {
         draw_thread_picker(frame, app);
     }
+    if app.show_links_picker {
+        draw_links_picker(frame, app);
+    }
     if app.show_feedback_picker {
         draw_feedback_picker(frame, app);
     }
@@ -14978,6 +15226,9 @@ fn draw_sidebar(frame: &mut Frame, app: &TuiApp, area: Rect) {
     if app.show_mcp_manager {
         lines.push(Line::from("PgUp/PgDn: scroll MCP manager"));
         lines.push(Line::from("Esc: close MCP manager"));
+    } else if app.show_links_picker {
+        lines.push(Line::from("Enter: open link detail"));
+        lines.push(Line::from("Esc: close links picker"));
     } else if app.show_feedback_picker {
         lines.push(Line::from("Enter: open feedback"));
         lines.push(Line::from("Esc: close feedback picker"));
@@ -15577,6 +15828,62 @@ fn draw_feedback_picker(frame: &mut Frame, app: &TuiApp) {
     let footer = Paragraph::new(vec![
         Line::from(format!("Selection: feedback {}", item.label)),
         Line::from(format!("Direct command: feedback {}", item.label)),
+    ])
+    .wrap(Wrap { trim: true })
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Action Preview"),
+    );
+    frame.render_widget(footer, layout[2]);
+}
+
+fn draw_links_picker(frame: &mut Frame, app: &TuiApp) {
+    let area = top_center_rect(frame.area(), 92, 18);
+    frame.render_widget(Clear, area);
+    let layout = Layout::vertical([
+        Constraint::Length(4),
+        Constraint::Min(8),
+        Constraint::Length(4),
+    ])
+    .split(area);
+    let header = Paragraph::new(vec![
+        Line::from("Links Picker"),
+        Line::from("Up/Down select, Enter open detail, Esc close"),
+    ])
+    .block(Block::default().borders(Borders::ALL).title("Links Picker"));
+    frame.render_widget(header, layout[0]);
+
+    let items = TUI_LINKS_PICKER_SPECS
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let selected = index == app.links_picker_index;
+            let marker = if selected { "> " } else { "  " };
+            let row = ListItem::new(format!(
+                "{marker}{:<10} {:<36} {}",
+                item.label, item.url, item.hint
+            ));
+            if selected {
+                row.style(
+                    Style::default()
+                        .fg(app.theme.accent_color())
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                row
+            }
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(
+        List::new(items).block(Block::default().borders(Borders::ALL).title("Link Targets")),
+        layout[1],
+    );
+
+    let item = app.selected_links_picker_spec();
+    let footer = Paragraph::new(vec![
+        Line::from(format!("Selection: links {}", item.label)),
+        Line::from(format!("Direct command: links {}", item.label)),
     ])
     .wrap(Wrap { trim: true })
     .block(
@@ -20164,7 +20471,7 @@ mod tests {
     fn links_command_renders_repository_and_api_links() {
         let mut app = TuiApp::new(Vec::new());
 
-        run_palette_command(&mut app, "dashboard");
+        run_palette_command(&mut app, "links show");
 
         assert_eq!(app.status, "links shown");
         let (kind, detail) = app.mcp_detail.as_ref().expect("links detail");
@@ -20173,22 +20480,61 @@ mod tests {
         assert!(detail.contains(DEEPSEEK_CODE_REPO_URL));
         assert!(detail.contains(DEEPSEEK_API_DOCS_URL));
 
+        run_palette_command(&mut app, "dashboard");
+
+        assert_eq!(app.status, "dashboard link shown");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("dashboard detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Links);
+        assert!(detail.contains("DeepSeek Platform"));
+        assert!(detail.contains(DEEPSEEK_PLATFORM_URL));
+
         run_palette_command(&mut app, "/api");
 
         let (kind, detail) = app.mcp_detail.as_ref().expect("api detail");
         assert_eq!(*kind, TuiMcpDetailKind::Links);
-        assert!(detail.contains(DEEPSEEK_PLATFORM_URL));
+        assert_eq!(app.status, "api docs link shown");
+        assert!(detail.contains("DeepSeek API docs"));
+        assert!(detail.contains(DEEPSEEK_API_DOCS_URL));
+    }
+
+    #[test]
+    fn links_command_opens_picker() {
+        let mut app = TuiApp::new(Vec::new());
+
+        run_palette_command(&mut app, "links");
+
+        assert!(app.show_links_picker);
+        assert_eq!(app.status, "links picker opened");
+        assert!(app.mcp_detail.is_none());
+        let output = render_once(&app, 120, 32).unwrap();
+        assert!(output.contains("Links Picker"));
+        assert!(output.contains("Link Targets"));
+        assert!(output.contains("links repo"));
+
+        assert!(app.handle_key(KeyCode::End));
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert!(!app.show_links_picker);
+        assert_eq!(app.status, "api docs link shown");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("api detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Links);
+        assert!(detail.contains("DeepSeek API docs"));
+        assert!(detail.contains(DEEPSEEK_API_DOCS_URL));
+    }
+
+    #[test]
+    fn composer_links_slash_opens_picker() {
+        let mut app = TuiApp::new(Vec::new());
 
         app.composer_focused = true;
         app.composer = "/links".to_string();
         app.composer_cursor = app.composer.len();
         assert!(app.handle_key(KeyCode::Enter));
 
-        assert_eq!(app.status, "links shown");
+        assert!(app.show_links_picker);
+        assert_eq!(app.status, "links picker opened");
         assert_eq!(app.composer, "");
-        let (kind, detail) = app.mcp_detail.as_ref().expect("composer links detail");
-        assert_eq!(*kind, TuiMcpDetailKind::Links);
-        assert!(detail.contains("Aliases: links, dashboard, api"));
+        assert!(app.mcp_detail.is_none());
     }
 
     #[test]

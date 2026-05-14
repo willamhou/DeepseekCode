@@ -11,8 +11,8 @@ project docs, and DeepSeek API links were not discoverable from the workbench.
 
 ## Implementation
 
-- Added built-in `links` / `/links` parsing before custom slash-command
-  fallback.
+- Added built-in `links` / `/links`, `links show`, and `/links show` parsing
+  before custom slash-command fallback.
 - Added DeepSeek-TUI-compatible `dashboard` / `/dashboard` and `api` / `/api`
   aliases.
 - Rendered DeepSeekCode repository, issues, releases, docs, DeepSeek platform,
@@ -34,5 +34,6 @@ project docs, and DeepSeek API links were not discoverable from the workbench.
 ## Remaining
 
 DeepSeekCode includes project-specific repository/docs/release links in
-addition to DeepSeek-TUI's platform/docs links. It does not yet provide a modal
-link picker; the aliases open a persistent detail panel.
+addition to DeepSeek-TUI's platform/docs links. The interactive link picker is
+covered by `2026-05-14-deepseek-tui-tui-links-picker.md`; the aliases open
+persistent detail panels instead of launching a GUI browser.

@@ -554,9 +554,9 @@ Landed first slice:
   repository feedback targets and security-policy links in the detail panel
   without attempting to launch a GUI browser from the terminal
 - TUI now supports DeepSeek-TUI-style `/links` plus `dashboard` and `api`
-  aliases, rendering DeepSeekCode repository/docs and DeepSeek platform/API
-  documentation links in the detail panel without attempting to launch a GUI
-  browser from the terminal
+  aliases, opening a link target picker and rendering DeepSeekCode
+  repository/docs and DeepSeek platform/API documentation links in the detail
+  panel without attempting to launch a GUI browser from the terminal
 - TUI now supports DeepSeek-TUI-style `/home` plus `stats` and `overview`
   aliases, rendering a compact runtime dashboard with session/thread, task,
   usage, pending approval/user input, and quick-action links in the detail
