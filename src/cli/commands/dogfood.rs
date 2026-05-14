@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::cli::app::{
-    BenchmarkArgs, DogfoodAction, DogfoodExportArgs, DogfoodOutcome, DogfoodPromoteArgs,
-    DogfoodReplayArgs, DogfoodReportArgs, DogfoodRunArgs,
+    BenchmarkArgs, DogfoodAction, DogfoodExportArgs, DogfoodExternalFixtureArgs, DogfoodOutcome,
+    DogfoodPromoteArgs, DogfoodReplayArgs, DogfoodReportArgs, DogfoodRunArgs,
 };
 use crate::cli::commands::benchmark::BenchmarkCaseSummary;
 use crate::config::load::load_or_default;
@@ -27,6 +27,7 @@ pub fn run(action: DogfoodAction) -> AppResult<()> {
     let config = load_or_default()?;
     match action {
         DogfoodAction::Run(args) => run_live_task(&config, args),
+        DogfoodAction::ExternalFixture(args) => run_external_fixture_command(&config, args),
         DogfoodAction::ReplayBenchmark(args) => replay_benchmark_command(&config, args),
         DogfoodAction::Report(args) => render_report_command(&config, args),
         DogfoodAction::ExportBenchmark(args) => export_benchmark_command(&config, args),
@@ -35,6 +36,19 @@ pub fn run(action: DogfoodAction) -> AppResult<()> {
 }
 
 fn run_live_task(config: &crate::config::types::AppConfig, args: DogfoodRunArgs) -> AppResult<()> {
+    run_live_task_with_policy(config, args, DogfoodRunPolicy::default())
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct DogfoodRunPolicy {
+    auto_approve_isolated: bool,
+}
+
+fn run_live_task_with_policy(
+    config: &crate::config::types::AppConfig,
+    args: DogfoodRunArgs,
+    policy: DogfoodRunPolicy,
+) -> AppResult<()> {
     let args = resolve_run_args(config, args)?;
     let started = Instant::now();
     let repo_root = std::env::current_dir()?;
@@ -51,8 +65,9 @@ fn run_live_task(config: &crate::config::types::AppConfig, args: DogfoodRunArgs)
     println!("budget: {budget}");
     println!("workdir: {workdir}");
 
-    let auto_approve =
-        args.from_benchmark.is_some() && args.isolate_workdir && run_workdir != repo_root;
+    let auto_approve = (args.from_benchmark.is_some() || policy.auto_approve_isolated)
+        && args.isolate_workdir
+        && run_workdir != repo_root;
     let run_result = run_task_in_workdir(&repo_root, &run_workdir, auto_approve, || {
         AgentLoop::new(config.clone()).run_with(
             TaskContext::new(args.task.clone(), args.skill.clone()),
@@ -134,6 +149,45 @@ fn run_live_task(config: &crate::config::types::AppConfig, args: DogfoodRunArgs)
         Ok(_) => Ok(()),
         Err(error) => Err(error),
     }
+}
+
+fn run_external_fixture_command(
+    config: &crate::config::types::AppConfig,
+    args: DogfoodExternalFixtureArgs,
+) -> AppResult<()> {
+    let repo_root = std::env::current_dir()?;
+    let requested_workdir = resolve_run_workdir(&repo_root, Some(&args.workdir))?;
+    validate_external_fixture_workdir(&repo_root, &requested_workdir)?;
+    validate_external_fixture_task(&args.task)?;
+
+    println!("DeepSeekCode dogfood external write fixture");
+    println!("workdir: {}", requested_workdir.display());
+    println!("isolate_workdir: yes");
+    println!("auto_approve: isolated writes/shell/mcp");
+    if args.dry_run {
+        println!("dry run only; no model call, shell command, or ledger write");
+        return Ok(());
+    }
+
+    run_live_task_with_policy(
+        config,
+        DogfoodRunArgs {
+            task: args.task,
+            from_benchmark: None,
+            benchmark_manifest: None,
+            skill: None,
+            budget: args.budget,
+            workdir: Some(requested_workdir.display().to_string()),
+            isolate_workdir: true,
+            outcome: None,
+            manual_intervention: false,
+            benchmark_gate: args.benchmark_gate,
+            notes: Some(external_fixture_notes(args.notes.as_deref())),
+        },
+        DogfoodRunPolicy {
+            auto_approve_isolated: true,
+        },
+    )
 }
 
 fn dogfood_error_is_environment_transport_failure(
@@ -225,6 +279,51 @@ fn resolve_run_workdir(repo_root: &Path, requested: Option<&str>) -> AppResult<P
             "dogfood workdir does not exist or is not a directory: {}",
             path.display()
         )))
+    }
+}
+
+fn validate_external_fixture_workdir(repo_root: &Path, workdir: &Path) -> AppResult<()> {
+    let repo_root = fs::canonicalize(repo_root).map_err(|error| {
+        app_error(format!(
+            "failed to canonicalize repository root {}: {error}",
+            repo_root.display()
+        ))
+    })?;
+    let workdir = fs::canonicalize(workdir).map_err(|error| {
+        app_error(format!(
+            "failed to canonicalize external fixture workdir {}: {error}",
+            workdir.display()
+        ))
+    })?;
+    if workdir == repo_root || workdir.starts_with(&repo_root) {
+        return Err(app_error(format!(
+            "external fixture workdir must be outside this repository: {}",
+            workdir.display()
+        )));
+    }
+    if !workdir.join(".git").exists() {
+        return Err(app_error(format!(
+            "external fixture workdir must be a git repository or worktree with .git metadata: {}",
+            workdir.display()
+        )));
+    }
+    Ok(())
+}
+
+fn validate_external_fixture_task(task: &str) -> AppResult<()> {
+    let task_lower = task.to_ascii_lowercase();
+    if task_looks_like_write_validate(&task_lower) {
+        return Ok(());
+    }
+    Err(app_error(
+        "dogfood external-fixture task must describe an edit and validation command, for example: replace `a - b` with `a + b` in src/lib.rs and validate with cargo test",
+    ))
+}
+
+fn external_fixture_notes(notes: Option<&str>) -> String {
+    match notes.map(str::trim).filter(|notes| !notes.is_empty()) {
+        Some(notes) => format!("external-write-fixture; {notes}"),
+        None => "external-write-fixture".to_string(),
     }
 }
 
@@ -1052,6 +1151,17 @@ fn render_report(ledger_path: &Path, records: &[DogfoodRecord], limit: usize) ->
         .iter()
         .filter(|record| is_benchmark_seed_candidate(record, None))
         .count();
+    let external_write_fixtures = records
+        .iter()
+        .filter(|record| is_external_write_fixture_record(record))
+        .count();
+    let successful_external_write_fixtures = records
+        .iter()
+        .filter(|record| {
+            is_external_write_fixture_record(record)
+                && matches!(record.outcome, DogfoodOutcome::Success)
+        })
+        .count();
     let category_stats = aggregate_category_stats(records);
     let recent_start = total.saturating_sub(CATEGORY_TREND_WINDOW);
     let previous_start = recent_start.saturating_sub(CATEGORY_TREND_WINDOW);
@@ -1080,7 +1190,11 @@ fn render_report(ledger_path: &Path, records: &[DogfoodRecord], limit: usize) ->
         overall_avg_tool_calls
     ));
     out.push_str(&format!(
-        "- Benchmark seed candidates: {benchmark_seed_candidates}\n\n"
+        "- Benchmark seed candidates: {benchmark_seed_candidates}\n"
+    ));
+    out.push_str(&format!(
+        "- External write fixtures: {}\n\n",
+        rate_line(successful_external_write_fixtures, external_write_fixtures)
     ));
     if !category_stats.is_empty() {
         out.push_str("## Category Breakdown\n\n");
@@ -1302,6 +1416,14 @@ fn is_benchmark_seed_candidate(
         .as_deref()
         .map(str::trim)
         .is_some_and(|value| !value.is_empty())
+}
+
+fn is_external_write_fixture_record(record: &DogfoodRecord) -> bool {
+    record
+        .notes
+        .as_deref()
+        .is_some_and(|notes| notes.contains("external-write-fixture"))
+        && benchmark_case_category(record) == "write_validate"
 }
 
 fn render_benchmark_seed_export(
@@ -1994,6 +2116,59 @@ mod tests {
     }
 
     #[test]
+    fn external_fixture_workdir_requires_external_git_repo() {
+        let repo_root = temp_test_dir("external-fixture-repo-root");
+        let internal_fixture = repo_root.join("fixtures").join("mini");
+        fs::create_dir_all(internal_fixture.join(".git")).expect("internal git fixture");
+
+        let error =
+            super::validate_external_fixture_workdir(&repo_root, &internal_fixture).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("external fixture workdir must be outside this repository"));
+
+        let external_root = temp_test_dir("external-fixture-repo");
+        fs::create_dir_all(&external_root).expect("external root");
+        let missing_git =
+            super::validate_external_fixture_workdir(&repo_root, &external_root).unwrap_err();
+        assert!(missing_git
+            .to_string()
+            .contains("must be a git repository or worktree"));
+
+        fs::create_dir_all(external_root.join(".git")).expect("external git metadata");
+        super::validate_external_fixture_workdir(&repo_root, &external_root)
+            .expect("external git fixture should pass");
+
+        fs::remove_dir_all(&repo_root).ok();
+        fs::remove_dir_all(&external_root).ok();
+    }
+
+    #[test]
+    fn external_fixture_task_must_be_write_validate() {
+        let error = super::validate_external_fixture_task("inspect repository layout").unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("must describe an edit and validation command"));
+
+        super::validate_external_fixture_task(
+            "replace `a - b` with `a + b` in src/lib.rs and validate with cargo test",
+        )
+        .expect("write validate task should pass");
+    }
+
+    #[test]
+    fn external_fixture_notes_are_marked_for_reports() {
+        assert_eq!(
+            super::external_fixture_notes(Some("release evidence")),
+            "external-write-fixture; release evidence"
+        );
+        assert_eq!(
+            super::external_fixture_notes(Some("  ")),
+            "external-write-fixture"
+        );
+    }
+
+    #[test]
     fn record_json_round_trip_preserves_key_fields() {
         let record = DogfoodRecord {
             version: 1,
@@ -2182,6 +2357,37 @@ mod tests {
         assert!(report.contains("Diagnostic expected-failure rate: 1/1 (100.0%)"));
         assert!(report.contains("| recovery | 1 | 1/1 (100.0%) | 1/1 (100.0%) | 0/1 (0.0%) | 0/1 (0.0%) | 0/1 (0.0%) | 2.00 | 0 |"));
         assert!(report.contains("| 7 | recovery | diagnostic | no | 4 | 2 | 1 | . | investigate why npm test fails in the JavaScript CLI"));
+    }
+
+    #[test]
+    fn render_report_counts_external_write_fixture_evidence() {
+        let records = vec![DogfoodRecord {
+            version: 1,
+            timestamp_secs: 8,
+            duration_ms: 20,
+            task: "replace `a - b` with `a + b` in src/lib.rs and validate with cargo test"
+                .to_string(),
+            skill: None,
+            budget: 6,
+            model: "x".to_string(),
+            workdir: "/tmp/external-repo-copy".to_string(),
+            outcome: DogfoodOutcome::Success,
+            manual_intervention: false,
+            notes: Some("external-write-fixture; disposable repo".to_string()),
+            tool_calls: 3,
+            failed_tool_calls: 0,
+            repeated_call_failures: 0,
+            diagnostic_expected_failure: false,
+            used_subagent: false,
+            final_message: "tests pass".to_string(),
+            tool_trace: "apply_patch -> git_diff -> run_shell".to_string(),
+            error_kind: None,
+            benchmark_category: Some("write_validate".to_string()),
+            benchmark_seed_observations: None,
+        }];
+
+        let report = render_report(Path::new(".dscode/dogfood/ledger.jsonl"), &records, 20);
+        assert!(report.contains("External write fixtures: 1/1 (100.0%)"));
     }
 
     #[test]

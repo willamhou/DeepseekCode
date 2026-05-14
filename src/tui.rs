@@ -17372,6 +17372,34 @@ mod tests {
         ))
     }
 
+    struct EnvRestore {
+        values: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+
+    impl EnvRestore {
+        fn unset(keys: &[&'static str]) -> Self {
+            let values = keys
+                .iter()
+                .map(|key| (*key, std::env::var_os(key)))
+                .collect::<Vec<_>>();
+            for key in keys {
+                std::env::remove_var(key);
+            }
+            Self { values }
+        }
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            for (key, value) in self.values.drain(..) {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
     fn left_click(column: u16, row: u16) -> MouseEvent {
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -17918,6 +17946,14 @@ mod tests {
 
     #[test]
     fn setup_command_renders_onboarding_checklist() {
+        let _env = EnvRestore::unset(&[
+            "DSCODE_PROFILE",
+            "DEEPSEEK_PROFILE",
+            "DEEPSEEK_BASE_URL",
+            "DEEPSEEK_MODEL",
+            "DEEPSEEK_API_KEY_ENV",
+            "DEEPSEEK_REASONING_EFFORT",
+        ]);
         let root = temp_root("setup-command");
         let config_dir = root.join(".dscode");
         fs::create_dir_all(&config_dir).unwrap();

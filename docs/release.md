@@ -56,6 +56,18 @@ deepseek dogfood report --limit 5
 
 If a replay exposes a new failure, fix the root cause before publishing. Do not release by overriding the dogfood outcome.
 
+For external write-fixture evidence, use a disposable git repository outside
+this checkout. Always dry-run first; the real run copies the repository to an
+isolated workdir and records an `external-write-fixture` dogfood row:
+
+```bash
+deepseek dogfood external-fixture --workdir /tmp/disposable-repo --dry-run \
+  'replace `a - b` with `a + b` in src/lib.rs and validate with cargo test'
+deepseek dogfood external-fixture --workdir /tmp/disposable-repo --benchmark-gate \
+  'replace `a - b` with `a + b` in src/lib.rs and validate with cargo test'
+deepseek dogfood report --limit 10
+```
+
 ## Artifact
 
 For a local release binary:

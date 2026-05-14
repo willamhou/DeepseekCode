@@ -45,6 +45,7 @@ fn command_words() -> &'static [&'static str] {
 fn dogfood_words() -> &'static [&'static str] {
     &[
         "run",
+        "external-fixture",
         "replay-benchmark",
         "report",
         "export-benchmark",

@@ -37,6 +37,8 @@ iterating from the same terminal.
 - LSP-backed and fallback diagnostics runners with JSON/JSONL watch output.
 - Verified `v0.1.1` release assets for Linux x64, macOS x64, macOS arm64, and
   Windows x64, plus a GHCR image and npm/Homebrew packaging metadata.
+- Opt-in external write-fixture dogfood runs with preflight, isolated workdir
+  copies, and report evidence counters.
 
 ## Quick Start
 
@@ -104,7 +106,8 @@ DeepSeekCode is close enough to use as its own coding CLI, but it is not yet at
 Claude Code CLI / Codex CLI polish. The largest remaining gaps are:
 
 - native supervisor-owned PTY attach/stdin/resize/replay/wait/cancel;
-- live external write-fixture validation across real repositories;
+- successful live external write-fixture evidence across disposable real
+  repositories;
 - npm registry publishing and a Homebrew tap, both blocked on credentials;
 - richer model-backed demo evidence beyond deterministic TUI snapshots.
 
@@ -156,6 +159,18 @@ For PR/CI workflow checks:
 deepseek pr live-status owner/repo#42
 deepseek pr live-status owner/repo#42 --require-write
 deepseek pr live-status owner/repo#42 --json
+```
+
+For opt-in external write-fixture evidence, use a disposable git repository
+outside this checkout. The command dry-runs preflight first, then runs against
+an isolated copy and records the result in the dogfood report:
+
+```bash
+deepseek dogfood external-fixture --workdir /tmp/disposable-repo --dry-run \
+  'replace `a - b` with `a + b` in src/lib.rs and validate with cargo test'
+deepseek dogfood external-fixture --workdir /tmp/disposable-repo --benchmark-gate \
+  'replace `a - b` with `a + b` in src/lib.rs and validate with cargo test'
+deepseek dogfood report --limit 10
 ```
 
 ## Documentation

@@ -39,6 +39,8 @@ DeepSeekCode は DeepSeek-first のターミナル向けコーディングエー
   出力にも対応します。
 - 検証済み `v0.1.1` の Linux x64、macOS x64、macOS arm64、Windows x64
   Release assets、GHCR イメージ、npm/Homebrew 公開用メタデータがあります。
+- opt-in の external write-fixture dogfood をサポートします。preflight、
+  isolated workdir copy、report の evidence counter を備えています。
 
 ## クイックスタート
 
@@ -106,7 +108,7 @@ DeepSeekCode は自身の開発に使える段階ですが、Claude Code CLI / C
 ほどの製品成熟度にはまだ届いていません。大きな残差は次の通りです。
 
 - ネイティブ supervisor-owned PTY の attach/stdin/resize/replay/wait/cancel。
-- 実リポジトリを使った live external write-fixture 検証。
+- disposable な実外部リポジトリでの成功 live external write-fixture 証拠。
 - npm registry 公開と Homebrew tap。どちらも資格情報が未設定です。
 - 決定的な TUI snapshot を超えた model-backed demo の実証。
 
@@ -157,6 +159,18 @@ PR/CI workflow チェック:
 deepseek pr live-status owner/repo#42
 deepseek pr live-status owner/repo#42 --require-write
 deepseek pr live-status owner/repo#42 --json
+```
+
+external write-fixture の証拠には、この checkout の外にある disposable git
+repository を使います。まず dry-run で preflight し、その後 isolated copy で
+実行して dogfood report に記録します。
+
+```bash
+deepseek dogfood external-fixture --workdir /tmp/disposable-repo --dry-run \
+  'replace `a - b` with `a + b` in src/lib.rs and validate with cargo test'
+deepseek dogfood external-fixture --workdir /tmp/disposable-repo --benchmark-gate \
+  'replace `a - b` with `a + b` in src/lib.rs and validate with cargo test'
+deepseek dogfood report --limit 10
 ```
 
 ## ドキュメント

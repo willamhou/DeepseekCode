@@ -98,4 +98,6 @@ recovers stale live RLM ownership and runs one queued live RLM turn per tick.
   force interruption, runtime event mirroring, daemon package/service UX, and
   ACP `session/rlm/subscribe` have landed.
 - Platform restore strategy for device nodes and Windows symlink semantics.
-- Live GitHub write-fixture harness behind an explicit opt-in test repository.
+- Successful external write-fixture dogfood records against explicit disposable
+  test repositories; the opt-in CLI harness is now covered by
+  `2026-05-14-deepseek-tui-external-write-fixture-dogfood.md`.

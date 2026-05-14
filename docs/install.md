@@ -76,6 +76,18 @@ deepseek dogfood run --from-benchmark fixture-retry-write-validate-python-mini -
 deepseek dogfood report --limit 5
 ```
 
+外部 write-fixture 证据需要当前 checkout 之外的 disposable git 仓库。先 dry-run
+检查，真实运行会复制到 isolated workdir，并在 dogfood report 里计入
+`external-write-fixture`：
+
+```bash
+deepseek dogfood external-fixture --workdir /tmp/disposable-repo --dry-run \
+  'replace `a - b` with `a + b` in src/lib.rs and validate with cargo test'
+deepseek dogfood external-fixture --workdir /tmp/disposable-repo --benchmark-gate \
+  'replace `a - b` with `a + b` in src/lib.rs and validate with cargo test'
+deepseek dogfood report --limit 10
+```
+
 ## Release Binary
 
 GitHub Release 已经提供 `v0.1.1` 的 Linux x64、macOS x64、macOS arm64 和

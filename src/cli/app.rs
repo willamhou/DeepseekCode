@@ -47,6 +47,7 @@ pub enum DogfoodOutcome {
 #[derive(Debug)]
 pub enum DogfoodAction {
     Run(DogfoodRunArgs),
+    ExternalFixture(DogfoodExternalFixtureArgs),
     ReplayBenchmark(DogfoodReplayArgs),
     Report(DogfoodReportArgs),
     ExportBenchmark(DogfoodExportArgs),
@@ -147,6 +148,16 @@ pub struct DogfoodRunArgs {
     pub manual_intervention: bool,
     pub benchmark_gate: bool,
     pub notes: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct DogfoodExternalFixtureArgs {
+    pub task: String,
+    pub workdir: String,
+    pub budget: Option<usize>,
+    pub benchmark_gate: bool,
+    pub notes: Option<String>,
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Default)]
@@ -2704,12 +2715,15 @@ fn parse_dogfood_subcommand(args: Vec<String>) -> Result<DogfoodAction, String> 
     let action = iter
         .next()
         .ok_or_else(|| {
-            "dogfood requires a sub-action: run|replay-benchmark|report|export-benchmark|promote-benchmark"
+            "dogfood requires a sub-action: run|external-fixture|replay-benchmark|report|export-benchmark|promote-benchmark"
                 .to_string()
         })?;
     let rest: Vec<String> = iter.collect();
     match action.as_str() {
         "run" => parse_dogfood_run_args(rest).map(DogfoodAction::Run),
+        "external-fixture" | "external-write-fixture" => {
+            parse_dogfood_external_fixture_args(rest).map(DogfoodAction::ExternalFixture)
+        }
         "replay-benchmark" | "replay-bench" => {
             Ok(DogfoodAction::ReplayBenchmark(parse_dogfood_replay_args(rest)))
         }
@@ -2723,7 +2737,7 @@ fn parse_dogfood_subcommand(args: Vec<String>) -> Result<DogfoodAction, String> 
             )))
         }
         other => Err(format!(
-            "unknown dogfood sub-action `{other}`; expected run|replay-benchmark|report|export-benchmark|promote-benchmark"
+            "unknown dogfood sub-action `{other}`; expected run|external-fixture|replay-benchmark|report|export-benchmark|promote-benchmark"
         )),
     }
 }
@@ -2834,6 +2848,73 @@ fn parse_dogfood_run_args(args: Vec<String>) -> Result<DogfoodRunArgs, String> {
         manual_intervention,
         benchmark_gate,
         notes,
+    })
+}
+
+fn parse_dogfood_external_fixture_args(
+    args: Vec<String>,
+) -> Result<DogfoodExternalFixtureArgs, String> {
+    let mut workdir = None;
+    let mut budget = None;
+    let mut benchmark_gate = false;
+    let mut notes = None;
+    let mut dry_run = false;
+    let mut positional = Vec::new();
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--workdir" if index + 1 < args.len() => {
+                workdir = Some(args[index + 1].clone());
+                index += 2;
+                continue;
+            }
+            "--budget" if index + 1 < args.len() => {
+                if let Ok(n) = args[index + 1].parse::<usize>() {
+                    if (1..=200).contains(&n) {
+                        budget = Some(n);
+                    }
+                }
+                index += 2;
+                continue;
+            }
+            "--benchmark-gate" => {
+                benchmark_gate = true;
+                index += 1;
+                continue;
+            }
+            "--notes" if index + 1 < args.len() => {
+                notes = Some(args[index + 1].clone());
+                index += 2;
+                continue;
+            }
+            "--dry-run" => {
+                dry_run = true;
+                index += 1;
+                continue;
+            }
+            _ => {}
+        }
+
+        positional.push(args[index].clone());
+        index += 1;
+    }
+
+    let task = positional.join(" ");
+    if task.trim().is_empty() {
+        return Err("dogfood external-fixture requires a task".to_string());
+    }
+    let Some(workdir) = workdir else {
+        return Err("dogfood external-fixture requires --workdir <path>".to_string());
+    };
+
+    Ok(DogfoodExternalFixtureArgs {
+        task,
+        workdir,
+        budget,
+        benchmark_gate,
+        notes,
+        dry_run,
     })
 }
 
@@ -3442,6 +3523,7 @@ mod tests {
                 assert_eq!(args.notes.as_deref(), Some("needed one retry"));
                 assert_eq!(args.task, "");
             }
+            DogfoodAction::ExternalFixture(_) => panic!("expected dogfood run args"),
             DogfoodAction::ReplayBenchmark(_) => panic!("expected dogfood run args"),
             DogfoodAction::Report(_) => panic!("expected dogfood run args"),
             DogfoodAction::ExportBenchmark(_) => panic!("expected dogfood run args"),
@@ -3453,6 +3535,51 @@ mod tests {
     fn dogfood_run_requires_task_or_benchmark_case() {
         let error = parse_dogfood_subcommand(vec!["run".to_string()]).unwrap_err();
         assert!(error.contains("requires a task or --from-benchmark"));
+    }
+
+    #[test]
+    fn parses_dogfood_external_fixture_subcommand() {
+        let parsed = parse_dogfood_subcommand(vec![
+            "external-fixture".to_string(),
+            "--workdir".to_string(),
+            "/tmp/external-repo".to_string(),
+            "--budget".to_string(),
+            "12".to_string(),
+            "--notes".to_string(),
+            "live write fixture".to_string(),
+            "--dry-run".to_string(),
+            "replace".to_string(),
+            "`a".to_string(),
+            "-".to_string(),
+            "b`".to_string(),
+            "with".to_string(),
+            "`a".to_string(),
+            "+".to_string(),
+            "b`".to_string(),
+            "in".to_string(),
+            "src/lib.rs".to_string(),
+            "and".to_string(),
+            "validate".to_string(),
+            "with".to_string(),
+            "cargo".to_string(),
+            "test".to_string(),
+        ])
+        .expect("parse should succeed");
+
+        match parsed {
+            DogfoodAction::ExternalFixture(args) => {
+                assert_eq!(args.workdir, "/tmp/external-repo");
+                assert_eq!(args.budget, Some(12));
+                assert!(args.dry_run);
+                assert_eq!(args.notes.as_deref(), Some("live write fixture"));
+                assert!(args.task.contains("validate with cargo test"));
+            }
+            DogfoodAction::Run(_) => panic!("expected external fixture args"),
+            DogfoodAction::ReplayBenchmark(_) => panic!("expected external fixture args"),
+            DogfoodAction::Report(_) => panic!("expected external fixture args"),
+            DogfoodAction::ExportBenchmark(_) => panic!("expected external fixture args"),
+            DogfoodAction::PromoteBenchmark(_) => panic!("expected external fixture args"),
+        }
     }
 
     #[test]
@@ -3472,6 +3599,7 @@ mod tests {
                 assert_eq!(args.limit, Some(50));
             }
             DogfoodAction::Run(_) => panic!("expected dogfood report args"),
+            DogfoodAction::ExternalFixture(_) => panic!("expected dogfood report args"),
             DogfoodAction::ReplayBenchmark(_) => panic!("expected dogfood report args"),
             DogfoodAction::ExportBenchmark(_) => panic!("expected dogfood report args"),
             DogfoodAction::PromoteBenchmark(_) => panic!("expected dogfood report args"),
@@ -3500,6 +3628,7 @@ mod tests {
                 assert!(args.benchmark_gate);
             }
             DogfoodAction::Run(_) => panic!("expected replay args"),
+            DogfoodAction::ExternalFixture(_) => panic!("expected replay args"),
             DogfoodAction::Report(_) => panic!("expected replay args"),
             DogfoodAction::ExportBenchmark(_) => panic!("expected replay args"),
             DogfoodAction::PromoteBenchmark(_) => panic!("expected replay args"),
