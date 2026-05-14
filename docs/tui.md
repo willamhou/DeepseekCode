@@ -120,7 +120,7 @@ Current surfaces:
   `provider list`, and `provider <name> [model]`
 - skill registry inspection and local user-skill management with
   `skills [prefix]` / `/skills [prefix]`, `/skills --remote`,
-  `skill <name>` / `/skill <name>`, `/skill trust <name>`, and
+  `skill <name>` / `/skill <name>`, `/skill new`, `/skill trust <name>`, and
   `/skill uninstall <name>` over DeepSeekCode's configured TOML skills and
   remote registry metadata
 - composer and command-palette editing preserve terminal modifier keys, including
@@ -481,6 +481,7 @@ Command palette commands currently implemented:
 | `skills`, `/skills`, `skills <prefix>` | List configured TOML skills from repo and user skill directories |
 | `skills --remote`, `/skills --remote` | Fetch the configured community skill registry and list remote skill names, descriptions, and sources |
 | `skill <name>`, `/skill <name>`, `/<skill-name>` | Show one configured TOML skill's description, triggers, tools, references, policy, and system append; direct `/<skill-name>` is tried after custom slash commands |
+| `skill new`, `/skill new` | Show the bundled `skill-creator` skill for drafting a new DeepSeekCode TOML skill |
 | `skill trust <name>`, `/skill trust <name>` | Write a `.trusted` marker beside a configured user skill TOML file |
 | `skill uninstall <name>`, `/skill uninstall <name>` | Remove a configured user skill TOML file and its `.trusted` marker; bundled repo skills are protected |
 | `feedback`, `/feedback` | Show DeepSeekCode feedback targets in the right-side detail panel |

@@ -1,0 +1,41 @@
+name = "skill-creator"
+description = "Create or refine DeepSeekCode TOML skills for repeatable coding workflows"
+allowed_tools = ["list_files", "read_file", "search_text", "apply_patch", "git_diff"]
+triggers = ["create skill", "new skill", "skill new", "write a skill"]
+references = ["docs/skills-and-profiles.md", "skills/"]
+
+system_append = """
+Help the user create a focused DeepSeekCode TOML skill.
+
+DeepSeekCode skills live as `.toml` files in either the repo `skills/` directory
+or the configured `workspace.user_skills_dir`. Keep each skill narrow: describe
+when to use it, define the minimum useful allowed tools, add concise
+system_append instructions, and include suggested_steps only when they improve
+repeatability.
+
+Prefer creating user skills unless the user is explicitly editing bundled repo
+skills. Validate that the TOML follows the existing examples before finishing.
+"""
+
+suggested_steps = [
+  "Clarify the workflow the skill should capture",
+  "Inspect existing skill TOML examples",
+  "Draft the smallest useful skill file",
+  "Review allowed tools, triggers, and policy",
+  "Show the final path and usage command",
+]
+
+[[initial_todos]]
+content = "Clarify the workflow and trigger phrases"
+active_form = "Clarifying the workflow and trigger phrases"
+status = "in_progress"
+
+[[initial_todos]]
+content = "Draft the skill TOML"
+active_form = "Drafting the skill TOML"
+status = "pending"
+
+[policy]
+require_write_confirmation = true
+require_shell_confirmation = false
+shell_allowlist = []

@@ -8124,6 +8124,22 @@ shell_allowlist = ["git diff"]
             Some(&config),
             &mut app,
             TuiAction::Skills {
+                command: TuiSkillsCommand::Show {
+                    name: "skill-creator".to_string(),
+                },
+            },
+        )
+        .unwrap();
+
+        let (_, detail) = app.mcp_detail_for_test().expect("skill creator detail");
+        assert!(detail.contains("# Skill: skill-creator"));
+        assert!(detail.contains("Create or refine DeepSeekCode TOML skills"));
+
+        handle_tui_action(
+            &store,
+            Some(&config),
+            &mut app,
+            TuiAction::Skills {
                 command: TuiSkillsCommand::Trust {
                     name: "pr-review".to_string(),
                 },

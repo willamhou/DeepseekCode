@@ -535,6 +535,9 @@ Landed first slice:
   skill names, descriptions, and sources through the right-side detail panel
   while keeping installer/update/sync mutations scoped to a later downloader
   slice
+- TUI now supports DeepSeek-TUI-style `/skill new` by routing the alias to a
+  bundled `skill-creator` TOML skill that guides creation of focused
+  DeepSeekCode local skills
 - TUI now supports DeepSeek-TUI-style `/feedback [bug|feature|security]` plus
   command-palette `feedback`, rendering repository feedback targets and
   security-policy links in the detail panel without attempting to launch a GUI
