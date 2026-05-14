@@ -403,6 +403,9 @@ Landed first slice:
   selected-workspace runtime system prompt preview with workspace instructions,
   user memory, selected latest user message, skill/planning metadata, and prompt
   text in the detail panel
+- TUI now supports DeepSeek-TUI-style `/edit`, loading the selected thread's
+  latest user message back into the composer for revision without starting a
+  model turn or mutating durable runtime history
 - local file-backed TUI now supports DeepSeek-TUI-style `/clear` conversation
   reset by creating and switching to a fresh empty active thread in the selected
   durable session without deleting older thread history

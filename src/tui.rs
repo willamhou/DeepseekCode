@@ -566,6 +566,7 @@ pub enum TuiMcpDetailKind {
     Lsp,
     Change,
     System,
+    Edit,
     Status,
     Tokens,
     Cost,
@@ -618,6 +619,7 @@ impl TuiMcpDetailKind {
             Self::Lsp => "lsp",
             Self::Change => "change",
             Self::System => "system",
+            Self::Edit => "edit",
             Self::Status => "status",
             Self::Tokens => "tokens",
             Self::Cost => "cost",
@@ -670,6 +672,7 @@ impl TuiMcpDetailKind {
             Self::Lsp => "LSP",
             Self::Change => "Changelog",
             Self::System => "System Prompt",
+            Self::Edit => "Edit",
             Self::Status => "Status",
             Self::Tokens => "Tokens",
             Self::Cost => "Cost",
@@ -722,6 +725,7 @@ impl TuiMcpDetailKind {
             Self::Lsp => Self::Manager,
             Self::Change => Self::Manager,
             Self::System => Self::Manager,
+            Self::Edit => Self::Manager,
             Self::Status => Self::Manager,
             Self::Tokens => Self::Manager,
             Self::Cost => Self::Manager,
@@ -774,6 +778,7 @@ impl TuiMcpDetailKind {
             Self::Lsp => Self::Manager,
             Self::Change => Self::Manager,
             Self::System => Self::Manager,
+            Self::Edit => Self::Manager,
             Self::Status => Self::Manager,
             Self::Tokens => Self::Manager,
             Self::Cost => Self::Manager,
@@ -1060,6 +1065,12 @@ pub enum TuiChangeCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TuiSystemCommand {
     Show,
+    Help,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TuiEditCommand {
+    LoadLast,
     Help,
 }
 
@@ -1819,6 +1830,20 @@ fn parse_tui_system_command(line: &str) -> Option<Result<TuiSystemCommand, Strin
     }
 }
 
+fn parse_tui_edit_command(line: &str) -> Option<Result<TuiEditCommand, String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/edit")
+        .or_else(|| strip_tui_command_prefix(trimmed, "edit"))?;
+    let args = rest.split_whitespace().collect::<Vec<_>>();
+    match args.as_slice() {
+        [] | ["last"] => Some(Ok(TuiEditCommand::LoadLast)),
+        ["help" | "--help" | "-h"] => Some(Ok(TuiEditCommand::Help)),
+        _ => Some(Err(
+            "usage: edit or /edit; use edit help for details".to_string()
+        )),
+    }
+}
+
 fn parse_tui_clear_command(line: &str) -> Option<Result<TuiClearCommand, String>> {
     let trimmed = line.trim();
     let rest = strip_tui_command_prefix(trimmed, "/clear")
@@ -2507,6 +2532,13 @@ const TUI_HELP_COMMANDS: &[TuiHelpCommandInfo] = &[
         description: "Show the selected workspace runtime system prompt preview.",
     },
     TuiHelpCommandInfo {
+        category: "Runtime",
+        name: "edit",
+        aliases: &[],
+        usage: "/edit",
+        description: "Load the latest selected user message back into the composer.",
+    },
+    TuiHelpCommandInfo {
         category: "Config",
         name: "model",
         aliases: &[],
@@ -2784,6 +2816,8 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "changelog",
     "system",
     "system help",
+    "edit",
+    "edit help",
     "model",
     "model auto",
     "model deepseek-v4-flash",
@@ -2982,6 +3016,8 @@ const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
     "/changelog",
     "/system",
     "/system help",
+    "/edit",
+    "/edit help",
     "/mode",
     "/mode agent",
     "/mode plan",
@@ -5436,6 +5472,21 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(command) = parse_tui_edit_command(&content) {
+                    match command {
+                        Ok(command) => {
+                            let keep_composer = self.handle_edit_command(command);
+                            if !keep_composer {
+                                self.composer.clear();
+                                self.composer_cursor = 0;
+                            }
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some(command) = parse_tui_clear_command(&content) {
                     match command {
                         Ok(command) => {
@@ -6129,6 +6180,17 @@ impl TuiApp {
         if let Some(command) = parse_tui_system_command(command) {
             match command {
                 Ok(command) => self.handle_system_command(command),
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_edit_command(command) {
+            match command {
+                Ok(command) => {
+                    self.handle_edit_command(command);
+                }
                 Err(message) => {
                     self.status = message;
                 }
@@ -7065,7 +7127,7 @@ impl TuiApp {
             }
             ["cancel"] | ["stop"] => self.request_cancel_run(),
             ["help"] => {
-                self.status = "commands: mode plan|agent|yolo, diff, clear, change, system, goal [objective|clear], sessions [filter], threads [filter], agent [N] <task>, subagents, rlm [N] <file_or_text>, relay [focus], task <summary>|select all|select clear|pause [id]|resume [id]|cancel [id]|bulk pause|bulk resume|bulk cancel, shell <cmd>|list|show|wait|poll|stdin|close-stdin|cancel, stash [list|pop|clear], memory [show|path|clear|edit|help], anchor [text|list|remove], queue [list|edit|drop|clear], share, export [path], mcp manager|list|tools|prompts|resources|resource-templates|close|init|add|enable|disable|remove|user add|user enable|user disable|user remove|validate, diagnostics [--changed|paths...], restore snapshot|list|show, revert turn <id> [--apply], compact, approval, cancel".to_string();
+                self.status = "commands: mode plan|agent|yolo, diff, clear, change, system, edit, goal [objective|clear], sessions [filter], threads [filter], agent [N] <task>, subagents, rlm [N] <file_or_text>, relay [focus], task <summary>|select all|select clear|pause [id]|resume [id]|cancel [id]|bulk pause|bulk resume|bulk cancel, shell <cmd>|list|show|wait|poll|stdin|close-stdin|cancel, stash [list|pop|clear], memory [show|path|clear|edit|help], anchor [text|list|remove], queue [list|edit|drop|clear], share, export [path], mcp manager|list|tools|prompts|resources|resource-templates|close|init|add|enable|disable|remove|user add|user enable|user disable|user remove|validate, diagnostics [--changed|paths...], restore snapshot|list|show, revert turn <id> [--apply], compact, approval, cancel".to_string();
             }
             _ => {
                 self.status = format!("unknown command: {command}");
@@ -8689,6 +8751,46 @@ impl TuiApp {
         detail
     }
 
+    fn handle_edit_command(&mut self, command: TuiEditCommand) -> bool {
+        match command {
+            TuiEditCommand::LoadLast => self.load_latest_user_message_into_composer(),
+            TuiEditCommand::Help => {
+                self.set_mcp_detail(TuiMcpDetailKind::Edit, self.render_edit_help_detail());
+                self.status = "edit help shown".to_string();
+                false
+            }
+        }
+    }
+
+    fn load_latest_user_message_into_composer(&mut self) -> bool {
+        let Some(content) = self.latest_selected_user_message() else {
+            self.status = "no previous message to edit".to_string();
+            return false;
+        };
+        self.composer = content;
+        self.composer_cursor = self.composer.len();
+        self.composer_focused = true;
+        self.status = "last user message loaded into composer".to_string();
+        true
+    }
+
+    fn render_edit_help_detail(&self) -> String {
+        let mut detail = String::new();
+        let _ = writeln!(detail, "DeepSeekCode Edit");
+        let _ = writeln!(detail, "=================");
+        let _ = writeln!(detail);
+        let _ = writeln!(
+            detail,
+            "/edit loads the latest selected user message back into the composer."
+        );
+        let _ = writeln!(detail);
+        let _ = writeln!(detail, "Commands");
+        let _ = writeln!(detail, "--------");
+        let _ = writeln!(detail, "- /edit");
+        let _ = writeln!(detail, "- /edit help");
+        detail
+    }
+
     fn handle_clear_command(&mut self, command: TuiClearCommand) {
         match command {
             TuiClearCommand::Clear => self.request_clear_conversation(),
@@ -8976,6 +9078,7 @@ impl TuiApp {
         let _ = writeln!(detail, "- /verbose [on|off|toggle|show]");
         let _ = writeln!(detail, "- /change");
         let _ = writeln!(detail, "- /system");
+        let _ = writeln!(detail, "- /edit");
         let _ = writeln!(detail, "- /goal [objective [budget: N]|clear]");
         let _ = writeln!(detail, "- /model [name|list]");
         let _ = writeln!(detail, "- /provider [name [model]|list]");
@@ -16016,6 +16119,76 @@ mod tests {
             app.status,
             "usage: system or /system; use system help for details"
         );
+    }
+
+    #[test]
+    fn edit_command_loads_latest_user_message_into_composer() {
+        let sessions = vec![TuiSession {
+            id: "session-1".to_string(),
+            title: "Session".to_string(),
+            workspace: "/tmp/deepseek-edit".to_string(),
+            status: "active".to_string(),
+            active_thread_id: Some("thread-1".to_string()),
+            thread_count: 1,
+        }];
+        let threads = vec![TuiThread {
+            id: "thread-1".to_string(),
+            session_id: Some("session-1".to_string()),
+            title: "Thread".to_string(),
+            mode: "agent".to_string(),
+            status: "idle".to_string(),
+            latest_turn_id: Some("turn-2".to_string()),
+            event_seq: 0,
+        }];
+        let items = vec![
+            TuiItem {
+                id: "item-1".to_string(),
+                thread_id: "thread-1".to_string(),
+                turn_id: Some("turn-1".to_string()),
+                index: 1,
+                item_type: "message".to_string(),
+                role: Some("user".to_string()),
+                content: "older request".to_string(),
+                status: "completed".to_string(),
+            },
+            TuiItem {
+                id: "item-2".to_string(),
+                thread_id: "thread-1".to_string(),
+                turn_id: Some("turn-2".to_string()),
+                index: 2,
+                item_type: "message".to_string(),
+                role: Some("user".to_string()),
+                content: "latest request".to_string(),
+                status: "completed".to_string(),
+            },
+        ];
+        let mut app = TuiApp::with_runtime(sessions, threads, items);
+
+        app.composer_focused = true;
+        app.composer = "/edit".to_string();
+        app.composer_cursor = app.composer.len();
+        assert!(app.handle_key(KeyCode::Enter));
+        assert_eq!(app.composer, "latest request");
+        assert_eq!(app.composer_cursor, app.composer.len());
+        assert!(app.composer_focused);
+        assert_eq!(app.status, "last user message loaded into composer");
+        assert!(app.drain_actions().is_empty());
+
+        app.composer_focused = false;
+        run_palette_command(&mut app, "edit help");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("edit help detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Edit);
+        assert!(detail.contains("/edit loads the latest selected user message"));
+
+        run_palette_command(&mut app, "edit extra");
+        assert_eq!(
+            app.status,
+            "usage: edit or /edit; use edit help for details"
+        );
+
+        let mut empty = TuiApp::new(Vec::new());
+        run_palette_command(&mut empty, "edit");
+        assert_eq!(empty.status, "no previous message to edit");
     }
 
     #[test]

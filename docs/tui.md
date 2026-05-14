@@ -68,6 +68,8 @@ Current surfaces:
   `/changes`, and `changelog` / `/changelog`
 - local runtime system prompt preview with `system` / `/system`, including the
   selected workspace instructions, user memory, and latest selected user message
+- latest-message editing with `edit` / `/edit`, loading the selected thread's
+  latest user message back into the composer
 - workspace diff inspection with `diff` / `/diff`, showing changed tracked
   files and `git diff --stat` for the selected session workspace
 - slash quit aliases with `exit` / `/exit`, `quit` / `/quit`, and `q` / `/q`
@@ -402,6 +404,7 @@ Command palette commands currently implemented:
 | `cache inspect`, `cache warmup` | Explain durable read-only cache limits: no persisted prompt layer hashes and no TUI-issued warmup request |
 | `change`, `/change`, `changes`, `/changes`, `changelog`, `/changelog` | Show the latest bundled DeepSeekCode changelog entry in the right-side detail panel |
 | `system`, `/system` | Show the selected workspace local runtime system prompt preview in the right-side detail panel |
+| `edit`, `/edit` | Load the selected thread's latest user message back into the composer for revision |
 | `model`, `/model` | Show selected workspace model config in the right-side detail panel |
 | `model <name>`, `/model <name>` | Update selected workspace `model.model`; aliases include `auto`, `flash`, `pro`, `chat`, `coder`, and `reasoner` |
 | `models`, `/models`, `model list` | Show the offline DeepSeekCode model catalog and current project model |
