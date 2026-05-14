@@ -172,6 +172,18 @@ pub struct DogfoodReplayArgs {
 pub struct DogfoodReportArgs {
     pub out: Option<String>,
     pub limit: Option<usize>,
+    pub require_min_runs: Option<usize>,
+    pub require_success_rate: Option<f64>,
+    pub require_external_write_fixtures: Option<usize>,
+    pub require_recent_clean: Option<usize>,
+    pub require_categories: Vec<DogfoodCategoryRequirement>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DogfoodCategoryRequirement {
+    pub category: String,
+    pub min_runs: usize,
+    pub min_success_percent: f64,
 }
 
 #[derive(Debug, Default)]
@@ -3199,7 +3211,7 @@ fn parse_dogfood_subcommand(args: Vec<String>) -> Result<DogfoodAction, String> 
         "replay-benchmark" | "replay-bench" => {
             Ok(DogfoodAction::ReplayBenchmark(parse_dogfood_replay_args(rest)))
         }
-        "report" => Ok(DogfoodAction::Report(parse_dogfood_report_args(rest))),
+        "report" => parse_dogfood_report_args(rest).map(DogfoodAction::Report),
         "export-benchmark" | "export-bench" => {
             Ok(DogfoodAction::ExportBenchmark(parse_dogfood_export_args(rest)))
         }
@@ -3428,7 +3440,7 @@ fn parse_dogfood_replay_args(args: Vec<String>) -> DogfoodReplayArgs {
     replay
 }
 
-fn parse_dogfood_report_args(args: Vec<String>) -> DogfoodReportArgs {
+fn parse_dogfood_report_args(args: Vec<String>) -> Result<DogfoodReportArgs, String> {
     let mut report = DogfoodReportArgs::default();
     let mut index = 0;
 
@@ -3448,12 +3460,107 @@ fn parse_dogfood_report_args(args: Vec<String>) -> DogfoodReportArgs {
                 index += 2;
                 continue;
             }
+            "--require-min-runs" if index + 1 < args.len() => {
+                report.require_min_runs = Some(parse_required_usize(
+                    "--require-min-runs",
+                    &args[index + 1],
+                    1,
+                    100_000,
+                )?);
+                index += 2;
+                continue;
+            }
+            "--require-success-rate" if index + 1 < args.len() => {
+                report.require_success_rate = Some(parse_percent_arg(
+                    "--require-success-rate",
+                    &args[index + 1],
+                )?);
+                index += 2;
+                continue;
+            }
+            "--require-external-write-fixtures" if index + 1 < args.len() => {
+                report.require_external_write_fixtures = Some(parse_required_usize(
+                    "--require-external-write-fixtures",
+                    &args[index + 1],
+                    1,
+                    100_000,
+                )?);
+                index += 2;
+                continue;
+            }
+            "--require-recent-clean" if index + 1 < args.len() => {
+                report.require_recent_clean = Some(parse_required_usize(
+                    "--require-recent-clean",
+                    &args[index + 1],
+                    1,
+                    100_000,
+                )?);
+                index += 2;
+                continue;
+            }
+            "--require-category" if index + 1 < args.len() => {
+                report
+                    .require_categories
+                    .push(parse_dogfood_category_requirement(&args[index + 1])?);
+                index += 2;
+                continue;
+            }
+            "--require-min-runs"
+            | "--require-success-rate"
+            | "--require-external-write-fixtures"
+            | "--require-recent-clean"
+            | "--require-category" => {
+                return Err(format!("{} requires a value", args[index]));
+            }
             _ => {}
         }
         index += 1;
     }
 
-    report
+    Ok(report)
+}
+
+fn parse_required_usize(flag: &str, raw: &str, min: usize, max: usize) -> Result<usize, String> {
+    let value = raw
+        .parse::<usize>()
+        .map_err(|_| format!("{flag} requires an integer between {min} and {max}"))?;
+    if (min..=max).contains(&value) {
+        Ok(value)
+    } else {
+        Err(format!(
+            "{flag} requires an integer between {min} and {max}"
+        ))
+    }
+}
+
+fn parse_percent_arg(flag: &str, raw: &str) -> Result<f64, String> {
+    let trimmed = raw.trim().trim_end_matches('%');
+    let value = trimmed
+        .parse::<f64>()
+        .map_err(|_| format!("{flag} requires a percentage between 0 and 100"))?;
+    if (0.0..=100.0).contains(&value) {
+        Ok(value)
+    } else {
+        Err(format!("{flag} requires a percentage between 0 and 100"))
+    }
+}
+
+fn parse_dogfood_category_requirement(raw: &str) -> Result<DogfoodCategoryRequirement, String> {
+    let parts = raw.split(':').collect::<Vec<_>>();
+    if parts.len() != 3 {
+        return Err(
+            "--require-category expects <category>:<min-runs>:<min-success-percent>".to_string(),
+        );
+    }
+    let category = parts[0].trim();
+    if category.is_empty() {
+        return Err("--require-category requires a non-empty category".to_string());
+    }
+    Ok(DogfoodCategoryRequirement {
+        category: category.to_string(),
+        min_runs: parse_required_usize("--require-category min-runs", parts[1], 1, 100_000)?,
+        min_success_percent: parse_percent_arg("--require-category min-success-percent", parts[2])?,
+    })
 }
 
 fn parse_dogfood_export_args(args: Vec<String>) -> DogfoodExportArgs {
@@ -4062,6 +4169,16 @@ mod tests {
             "dogfood.md".to_string(),
             "--limit".to_string(),
             "50".to_string(),
+            "--require-min-runs".to_string(),
+            "100".to_string(),
+            "--require-success-rate".to_string(),
+            "90%".to_string(),
+            "--require-external-write-fixtures".to_string(),
+            "3".to_string(),
+            "--require-recent-clean".to_string(),
+            "20".to_string(),
+            "--require-category".to_string(),
+            "write_validate:25:90".to_string(),
         ])
         .unwrap();
 
@@ -4069,6 +4186,14 @@ mod tests {
             DogfoodAction::Report(args) => {
                 assert_eq!(args.out.as_deref(), Some("dogfood.md"));
                 assert_eq!(args.limit, Some(50));
+                assert_eq!(args.require_min_runs, Some(100));
+                assert_eq!(args.require_success_rate, Some(90.0));
+                assert_eq!(args.require_external_write_fixtures, Some(3));
+                assert_eq!(args.require_recent_clean, Some(20));
+                assert_eq!(args.require_categories.len(), 1);
+                assert_eq!(args.require_categories[0].category, "write_validate");
+                assert_eq!(args.require_categories[0].min_runs, 25);
+                assert_eq!(args.require_categories[0].min_success_percent, 90.0);
             }
             DogfoodAction::Run(_) => panic!("expected dogfood report args"),
             DogfoodAction::ExternalFixture(_) => panic!("expected dogfood report args"),
@@ -4076,6 +4201,17 @@ mod tests {
             DogfoodAction::ExportBenchmark(_) => panic!("expected dogfood report args"),
             DogfoodAction::PromoteBenchmark(_) => panic!("expected dogfood report args"),
         }
+    }
+
+    #[test]
+    fn dogfood_report_rejects_invalid_evidence_gate() {
+        let error = parse_dogfood_subcommand(vec![
+            "report".to_string(),
+            "--require-category".to_string(),
+            "write_validate:0:90".to_string(),
+        ])
+        .unwrap_err();
+        assert!(error.contains("--require-category min-runs"));
     }
 
     #[test]

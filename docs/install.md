@@ -88,6 +88,19 @@ deepseek dogfood external-fixture --workdir /tmp/disposable-repo --benchmark-gat
 deepseek dogfood report --limit 10
 ```
 
+严格发布检查可以让 report 根据证据阈值 fail closed：
+
+```bash
+deepseek dogfood report --limit 20 \
+  --require-min-runs 100 \
+  --require-success-rate 90 \
+  --require-recent-clean 20 \
+  --require-external-write-fixtures 3 \
+  --require-category write_validate:25:90 \
+  --require-category recovery:25:90 \
+  --require-category pr_workflow:25:90
+```
+
 ## Release Binary
 
 GitHub Release 已经提供 `v0.1.1` 的 Linux x64、macOS x64、macOS arm64 和

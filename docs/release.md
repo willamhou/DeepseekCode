@@ -68,6 +68,20 @@ deepseek dogfood external-fixture --workdir /tmp/disposable-repo --benchmark-gat
 deepseek dogfood report --limit 10
 ```
 
+For a release-readiness evidence gate, make the report fail closed when the
+ledger does not have enough live proof:
+
+```bash
+deepseek dogfood report --limit 20 \
+  --require-min-runs 100 \
+  --require-success-rate 90 \
+  --require-recent-clean 20 \
+  --require-external-write-fixtures 3 \
+  --require-category write_validate:25:90 \
+  --require-category recovery:25:90 \
+  --require-category pr_workflow:25:90
+```
+
 ## Artifact
 
 For a local release binary:

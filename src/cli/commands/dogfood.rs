@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::cli::app::{
-    BenchmarkArgs, DogfoodAction, DogfoodExportArgs, DogfoodExternalFixtureArgs, DogfoodOutcome,
-    DogfoodPromoteArgs, DogfoodReplayArgs, DogfoodReportArgs, DogfoodRunArgs,
+    BenchmarkArgs, DogfoodAction, DogfoodCategoryRequirement, DogfoodExportArgs,
+    DogfoodExternalFixtureArgs, DogfoodOutcome, DogfoodPromoteArgs, DogfoodReplayArgs,
+    DogfoodReportArgs, DogfoodRunArgs,
 };
 use crate::cli::commands::benchmark::BenchmarkCaseSummary;
 use crate::config::load::load_or_default;
@@ -418,15 +419,157 @@ fn render_report_command(
     let ledger_path = config.workspace.dogfood_ledger_path();
     let report_path = args
         .out
+        .as_ref()
         .map(PathBuf::from)
         .unwrap_or_else(|| config.workspace.dogfood_report_path());
     let limit = args.limit.unwrap_or(DEFAULT_REPORT_LIMIT);
     let records = load_records(&ledger_path)?;
     write_report(&ledger_path, &report_path, &records, limit)?;
+    enforce_report_requirements(&records, &args)?;
     println!("DeepSeekCode dogfood report");
     println!("ledger: {}", ledger_path.display());
     println!("report: {}", report_path.display());
+    if report_has_requirements(&args) {
+        println!("evidence gates: pass");
+    }
     Ok(())
+}
+
+fn report_has_requirements(args: &DogfoodReportArgs) -> bool {
+    args.require_min_runs.is_some()
+        || args.require_success_rate.is_some()
+        || args.require_external_write_fixtures.is_some()
+        || args.require_recent_clean.is_some()
+        || !args.require_categories.is_empty()
+}
+
+fn enforce_report_requirements(
+    records: &[DogfoodRecord],
+    args: &DogfoodReportArgs,
+) -> AppResult<()> {
+    let failures = report_requirement_failures(records, args);
+    if failures.is_empty() {
+        return Ok(());
+    }
+    Err(app_error(format!(
+        "dogfood evidence gates failed:\n- {}",
+        failures.join("\n- ")
+    )))
+}
+
+fn report_requirement_failures(records: &[DogfoodRecord], args: &DogfoodReportArgs) -> Vec<String> {
+    let mut failures = Vec::new();
+    if let Some(min_runs) = args.require_min_runs {
+        if records.len() < min_runs {
+            failures.push(format!(
+                "runs {} below required minimum {min_runs}",
+                records.len()
+            ));
+        }
+    }
+    if let Some(min_success_percent) = args.require_success_rate {
+        let success = records
+            .iter()
+            .filter(|record| matches!(record.outcome, DogfoodOutcome::Success))
+            .count();
+        push_rate_failure(
+            &mut failures,
+            "overall success rate",
+            success,
+            records.len(),
+            min_success_percent,
+        );
+    }
+    if let Some(required) = args.require_external_write_fixtures {
+        let successful_external_write_fixtures = records
+            .iter()
+            .filter(|record| {
+                is_external_write_fixture_record(record)
+                    && matches!(record.outcome, DogfoodOutcome::Success)
+            })
+            .count();
+        if successful_external_write_fixtures < required {
+            failures.push(format!(
+                "successful external write fixtures {successful_external_write_fixtures} below required minimum {required}"
+            ));
+        }
+    }
+    if let Some(required_clean) = args.require_recent_clean {
+        let recent = records
+            .iter()
+            .rev()
+            .take(required_clean)
+            .collect::<Vec<_>>();
+        if recent.len() < required_clean {
+            failures.push(format!(
+                "recent clean window has only {} records, required {required_clean}",
+                recent.len()
+            ));
+        }
+        let unclean = recent
+            .iter()
+            .filter(|record| !record_is_clean(record))
+            .count();
+        if unclean > 0 {
+            failures.push(format!(
+                "recent clean window contains {unclean} failed, stuck, or manual records"
+            ));
+        }
+    }
+    if !args.require_categories.is_empty() {
+        let stats = aggregate_category_stats(records);
+        for requirement in &args.require_categories {
+            push_category_requirement_failure(&mut failures, &stats, requirement);
+        }
+    }
+    failures
+}
+
+fn push_category_requirement_failure(
+    failures: &mut Vec<String>,
+    stats: &BTreeMap<String, DogfoodCategoryStats>,
+    requirement: &DogfoodCategoryRequirement,
+) {
+    let Some(category) = stats.get(&requirement.category) else {
+        failures.push(format!(
+            "category `{}` has 0 runs, required {}",
+            requirement.category, requirement.min_runs
+        ));
+        return;
+    };
+    if category.runs < requirement.min_runs {
+        failures.push(format!(
+            "category `{}` runs {} below required minimum {}",
+            requirement.category, category.runs, requirement.min_runs
+        ));
+    }
+    push_rate_failure(
+        failures,
+        &format!("category `{}` success rate", requirement.category),
+        category.success,
+        category.runs,
+        requirement.min_success_percent,
+    );
+}
+
+fn push_rate_failure(
+    failures: &mut Vec<String>,
+    label: &str,
+    success: usize,
+    total: usize,
+    min_success_percent: f64,
+) {
+    let actual = rate_percent(success, total);
+    if actual + f64::EPSILON < min_success_percent {
+        failures.push(format!(
+            "{label} {:.1}% below required {:.1}% ({success}/{total})",
+            actual, min_success_percent
+        ));
+    }
+}
+
+fn record_is_clean(record: &DogfoodRecord) -> bool {
+    matches!(record.outcome, DogfoodOutcome::Success) && !record.manual_intervention
 }
 
 fn replay_benchmark_command(
@@ -2022,6 +2165,33 @@ mod tests {
         std::env::temp_dir().join(format!("deepseek-dogfood-{name}-{nanos}"))
     }
 
+    fn test_record(timestamp_secs: u64, category: &str, outcome: DogfoodOutcome) -> DogfoodRecord {
+        DogfoodRecord {
+            version: 1,
+            timestamp_secs,
+            duration_ms: 20,
+            task: "replace `a - b` with `a + b` in src/lib.rs and validate with cargo test"
+                .to_string(),
+            skill: None,
+            budget: 6,
+            model: "x".to_string(),
+            workdir: "/tmp/external-repo-copy".to_string(),
+            outcome,
+            manual_intervention: false,
+            notes: None,
+            tool_calls: 3,
+            failed_tool_calls: 0,
+            repeated_call_failures: 0,
+            diagnostic_expected_failure: false,
+            used_subagent: false,
+            final_message: "tests pass".to_string(),
+            tool_trace: "apply_patch -> git_diff -> run_shell".to_string(),
+            error_kind: None,
+            benchmark_category: Some(category.to_string()),
+            benchmark_seed_observations: None,
+        }
+    }
+
     #[test]
     fn derive_default_outcome_prefers_stuck_over_failed() {
         assert!(matches!(
@@ -2388,6 +2558,72 @@ mod tests {
 
         let report = render_report(Path::new(".dscode/dogfood/ledger.jsonl"), &records, 20);
         assert!(report.contains("External write fixtures: 1/1 (100.0%)"));
+    }
+
+    #[test]
+    fn report_requirements_pass_with_external_and_category_evidence() {
+        let mut external = test_record(8, "write_validate", DogfoodOutcome::Success);
+        external.notes = Some("external-write-fixture; disposable repo".to_string());
+        let records = vec![
+            test_record(6, "recovery", DogfoodOutcome::Success),
+            test_record(7, "write_validate", DogfoodOutcome::Success),
+            external,
+        ];
+        let args = DogfoodReportArgs {
+            require_min_runs: Some(3),
+            require_success_rate: Some(100.0),
+            require_external_write_fixtures: Some(1),
+            require_recent_clean: Some(3),
+            require_categories: vec![DogfoodCategoryRequirement {
+                category: "write_validate".to_string(),
+                min_runs: 2,
+                min_success_percent: 100.0,
+            }],
+            ..DogfoodReportArgs::default()
+        };
+
+        assert!(report_requirement_failures(&records, &args).is_empty());
+    }
+
+    #[test]
+    fn report_requirements_fail_on_missing_live_evidence() {
+        let mut manual = test_record(8, "write_validate", DogfoodOutcome::Failed);
+        manual.manual_intervention = true;
+        let records = vec![
+            test_record(6, "recovery", DogfoodOutcome::Success),
+            test_record(7, "write_validate", DogfoodOutcome::Success),
+            manual,
+        ];
+        let args = DogfoodReportArgs {
+            require_min_runs: Some(4),
+            require_success_rate: Some(90.0),
+            require_external_write_fixtures: Some(1),
+            require_recent_clean: Some(3),
+            require_categories: vec![DogfoodCategoryRequirement {
+                category: "write_validate".to_string(),
+                min_runs: 3,
+                min_success_percent: 90.0,
+            }],
+            ..DogfoodReportArgs::default()
+        };
+
+        let failures = report_requirement_failures(&records, &args);
+        assert!(failures
+            .iter()
+            .any(|failure| failure.contains("runs 3 below required minimum 4")));
+        assert!(failures
+            .iter()
+            .any(|failure| failure.contains("overall success rate 66.7% below required 90.0%")));
+        assert!(failures.iter().any(|failure| failure
+            .contains("successful external write fixtures 0 below required minimum 1")));
+        assert!(failures.iter().any(|failure| failure
+            .contains("recent clean window contains 1 failed, stuck, or manual records")));
+        assert!(failures
+            .iter()
+            .any(|failure| failure
+                .contains("category `write_validate` runs 2 below required minimum 3")));
+        assert!(failures.iter().any(|failure| failure
+            .contains("category `write_validate` success rate 50.0% below required 90.0%")));
     }
 
     #[test]

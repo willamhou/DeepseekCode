@@ -108,7 +108,7 @@ DeepSeekCode は自身の開発に使える段階ですが、Claude Code CLI / C
 ほどの製品成熟度にはまだ届いていません。大きな残差は次の通りです。
 
 - ネイティブ supervisor-owned PTY の attach/stdin/resize/replay/wait/cancel。
-- disposable な実外部リポジトリでの成功 live external write-fixture 証拠。
+- disposable な実外部リポジトリでの live external write-fixture サンプル厚み。
 - npm registry 公開と Homebrew tap。どちらも資格情報が未設定です。
 - 決定的な TUI snapshot を超えた model-backed demo の実証。
 
@@ -171,6 +171,14 @@ deepseek dogfood external-fixture --workdir /tmp/disposable-repo --dry-run \
 deepseek dogfood external-fixture --workdir /tmp/disposable-repo --benchmark-gate \
   'replace `a - b` with `a + b` in src/lib.rs and validate with cargo test'
 deepseek dogfood report --limit 10
+deepseek dogfood report --limit 20 \
+  --require-min-runs 100 \
+  --require-success-rate 90 \
+  --require-recent-clean 20 \
+  --require-external-write-fixtures 3 \
+  --require-category write_validate:25:90 \
+  --require-category recovery:25:90 \
+  --require-category pr_workflow:25:90
 ```
 
 ## ドキュメント

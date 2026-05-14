@@ -103,7 +103,7 @@ DeepSeekCode 已经可以直接拿来写自己的代码，但还没有达到 Cla
 Codex CLI 的产品成熟度。最大差距集中在：
 
 - 原生 supervisor-owned PTY 的 attach/stdin/resize/replay/wait/cancel；
-- 真实 disposable 外部仓库上的成功 live write-fixture 证据；
+- 真实 disposable 外部仓库上更厚的 live write-fixture 样本证据；
 - npm registry 发布和 Homebrew tap，这两项还缺少对应凭据；
 - 超出确定性 TUI snapshot 的真实 model-backed demo 证据。
 
@@ -164,6 +164,14 @@ deepseek dogfood external-fixture --workdir /tmp/disposable-repo --dry-run \
 deepseek dogfood external-fixture --workdir /tmp/disposable-repo --benchmark-gate \
   'replace `a - b` with `a + b` in src/lib.rs and validate with cargo test'
 deepseek dogfood report --limit 10
+deepseek dogfood report --limit 20 \
+  --require-min-runs 100 \
+  --require-success-rate 90 \
+  --require-recent-clean 20 \
+  --require-external-write-fixtures 3 \
+  --require-category write_validate:25:90 \
+  --require-category recovery:25:90 \
+  --require-category pr_workflow:25:90
 ```
 
 ## 文档
