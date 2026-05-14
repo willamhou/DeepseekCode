@@ -1,7 +1,7 @@
 # DeepSeek-TUI Parity Plan
 
 **Status:** active
-**Source comparison:** `Hmbown/DeepSeek-TUI` refreshed at `/tmp/deepseek-tui-compare-20260514`, HEAD `81e4b93cc9df55de47489238078e255a563d044b`.
+**Source comparison:** `Hmbown/DeepSeek-TUI` refreshed at `/tmp/deepseek-tui-compare-20260514`, HEAD `9483248a9f35b5f2b56c34b5b84fbc5334473c9d`.
 **Current repo:** `willamhou/DeepSeekCode` (`PUBLIC` after 2026-05-12 repo publication), release command `deepseek`, compatibility alias `dscode`.
 
 ## Objective
@@ -10,7 +10,7 @@ Move DeepseekCode from a regression-gated CLI code agent toward a full terminal 
 
 ## Baseline Gap
 
-DeepSeek-TUI is a multi-crate Rust workspace with a dedicated `deepseek` dispatcher, `deepseek-tui` runtime, TUI state machine, HTTP/SSE runtime API, MCP server mode, SQLite-backed durable state, LSP diagnostics, keybindings, package wrappers, release automation, and newer app-server/web distribution surfaces. Its current public install story includes npm, crates.io, Homebrew, GitHub Release binaries, and GHCR Docker references.
+DeepSeek-TUI is a multi-crate Rust workspace with a dedicated `deepseek` dispatcher, `deepseek-tui` runtime, TUI state machine, HTTP/SSE runtime API, MCP server mode, SQLite-backed durable state, LSP diagnostics, keybindings, package wrappers, release automation, localized public README surface, and newer app-server/web distribution surfaces. Its current public install story includes npm, crates.io, Homebrew, GitHub Release binaries, and GHCR Docker references.
 
 DeepseekCode is currently a mostly single-crate CLI with a strong deterministic test/benchmark/dogfood surface and about `36.8k` lines under `src/`. Its CLI core is relatively close, but the terminal product surface is still incomplete.
 

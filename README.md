@@ -1,6 +1,6 @@
 # DeepSeekCode
 
-[English](./README.md) | [中文](./README.zh-CN.md)
+[English](./README.md) | [中文](./README.zh-CN.md) | [日本語](./README.ja-JP.md)
 
 DeepSeekCode is a DeepSeek-first terminal coding agent and local TUI/runtime
 workbench. It is built for the loop you actually use while programming:

@@ -1,6 +1,6 @@
 # DeepSeekCode
 
-[English](./README.md) | [中文](./README.zh-CN.md)
+[English](./README.md) | [中文](./README.zh-CN.md) | [日本語](./README.ja-JP.md)
 
 DeepSeekCode 是一个 DeepSeek-first 的终端代码智能体，也是本地
 TUI/runtime workbench。它面向真实写代码循环：阅读仓库、修改文件、运行检查、
