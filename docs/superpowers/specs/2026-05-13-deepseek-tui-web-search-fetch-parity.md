@@ -47,7 +47,8 @@ the registry/schema layer.
 - `src/tools/web.rs` adds `WebSearchTool` and `FetchUrlTool`.
 - `fetch_url` supports direct HTTP with the standard library and HTTPS through
   `curl`, with bounded output and basic HTML-to-text extraction.
-- `web_search` uses DuckDuckGo HTML search by default and
+- `web_search` uses Bing HTML search by default, keeps DuckDuckGo available via
+  `DSCODE_WEB_SEARCH_PROVIDER=duckduckgo`, and supports
   `DSCODE_WEB_SEARCH_URL_TEMPLATE` for deterministic local tests.
 - `src/tools/registry.rs`, `src/model/deepseek.rs`, and
   `src/cli/commands/serve.rs` expose both tools to agent/MCP/ACP flows.

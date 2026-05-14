@@ -71,7 +71,7 @@ impl Tool for WebSearchTool {
             if search_template().is_some() {
                 "custom"
             } else {
-                "duckduckgo"
+                search_provider()
             }
         ));
         summary.push_str(&format!("meta.count={}\n", results.len()));
@@ -1983,7 +1983,11 @@ fn search_url(query: &str) -> String {
     if let Some(template) = search_template() {
         return template.replace("{query}", &url_encode(query));
     }
-    format!("https://html.duckduckgo.com/html/?q={}", url_encode(query))
+    let encoded = url_encode(query);
+    if search_provider() == "duckduckgo" {
+        return format!("https://html.duckduckgo.com/html/?q={encoded}");
+    }
+    format!("https://www.bing.com/search?q={encoded}")
 }
 
 fn search_template() -> Option<String> {
@@ -1991,6 +1995,18 @@ fn search_template() -> Option<String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn search_provider() -> &'static str {
+    match std::env::var("DSCODE_WEB_SEARCH_PROVIDER")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("duckduckgo") | Some("ddg") => "duckduckgo",
+        Some("bing") | None | Some("") => "bing",
+        Some(_) => "bing",
+    }
 }
 
 fn parse_search_results(html: &str, max_results: usize) -> Vec<SearchResult> {
@@ -2599,6 +2615,34 @@ mod tests {
 
         assert!(output.summary.contains("meta.query=only result"));
         assert!(output.summary.contains("meta.count=1"));
+    }
+
+    #[test]
+    fn web_search_defaults_to_bing_url_and_source() {
+        let _guard = env_lock();
+        std::env::remove_var("DSCODE_WEB_SEARCH_URL_TEMPLATE");
+        std::env::remove_var("DSCODE_WEB_SEARCH_PROVIDER");
+
+        assert_eq!(search_provider(), "bing");
+        assert_eq!(
+            search_url("rust tui"),
+            "https://www.bing.com/search?q=rust+tui"
+        );
+    }
+
+    #[test]
+    fn web_search_provider_env_keeps_duckduckgo_available() {
+        let _guard = env_lock();
+        std::env::remove_var("DSCODE_WEB_SEARCH_URL_TEMPLATE");
+        std::env::set_var("DSCODE_WEB_SEARCH_PROVIDER", "duckduckgo");
+
+        assert_eq!(search_provider(), "duckduckgo");
+        assert_eq!(
+            search_url("rust tui"),
+            "https://html.duckduckgo.com/html/?q=rust+tui"
+        );
+
+        std::env::remove_var("DSCODE_WEB_SEARCH_PROVIDER");
     }
 
     #[test]

@@ -38,7 +38,9 @@ discovery/health output so the manager surface does not show stale server-tool
 state. TUI-started agent runs now also persist live `tool_call` items as tools
 begin, update them through pending approval and terminal statuses, and stream
 `tool_result` upserts without duplicating those results again at turn
-completion.
+completion. Agent-visible `web_search` now defaults to Bing HTML search while
+keeping DuckDuckGo available through an explicit provider override and preserving
+the deterministic URL-template test hook.
 The largest remaining DeepSeek-TUI / Claude Code CLI / Codex CLI gaps are now:
 
 - native supervisor-owned PTY attach/stdin/resize/replay/wait/cancel polish and

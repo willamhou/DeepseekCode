@@ -1257,9 +1257,11 @@ in cache for `find` and later navigation. Opened PDF responses cache page text
 through local `pdftotext` / Poppler, and `screenshot` returns a requested cached
 PDF `pageno`; browser/DOM bitmap screenshots are still out of scope.
 `web_search` accepts `query`, `q`, or a JSON
-`search_query` compatibility array and currently uses DuckDuckGo HTML search
-unless `DSCODE_WEB_SEARCH_URL_TEMPLATE` is set. `image_query` uses DuckDuckGo
-Images unless `DSCODE_IMAGE_SEARCH_URL_TEMPLATE` is set. `fetch_url` supports
+`search_query` compatibility array and uses Bing HTML search by default unless
+`DSCODE_WEB_SEARCH_URL_TEMPLATE` is set. Set
+`DSCODE_WEB_SEARCH_PROVIDER=duckduckgo` to use DuckDuckGo HTML search instead.
+`image_query` uses DuckDuckGo Images unless
+`DSCODE_IMAGE_SEARCH_URL_TEMPLATE` is set. `fetch_url` supports
 `format=text`, `markdown`, or `raw`. DeepSeek-TUI-compatible `finance` accepts
 `ticker` or `symbol`, maps common `type=crypto` bare tickers to `-USD`, and uses
 a Yahoo Finance-compatible quote endpoint unless `DSCODE_FINANCE_URL_TEMPLATE`
