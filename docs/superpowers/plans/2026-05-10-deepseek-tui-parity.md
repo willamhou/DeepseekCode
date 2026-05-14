@@ -18,14 +18,13 @@ DeepseekCode is currently a mostly single-crate CLI with a strong deterministic 
 
 Recent parity slices landed public repo metadata, multilingual README/demo
 surface, TUI `/setup` onboarding, guided setup controls, CLI stdin auth
-persistence, and a masked in-TUI credential wizard. The largest remaining
-DeepSeek-TUI / Claude Code CLI / Codex CLI gaps are now:
+persistence, a masked in-TUI credential wizard, and a first-run setup stepper.
+The largest remaining DeepSeek-TUI / Claude Code CLI / Codex CLI gaps are now:
 
 - native supervisor-owned PTY attach/stdin/resize/replay/wait/cancel polish;
 - live external write-fixture validation across real repositories;
 - release-channel proof for npm and Homebrew once credentials are available;
-- a linear first-run wizard that sequences provider, model, auth, trust, theme,
-  and language controls instead of separate focused commands;
+- completion-state and validation polish inside the first-run wizard;
 - richer model-backed demo evidence beyond deterministic TUI snapshots.
 
 ## Deliverables

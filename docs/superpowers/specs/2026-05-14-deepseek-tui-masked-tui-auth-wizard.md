@@ -40,6 +40,5 @@ workspace.
 
 ## Residual Gap
 
-The first-run setup is still a set of focused guided controls rather than one
-linear wizard that walks provider, model, auth, trust, theme, and language in a
-single flow.
+The first-run setup now has a stepper, but it still lacks per-step completion
+state and automatic advancement after each focused control succeeds.

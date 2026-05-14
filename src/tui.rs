@@ -1570,6 +1570,7 @@ enum TuiConfigCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TuiSetupCommand {
     Show,
+    Wizard,
     Provider,
     Model,
     Auth { env_name: Option<String> },
@@ -1578,6 +1579,46 @@ enum TuiSetupCommand {
     Language,
     Settings,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TuiSetupWizardStep {
+    key: &'static str,
+    title: &'static str,
+    hint: &'static str,
+}
+
+const TUI_SETUP_WIZARD_STEPS: &[TuiSetupWizardStep] = &[
+    TuiSetupWizardStep {
+        key: "provider",
+        title: "Choose provider",
+        hint: "Open provider picker",
+    },
+    TuiSetupWizardStep {
+        key: "model",
+        title: "Choose model",
+        hint: "Open model picker",
+    },
+    TuiSetupWizardStep {
+        key: "auth",
+        title: "Store API key",
+        hint: "Open masked credential wizard",
+    },
+    TuiSetupWizardStep {
+        key: "trust",
+        title: "Inspect trust",
+        hint: "Show workspace trust controls",
+    },
+    TuiSetupWizardStep {
+        key: "theme",
+        title: "Pick theme",
+        hint: "Show theme controls",
+    },
+    TuiSetupWizardStep {
+        key: "language",
+        title: "Set language",
+        hint: "Show language-output controls",
+    },
+];
 
 fn parse_tui_stash_command(line: &str) -> Option<Result<TuiComposerStashCommand, String>> {
     let trimmed = line.trim();
@@ -2904,6 +2945,7 @@ fn parse_tui_setup_command(line: &str) -> Option<Result<TuiSetupCommand, String>
     let args = rest.split_whitespace().collect::<Vec<_>>();
     match args.as_slice() {
         [] | ["show" | "status" | "help" | "--help" | "-h"] => Some(Ok(TuiSetupCommand::Show)),
+        ["wizard" | "start" | "first-run" | "onboard"] => Some(Ok(TuiSetupCommand::Wizard)),
         ["provider" | "providers" | "api"] => Some(Ok(TuiSetupCommand::Provider)),
         ["model" | "models"] => Some(Ok(TuiSetupCommand::Model)),
         ["auth" | "login" | "key" | "env" | "api-key" | "apikey" | "credentials"] => {
@@ -2923,7 +2965,8 @@ fn parse_tui_setup_command(line: &str) -> Option<Result<TuiSetupCommand, String>
         }
         ["settings" | "config"] => Some(Ok(TuiSetupCommand::Settings)),
         _ => Some(Err(
-            "usage: setup [provider|model|auth [ENV]|trust|theme|language|settings]".to_string(),
+            "usage: setup [wizard|provider|model|auth [ENV]|trust|theme|language|settings]"
+                .to_string(),
         )),
     }
 }
@@ -3495,7 +3538,7 @@ const TUI_HELP_COMMANDS: &[TuiHelpCommandInfo] = &[
         category: "Workbench",
         name: "setup",
         aliases: &["onboarding", "doctor"],
-        usage: "/setup [provider|model|auth [ENV]|trust|theme|language|settings]",
+        usage: "/setup [wizard|provider|model|auth [ENV]|trust|theme|language|settings]",
         description: "Show onboarding status or jump into guided setup controls.",
     },
     TuiHelpCommandInfo {
@@ -4012,6 +4055,7 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "?",
     "settings",
     "setup",
+    "setup wizard",
     "setup provider",
     "setup model",
     "setup auth",
@@ -4053,6 +4097,7 @@ const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
     "/task cancel ",
     "/settings",
     "/setup",
+    "/setup wizard",
     "/setup provider",
     "/setup model",
     "/setup auth",
@@ -4583,6 +4628,8 @@ pub struct TuiApp {
     auth_env_name: String,
     auth_secret: String,
     auth_secret_cursor: usize,
+    show_setup_wizard: bool,
+    setup_wizard_step: usize,
     show_approval_modal: bool,
     show_user_input_modal: bool,
     show_mcp_manager: bool,
@@ -4771,6 +4818,8 @@ impl TuiApp {
             auth_env_name: String::new(),
             auth_secret: String::new(),
             auth_secret_cursor: 0,
+            show_setup_wizard: false,
+            setup_wizard_step: 0,
             show_approval_modal: false,
             show_user_input_modal: false,
             show_mcp_manager: false,
@@ -6637,6 +6686,9 @@ impl TuiApp {
         }
         if self.show_auth_modal {
             return self.handle_auth_modal_key(code);
+        }
+        if self.show_setup_wizard {
+            return self.handle_setup_wizard_key(code);
         }
         if self.show_user_input_modal {
             return self.handle_user_input_key(code);
@@ -11602,6 +11654,89 @@ impl TuiApp {
             .unwrap_or_else(|| ".".to_string())
     }
 
+    fn open_setup_wizard(&mut self) {
+        self.show_setup_wizard = true;
+        self.setup_wizard_step = 0;
+        self.show_session_picker = false;
+        self.show_thread_picker = false;
+        self.show_links_picker = false;
+        self.show_feedback_picker = false;
+        self.show_model_picker = false;
+        self.show_provider_picker = false;
+        self.show_auth_modal = false;
+        self.show_command_palette = false;
+        self.status = "setup wizard opened".to_string();
+    }
+
+    fn handle_setup_wizard_key(&mut self, code: KeyCode) -> bool {
+        match code {
+            KeyCode::Esc => {
+                self.show_setup_wizard = false;
+                self.status = "setup wizard closed".to_string();
+            }
+            KeyCode::Down | KeyCode::Right | KeyCode::Char('n') => {
+                self.select_relative_setup_wizard_step(1);
+            }
+            KeyCode::Up | KeyCode::Left | KeyCode::Char('p') => {
+                self.select_relative_setup_wizard_step(-1);
+            }
+            KeyCode::Home => {
+                self.setup_wizard_step = 0;
+                self.status = "setup wizard selected: provider".to_string();
+            }
+            KeyCode::End => {
+                self.setup_wizard_step = TUI_SETUP_WIZARD_STEPS.len().saturating_sub(1);
+                if let Some(step) = self.selected_setup_wizard_step() {
+                    self.status = format!("setup wizard selected: {}", step.key);
+                }
+            }
+            KeyCode::Enter => {
+                self.apply_setup_wizard_step();
+            }
+            _ => {}
+        }
+        true
+    }
+
+    fn selected_setup_wizard_step(&self) -> Option<TuiSetupWizardStep> {
+        TUI_SETUP_WIZARD_STEPS
+            .get(
+                self.setup_wizard_step
+                    .min(TUI_SETUP_WIZARD_STEPS.len().saturating_sub(1)),
+            )
+            .copied()
+    }
+
+    fn select_relative_setup_wizard_step(&mut self, delta: isize) {
+        let len = TUI_SETUP_WIZARD_STEPS.len();
+        if len == 0 {
+            self.status = "setup wizard has no steps".to_string();
+            return;
+        }
+        self.setup_wizard_step =
+            relative_picker_index(self.setup_wizard_step.min(len - 1), len, delta);
+        if let Some(step) = self.selected_setup_wizard_step() {
+            self.status = format!("setup wizard selected: {}", step.key);
+        }
+    }
+
+    fn apply_setup_wizard_step(&mut self) {
+        let Some(step) = self.selected_setup_wizard_step() else {
+            self.status = "setup wizard has no selected step".to_string();
+            return;
+        };
+        self.show_setup_wizard = false;
+        match step.key {
+            "provider" => self.request_provider_command(TuiProviderCommand::Pick),
+            "model" => self.request_model_command(TuiModelCommand::Pick),
+            "auth" => self.open_auth_modal(None),
+            "trust" => self.request_trust_command(TuiTrustCommand::Show),
+            "theme" => self.show_theme_detail(),
+            "language" => self.show_translation_detail(),
+            _ => self.status = format!("setup wizard step unavailable: {}", step.key),
+        }
+    }
+
     fn open_auth_modal(&mut self, env_name: Option<String>) {
         let workspace = self.selected_workspace_string();
         let config_path = tui_setup_config_path(Path::new(&workspace));
@@ -11617,6 +11752,7 @@ impl TuiApp {
         self.show_model_picker = false;
         self.show_provider_picker = false;
         self.show_command_palette = false;
+        self.show_setup_wizard = false;
         self.status = format!("auth credential wizard opened: {}", self.auth_env_name);
     }
 
@@ -11697,6 +11833,7 @@ impl TuiApp {
     fn handle_setup_command(&mut self, command: TuiSetupCommand) {
         match command {
             TuiSetupCommand::Show => self.show_setup_detail(),
+            TuiSetupCommand::Wizard => self.open_setup_wizard(),
             TuiSetupCommand::Provider => self.request_provider_command(TuiProviderCommand::Pick),
             TuiSetupCommand::Model => self.request_model_command(TuiModelCommand::Pick),
             TuiSetupCommand::Auth { env_name } => self.open_auth_modal(env_name),
@@ -11790,6 +11927,7 @@ impl TuiApp {
         let _ = writeln!(detail);
         let _ = writeln!(detail, "Guided Setup Commands");
         let _ = writeln!(detail, "---------------------");
+        let _ = writeln!(detail, "- /setup wizard      Open first-run stepper");
         let _ = writeln!(detail, "- /setup provider    Open provider picker");
         let _ = writeln!(detail, "- /setup model       Open model picker");
         let _ = writeln!(detail, "- /setup auth [ENV]  Open masked credential wizard");
@@ -15835,6 +15973,9 @@ fn draw(frame: &mut Frame, app: &TuiApp) {
     if app.show_auth_modal {
         draw_auth_modal(frame, app);
     }
+    if app.show_setup_wizard {
+        draw_setup_wizard(frame, app);
+    }
     if app.show_user_input_modal {
         draw_user_input_modal(frame, app);
     }
@@ -15935,6 +16076,9 @@ fn draw_sidebar(frame: &mut Frame, app: &TuiApp, area: Rect) {
     } else if app.show_auth_modal {
         lines.push(Line::from("Enter: save credential"));
         lines.push(Line::from("Esc: cancel auth wizard"));
+    } else if app.show_setup_wizard {
+        lines.push(Line::from("Up/Down: setup step"));
+        lines.push(Line::from("Enter: open step"));
     } else if app.mcp_detail.is_some() {
         lines.push(Line::from("PgUp/PgDn: scroll detail"));
         lines.push(Line::from("Esc: close detail"));
@@ -16611,6 +16755,35 @@ fn draw_command_palette(frame: &mut Frame, app: &TuiApp) {
             .title("Command Palette"),
     );
     frame.render_widget(palette, area);
+}
+
+fn draw_setup_wizard(frame: &mut Frame, app: &TuiApp) {
+    let area = bottom_center_rect(frame.area(), 78, 16);
+    frame.render_widget(Clear, area);
+    let workspace = app.selected_workspace_string();
+    let mut lines = vec![
+        Line::from("First-Run Setup Wizard"),
+        Line::from(format!("Workspace: {}", clip_line(&workspace, 58))),
+        Line::from(""),
+    ];
+    for (index, step) in TUI_SETUP_WIZARD_STEPS.iter().enumerate() {
+        let selected = index == app.setup_wizard_step.min(TUI_SETUP_WIZARD_STEPS.len() - 1);
+        let marker = if selected { "> " } else { "  " };
+        lines.push(Line::from(format!(
+            "{marker}{:>2}. {:<18} {}",
+            index + 1,
+            step.title,
+            step.hint
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(
+        "[Enter] open step    [n/Down] next    [p/Up] previous    [Esc] close",
+    ));
+    let modal = Paragraph::new(lines)
+        .alignment(Alignment::Left)
+        .block(Block::default().borders(Borders::ALL).title("Setup Wizard"));
+    frame.render_widget(modal, area);
 }
 
 fn draw_auth_modal(frame: &mut Frame, app: &TuiApp) {
@@ -17627,6 +17800,69 @@ api_key_env = "{env_name}"
         let (kind, detail) = app.mcp_detail.as_ref().expect("translation detail");
         assert_eq!(*kind, TuiMcpDetailKind::Translate);
         assert!(detail.contains("DeepSeekCode Translate"));
+    }
+
+    #[test]
+    fn setup_wizard_sequences_first_run_controls() {
+        let mut app = TuiApp::with_runtime(
+            vec![TuiSession {
+                id: "session-one".to_string(),
+                title: "One".to_string(),
+                workspace: "/tmp/deepseek-setup-wizard".to_string(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-one".to_string()),
+                thread_count: 1,
+            }],
+            vec![TuiThread {
+                id: "thread-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                title: "First thread".to_string(),
+                mode: "agent".to_string(),
+                status: "running".to_string(),
+                latest_turn_id: None,
+                event_seq: 1,
+            }],
+            Vec::new(),
+        );
+
+        run_palette_command(&mut app, "setup wizard");
+        assert!(app.show_setup_wizard);
+        assert_eq!(app.status, "setup wizard opened");
+        let rendered = render_once(&app, 100, 36).expect("setup wizard renders");
+        assert!(rendered.contains("Setup Wizard"));
+        assert!(rendered.contains("Choose provider"));
+        assert!(rendered.contains("Store API key"));
+
+        assert!(app.handle_key(KeyCode::Down));
+        assert_eq!(app.setup_wizard_step, 1);
+        assert!(app.handle_key(KeyCode::Enter));
+        assert!(!app.show_setup_wizard);
+        assert!(app.show_model_picker);
+        assert_eq!(app.status, "model picker opened");
+
+        app.show_model_picker = false;
+        run_palette_command(&mut app, "setup wizard");
+        assert!(app.handle_key(KeyCode::Down));
+        assert!(app.handle_key(KeyCode::Down));
+        assert_eq!(app.setup_wizard_step, 2);
+        assert!(app.handle_key(KeyCode::Enter));
+        assert!(!app.show_setup_wizard);
+        assert!(app.show_auth_modal);
+
+        app.show_auth_modal = false;
+        run_palette_command(&mut app, "setup wizard");
+        assert!(app.handle_key(KeyCode::Down));
+        assert!(app.handle_key(KeyCode::Down));
+        assert!(app.handle_key(KeyCode::Down));
+        assert_eq!(app.setup_wizard_step, 3);
+        assert!(app.handle_key(KeyCode::Enter));
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::Trust {
+                workspace: "/tmp/deepseek-setup-wizard".to_string(),
+                command: TuiTrustCommand::Show,
+            }]
+        );
     }
 
     #[test]
