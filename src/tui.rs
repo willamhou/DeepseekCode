@@ -1423,11 +1423,37 @@ pub enum TuiSkillsCommand {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TuiFeedbackCommand {
+    Pick,
     Show,
     Bug,
     Feature,
     Security,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TuiFeedbackPickerSpec {
+    label: &'static str,
+    command: TuiFeedbackCommand,
+    hint: &'static str,
+}
+
+const TUI_FEEDBACK_PICKER_SPECS: &[TuiFeedbackPickerSpec] = &[
+    TuiFeedbackPickerSpec {
+        label: "bug",
+        command: TuiFeedbackCommand::Bug,
+        hint: "report a reproducible problem",
+    },
+    TuiFeedbackPickerSpec {
+        label: "feature",
+        command: TuiFeedbackCommand::Feature,
+        hint: "request or discuss a workflow improvement",
+    },
+    TuiFeedbackPickerSpec {
+        label: "security",
+        command: TuiFeedbackCommand::Security,
+        hint: "review private vulnerability reporting",
+    },
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TuiCacheCommand {
@@ -1987,14 +2013,15 @@ fn parse_tui_feedback_command(line: &str) -> Option<Result<TuiFeedbackCommand, S
         .or_else(|| strip_tui_command_prefix(trimmed, "feedback"))?;
     let args = rest.split_whitespace().collect::<Vec<_>>();
     match args.as_slice() {
-        [] | ["help" | "--help" | "-h"] => Some(Ok(TuiFeedbackCommand::Show)),
+        [] | ["pick" | "picker"] => Some(Ok(TuiFeedbackCommand::Pick)),
+        ["show" | "help" | "--help" | "-h"] => Some(Ok(TuiFeedbackCommand::Show)),
         ["1" | "bug" | "bug-report" | "bug_report"] => Some(Ok(TuiFeedbackCommand::Bug)),
         ["2" | "feature" | "feature-request" | "feature_request" | "enhancement"] => {
             Some(Ok(TuiFeedbackCommand::Feature))
         }
         ["3" | "security" | "vulnerability" | "private"] => Some(Ok(TuiFeedbackCommand::Security)),
         _ => Some(Err(
-            "usage: feedback [bug|feature|security] or /feedback [bug|feature|security]"
+            "usage: feedback [pick|show|bug|feature|security] or /feedback [pick|show|bug|feature|security]"
                 .to_string(),
         )),
     }
@@ -3100,8 +3127,8 @@ const TUI_HELP_COMMANDS: &[TuiHelpCommandInfo] = &[
         category: "Workbench",
         name: "feedback",
         aliases: &[],
-        usage: "/feedback [bug|feature|security]",
-        description: "Show bug, feature, and security feedback targets.",
+        usage: "/feedback [pick|show|bug|feature|security]",
+        description: "Pick or show bug, feature, and security feedback targets.",
     },
     TuiHelpCommandInfo {
         category: "Interaction",
@@ -3691,6 +3718,8 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "skill uninstall ",
     "skill trust ",
     "feedback",
+    "feedback show",
+    "feedback pick",
     "feedback bug",
     "feedback feature",
     "feedback security",
@@ -3973,6 +4002,8 @@ const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
     "/skill uninstall ",
     "/skill trust ",
     "/feedback",
+    "/feedback show",
+    "/feedback pick",
     "/feedback bug",
     "/feedback feature",
     "/feedback security",
@@ -4212,6 +4243,8 @@ pub struct TuiApp {
     show_command_palette: bool,
     show_session_picker: bool,
     show_thread_picker: bool,
+    show_feedback_picker: bool,
+    feedback_picker_index: usize,
     show_model_picker: bool,
     model_picker_index: usize,
     show_provider_picker: bool,
@@ -4391,6 +4424,8 @@ impl TuiApp {
             show_command_palette: false,
             show_session_picker: false,
             show_thread_picker: false,
+            show_feedback_picker: false,
+            feedback_picker_index: 0,
             show_model_picker: false,
             model_picker_index: 0,
             show_provider_picker: false,
@@ -5710,6 +5745,7 @@ impl TuiApp {
         self.composer.clear();
         self.composer_cursor = 0;
         self.edit_pending_thread_id = None;
+        self.show_feedback_picker = false;
         self.show_model_picker = false;
         self.show_provider_picker = false;
         self.transcript_scroll = 0;
@@ -5963,6 +5999,9 @@ impl TuiApp {
         if self.show_thread_picker && self.handle_thread_picker_mouse(mouse.column, mouse.row) {
             return true;
         }
+        if self.show_feedback_picker {
+            return true;
+        }
         if self.show_model_picker {
             return true;
         }
@@ -6206,6 +6245,9 @@ impl TuiApp {
         }
         if self.show_thread_picker {
             return self.handle_thread_picker_key(code);
+        }
+        if self.show_feedback_picker {
+            return self.handle_feedback_picker_key(code);
         }
         if self.show_model_picker {
             return self.handle_model_picker_key(code);
@@ -8713,6 +8755,30 @@ impl TuiApp {
         true
     }
 
+    fn handle_feedback_picker_key(&mut self, code: KeyCode) -> bool {
+        match code {
+            KeyCode::Esc => {
+                self.show_feedback_picker = false;
+                self.status = "feedback picker closed".to_string();
+            }
+            KeyCode::Enter => self.apply_feedback_picker_selection(),
+            KeyCode::Down | KeyCode::Char('j') => self.select_relative_feedback_picker_item(1),
+            KeyCode::Up | KeyCode::Char('k') => self.select_relative_feedback_picker_item(-1),
+            KeyCode::Home => {
+                self.feedback_picker_index = 0;
+                let item = self.selected_feedback_picker_spec();
+                self.status = format!("feedback picker selected: {}", item.label);
+            }
+            KeyCode::End => {
+                self.feedback_picker_index = TUI_FEEDBACK_PICKER_SPECS.len().saturating_sub(1);
+                let item = self.selected_feedback_picker_spec();
+                self.status = format!("feedback picker selected: {}", item.label);
+            }
+            _ => {}
+        }
+        true
+    }
+
     fn handle_approval_key(&mut self, code: KeyCode) -> bool {
         if self.pending_shell_approval.is_some() {
             match code {
@@ -9275,6 +9341,7 @@ impl TuiApp {
         self.show_model_picker = true;
         self.show_session_picker = false;
         self.show_thread_picker = false;
+        self.show_feedback_picker = false;
         self.show_provider_picker = false;
         self.show_command_palette = false;
         self.model_picker_index = self
@@ -9317,6 +9384,43 @@ impl TuiApp {
         self.status = format!("model picker queued model: {} ({workspace})", model.model);
     }
 
+    fn open_feedback_picker(&mut self) {
+        self.show_feedback_picker = true;
+        self.show_session_picker = false;
+        self.show_thread_picker = false;
+        self.show_model_picker = false;
+        self.show_provider_picker = false;
+        self.show_command_palette = false;
+        self.feedback_picker_index = self
+            .feedback_picker_index
+            .min(TUI_FEEDBACK_PICKER_SPECS.len().saturating_sub(1));
+        self.status = "feedback picker opened".to_string();
+    }
+
+    fn selected_feedback_picker_spec(&self) -> &'static TuiFeedbackPickerSpec {
+        &TUI_FEEDBACK_PICKER_SPECS[self
+            .feedback_picker_index
+            .min(TUI_FEEDBACK_PICKER_SPECS.len() - 1)]
+    }
+
+    fn select_relative_feedback_picker_item(&mut self, delta: isize) {
+        let len = TUI_FEEDBACK_PICKER_SPECS.len();
+        if len == 0 {
+            self.status = "feedback picker has no targets".to_string();
+            return;
+        }
+        self.feedback_picker_index =
+            relative_picker_index(self.feedback_picker_index.min(len - 1), len, delta);
+        let item = self.selected_feedback_picker_spec();
+        self.status = format!("feedback picker selected: {}", item.label);
+    }
+
+    fn apply_feedback_picker_selection(&mut self) {
+        let item = self.selected_feedback_picker_spec();
+        self.show_feedback_picker = false;
+        self.show_feedback_detail(item.command);
+    }
+
     fn request_provider_command(&mut self, command: TuiProviderCommand) {
         if command == TuiProviderCommand::Pick {
             self.open_provider_picker();
@@ -9337,6 +9441,7 @@ impl TuiApp {
         self.show_provider_picker = true;
         self.show_session_picker = false;
         self.show_thread_picker = false;
+        self.show_feedback_picker = false;
         self.show_model_picker = false;
         self.show_command_palette = false;
         self.provider_picker_provider_index = self
@@ -10867,9 +10972,14 @@ impl TuiApp {
     }
 
     fn show_feedback_detail(&mut self, command: TuiFeedbackCommand) {
+        if command == TuiFeedbackCommand::Pick {
+            self.open_feedback_picker();
+            return;
+        }
         let detail = render_feedback_detail(command);
         self.set_mcp_detail(TuiMcpDetailKind::Feedback, detail);
         self.status = match command {
+            TuiFeedbackCommand::Pick => "feedback picker opened".to_string(),
             TuiFeedbackCommand::Show => "feedback options shown".to_string(),
             TuiFeedbackCommand::Bug => "feedback bug link shown".to_string(),
             TuiFeedbackCommand::Feature => "feedback feature link shown".to_string(),
@@ -14433,7 +14543,7 @@ fn render_feedback_detail(command: TuiFeedbackCommand) -> String {
     let _ = writeln!(detail, "Repository: {DEEPSEEK_CODE_REPO_URL}");
     let _ = writeln!(detail);
     match command {
-        TuiFeedbackCommand::Show => {
+        TuiFeedbackCommand::Pick | TuiFeedbackCommand::Show => {
             let _ = writeln!(detail, "Choose a feedback target:");
             let _ = writeln!(detail, "- feedback bug       {DEEPSEEK_CODE_BUG_URL}");
             let _ = writeln!(detail, "- feedback feature   {DEEPSEEK_CODE_FEATURE_URL}");
@@ -14768,6 +14878,9 @@ fn draw(frame: &mut Frame, app: &TuiApp) {
     if app.show_thread_picker {
         draw_thread_picker(frame, app);
     }
+    if app.show_feedback_picker {
+        draw_feedback_picker(frame, app);
+    }
     if app.show_model_picker {
         draw_model_picker(frame, app);
     }
@@ -14865,6 +14978,9 @@ fn draw_sidebar(frame: &mut Frame, app: &TuiApp, area: Rect) {
     if app.show_mcp_manager {
         lines.push(Line::from("PgUp/PgDn: scroll MCP manager"));
         lines.push(Line::from("Esc: close MCP manager"));
+    } else if app.show_feedback_picker {
+        lines.push(Line::from("Enter: open feedback"));
+        lines.push(Line::from("Esc: close feedback picker"));
     } else if app.show_model_picker {
         lines.push(Line::from("Enter: apply model"));
         lines.push(Line::from("Esc: close model picker"));
@@ -15400,6 +15516,67 @@ fn draw_model_picker(frame: &mut Frame, app: &TuiApp) {
             "Direct command: model {} | Workspace: {workspace}",
             model.model
         )),
+    ])
+    .wrap(Wrap { trim: true })
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Action Preview"),
+    );
+    frame.render_widget(footer, layout[2]);
+}
+
+fn draw_feedback_picker(frame: &mut Frame, app: &TuiApp) {
+    let area = top_center_rect(frame.area(), 84, 16);
+    frame.render_widget(Clear, area);
+    let layout = Layout::vertical([
+        Constraint::Length(4),
+        Constraint::Min(6),
+        Constraint::Length(4),
+    ])
+    .split(area);
+    let header = Paragraph::new(vec![
+        Line::from("Feedback Picker"),
+        Line::from("Up/Down select, Enter open, Esc close"),
+    ])
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Feedback Picker"),
+    );
+    frame.render_widget(header, layout[0]);
+
+    let items = TUI_FEEDBACK_PICKER_SPECS
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let selected = index == app.feedback_picker_index;
+            let marker = if selected { "> " } else { "  " };
+            let row = ListItem::new(format!("{marker}{:<10} {}", item.label, item.hint));
+            if selected {
+                row.style(
+                    Style::default()
+                        .fg(app.theme.accent_color())
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                row
+            }
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(
+        List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Feedback Targets"),
+        ),
+        layout[1],
+    );
+
+    let item = app.selected_feedback_picker_spec();
+    let footer = Paragraph::new(vec![
+        Line::from(format!("Selection: feedback {}", item.label)),
+        Line::from(format!("Direct command: feedback {}", item.label)),
     ])
     .wrap(Wrap { trim: true })
     .block(
@@ -19925,7 +20102,7 @@ mod tests {
     fn feedback_command_renders_links() {
         let mut app = TuiApp::new(Vec::new());
 
-        run_palette_command(&mut app, "feedback");
+        run_palette_command(&mut app, "feedback show");
 
         assert_eq!(app.status, "feedback options shown");
         let (kind, detail) = app.mcp_detail.as_ref().expect("feedback detail");
@@ -19940,6 +20117,47 @@ mod tests {
         let (_, detail) = app.mcp_detail.as_ref().expect("security detail");
         assert!(detail.contains("Security report"));
         assert!(detail.contains(DEEPSEEK_CODE_SECURITY_URL));
+    }
+
+    #[test]
+    fn feedback_command_opens_picker() {
+        let mut app = TuiApp::new(Vec::new());
+
+        run_palette_command(&mut app, "feedback");
+
+        assert!(app.show_feedback_picker);
+        assert_eq!(app.status, "feedback picker opened");
+        assert!(app.mcp_detail.is_none());
+        let output = render_once(&app, 120, 32).unwrap();
+        assert!(output.contains("Feedback Picker"));
+        assert!(output.contains("Feedback Targets"));
+        assert!(output.contains("feedback bug"));
+
+        assert!(app.handle_key(KeyCode::Down));
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert!(!app.show_feedback_picker);
+        assert_eq!(app.status, "feedback feature link shown");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("feature detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Feedback);
+        assert!(detail.contains("Feature request"));
+        assert!(detail.contains(DEEPSEEK_CODE_FEATURE_URL));
+    }
+
+    #[test]
+    fn composer_feedback_slash_opens_picker() {
+        let mut app = TuiApp::new(Vec::new());
+
+        app.composer_focused = true;
+        for ch in "/feedback".chars() {
+            assert!(app.handle_key(KeyCode::Char(ch)));
+        }
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert!(app.show_feedback_picker);
+        assert!(app.composer.is_empty());
+        assert_eq!(app.status, "feedback picker opened");
+        assert!(app.mcp_detail.is_none());
     }
 
     #[test]

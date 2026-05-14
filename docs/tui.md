@@ -45,8 +45,8 @@ Current surfaces:
 - remote skill registry sync with `/skills sync`, caching supported TOML,
   SKILL.md, GitHub, tar.gz, and zip entries under the configured
   `skills.cache_dir`
-- feedback links with `feedback` / `/feedback` and
-  `feedback bug|feature|security`
+- feedback picker and links with `feedback` / `/feedback`, `feedback show`,
+  and `feedback bug|feature|security`
 - repository and DeepSeek API links with `links` / `/links` plus
   `dashboard` / `/dashboard` and `api` / `/api` aliases
 - home dashboard with `home` / `/home` plus `stats` / `/stats` and
@@ -496,7 +496,8 @@ Command palette commands currently implemented:
 | `skill update <name>`, `/skill update <name>` | Refetch and replace a user skill installed by `/skill install` |
 | `skill trust <name>`, `/skill trust <name>` | Write a `.trusted` marker beside a configured user skill TOML file |
 | `skill uninstall <name>`, `/skill uninstall <name>` | Remove a configured user skill TOML file and its `.trusted` marker; bundled repo skills are protected |
-| `feedback`, `/feedback` | Show DeepSeekCode feedback targets in the right-side detail panel |
+| `feedback`, `/feedback` | Open the feedback target picker |
+| `feedback show`, `/feedback show` | Show DeepSeekCode feedback targets in the right-side detail panel |
 | `feedback bug|feature|security`, `/feedback bug|feature|security` | Show GitHub issue or security-policy links for the selected feedback type |
 | `links`, `/links`, `dashboard`, `/dashboard`, `api`, `/api` | Show DeepSeekCode repository/docs links and DeepSeek platform/API docs in the right-side detail panel |
 | `home`, `/home`, `stats`, `/stats`, `overview`, `/overview` | Show a compact runtime dashboard with session/thread, task, usage, pending input, and quick-action links |

@@ -550,9 +550,9 @@ Landed first slice:
   downloaded/up-to-date/skipped/failed counts, and skipping unsupported source
   entries with an actionable reason
 - TUI now supports DeepSeek-TUI-style `/feedback [bug|feature|security]` plus
-  command-palette `feedback`, rendering repository feedback targets and
-  security-policy links in the detail panel without attempting to launch a GUI
-  browser from the terminal
+  command-palette `feedback`, opening a feedback target picker and rendering
+  repository feedback targets and security-policy links in the detail panel
+  without attempting to launch a GUI browser from the terminal
 - TUI now supports DeepSeek-TUI-style `/links` plus `dashboard` and `api`
   aliases, rendering DeepSeekCode repository/docs and DeepSeek platform/API
   documentation links in the detail panel without attempting to launch a GUI

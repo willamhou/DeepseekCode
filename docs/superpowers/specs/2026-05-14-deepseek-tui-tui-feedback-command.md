@@ -11,8 +11,8 @@ routes were not discoverable from the workbench.
 
 ## Implementation
 
-- Added built-in `feedback` / `/feedback` parsing before custom slash-command
-  fallback.
+- Added built-in `feedback` / `/feedback`, `feedback show`, and
+  `/feedback show` parsing before custom slash-command fallback.
 - Added `feedback bug`, `feedback feature`, and `feedback security` aliases,
   including DeepSeek-TUI-style numeric shortcuts.
 - Rendered the repository, issue, and security-policy links in the right-side
@@ -32,6 +32,6 @@ routes were not discoverable from the workbench.
 
 ## Remaining
 
-DeepSeekCode does not yet have DeepSeek-TUI's modal feedback picker. The
-terminal command path is covered by explicit feedback subcommands and the detail
-panel.
+The interactive feedback picker is covered by
+`2026-05-14-deepseek-tui-tui-feedback-picker.md`. The terminal command path is
+covered by explicit feedback subcommands and the detail panel.
