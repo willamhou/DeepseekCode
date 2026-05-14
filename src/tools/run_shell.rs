@@ -126,6 +126,14 @@ pub(crate) fn apply_shell_env(process: &mut Command, env: &BTreeMap<String, Stri
     }
 }
 
+#[cfg(test)]
+pub(crate) fn shell_env_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn is_valid_shell_env_key(key: &str) -> bool {
     let mut chars = key.chars();
     let Some(first) = chars.next() else {
@@ -484,6 +492,34 @@ mod tests {
         cancel_after: usize,
     }
 
+    struct EnvRestore {
+        keys: Vec<(&'static str, Option<OsString>)>,
+    }
+
+    impl EnvRestore {
+        fn set(pairs: &[(&'static str, &'static str)]) -> Self {
+            let keys = pairs
+                .iter()
+                .map(|(key, _)| (*key, std::env::var_os(key)))
+                .collect::<Vec<_>>();
+            for (key, value) in pairs {
+                std::env::set_var(key, value);
+            }
+            Self { keys }
+        }
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            for (key, value) in self.keys.drain(..) {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
     impl CancellationCheck for CancelAfter {
         fn is_cancelled(&mut self) -> AppResult<bool> {
             self.calls += 1;
@@ -561,6 +597,53 @@ mod tests {
             .unwrap();
 
         assert!(output.summary.contains("from-env"), "{}", output.summary);
+    }
+
+    #[test]
+    fn run_shell_inherits_parent_proxy_env() {
+        let _guard = shell_env_test_lock();
+        let _restore = EnvRestore::set(&[
+            ("HTTP_PROXY", "http://proxy.local:8080"),
+            ("no_proxy", "localhost,127.0.0.1"),
+        ]);
+        let output = RunShellTool
+            .execute(ToolInput::new().with_arg("command", "echo $HTTP_PROXY $no_proxy"))
+            .unwrap();
+
+        assert!(
+            output.summary.contains("http://proxy.local:8080"),
+            "{}",
+            output.summary
+        );
+        assert!(
+            output.summary.contains("localhost,127.0.0.1"),
+            "{}",
+            output.summary
+        );
+    }
+
+    #[test]
+    fn run_shell_explicit_env_overrides_parent_proxy_env() {
+        let _guard = shell_env_test_lock();
+        let _restore = EnvRestore::set(&[("HTTPS_PROXY", "http://parent.proxy:8080")]);
+        let output = RunShellTool
+            .execute(
+                ToolInput::new()
+                    .with_arg("command", "echo $HTTPS_PROXY")
+                    .with_arg("env.HTTPS_PROXY", "http://explicit.proxy:8080"),
+            )
+            .unwrap();
+
+        assert!(
+            output.summary.contains("http://explicit.proxy:8080"),
+            "{}",
+            output.summary
+        );
+        assert!(
+            !output.summary.contains("http://parent.proxy:8080"),
+            "{}",
+            output.summary
+        );
     }
 
     #[test]

@@ -25,7 +25,9 @@ refresh also showed DeepSeek-TUI's new terminal stability fixes; DeepSeekCode
 now has a TUI emergency terminal restore guard plus Unix SIGINT/SIGTERM/SIGHUP
 cleanup for raw-mode/alternate-screen recovery, and TUI clipping now respects
 terminal display width so CJK / URL / no-whitespace previews stay within panel
-budgets.
+budgets. Shell child tasks now also have regression evidence that standard
+proxy environment variables survive into `run_shell` and background
+`exec_shell` jobs, with explicit `env.KEY` overrides still taking precedence.
 The largest remaining DeepSeek-TUI / Claude Code CLI / Codex CLI gaps are now:
 
 - native supervisor-owned PTY attach/stdin/resize/replay/wait/cancel polish and

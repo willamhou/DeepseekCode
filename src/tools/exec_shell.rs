@@ -3885,6 +3885,34 @@ fn reap_process_if_child(pid: u32) {
 mod tests {
     use super::*;
 
+    struct EnvRestore {
+        keys: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+
+    impl EnvRestore {
+        fn set(pairs: &[(&'static str, &'static str)]) -> Self {
+            let keys = pairs
+                .iter()
+                .map(|(key, _)| (*key, std::env::var_os(key)))
+                .collect::<Vec<_>>();
+            for (key, value) in pairs {
+                std::env::set_var(key, value);
+            }
+            Self { keys }
+        }
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            for (key, value) in self.keys.drain(..) {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
     fn temp_root(label: &str) -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -4022,6 +4050,90 @@ mod tests {
 
         assert!(
             waited.summary.contains("from-exec-env"),
+            "{}",
+            waited.summary
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn exec_shell_background_inherits_parent_proxy_env() {
+        let _guard = crate::tools::run_shell::shell_env_test_lock();
+        let _restore = EnvRestore::set(&[
+            ("ALL_PROXY", "socks5://proxy.local:1080"),
+            ("ftp_proxy", "http://ftp-proxy.local:8080"),
+        ]);
+        let root = temp_root("proxy-env");
+        fs::create_dir_all(&root).unwrap();
+        let cwd = root.display().to_string();
+        let started = ExecShellTool
+            .execute(
+                ToolInput::new()
+                    .with_arg("command", "echo $ALL_PROXY $ftp_proxy")
+                    .with_arg("background", "true")
+                    .with_arg("cwd", cwd.clone()),
+            )
+            .unwrap();
+        let task_id = task_id_from(&started.summary);
+        let waited = ExecShellWaitTool {
+            tool_name: "exec_shell_wait",
+        }
+        .execute(
+            ToolInput::new()
+                .with_arg("task_id", task_id)
+                .with_arg("cwd", cwd.clone())
+                .with_arg("timeout_ms", "1000"),
+        )
+        .unwrap();
+
+        assert!(
+            waited.summary.contains("socks5://proxy.local:1080"),
+            "{}",
+            waited.summary
+        );
+        assert!(
+            waited.summary.contains("http://ftp-proxy.local:8080"),
+            "{}",
+            waited.summary
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn exec_shell_background_explicit_env_overrides_parent_proxy_env() {
+        let _guard = crate::tools::run_shell::shell_env_test_lock();
+        let _restore = EnvRestore::set(&[("NO_PROXY", "parent.internal")]);
+        let root = temp_root("proxy-env-override");
+        fs::create_dir_all(&root).unwrap();
+        let cwd = root.display().to_string();
+        let started = ExecShellTool
+            .execute(
+                ToolInput::new()
+                    .with_arg("command", "echo $NO_PROXY")
+                    .with_arg("background", "true")
+                    .with_arg("cwd", cwd.clone())
+                    .with_arg("env.NO_PROXY", "explicit.internal"),
+            )
+            .unwrap();
+        let task_id = task_id_from(&started.summary);
+        let waited = ExecShellWaitTool {
+            tool_name: "exec_shell_wait",
+        }
+        .execute(
+            ToolInput::new()
+                .with_arg("task_id", task_id)
+                .with_arg("cwd", cwd.clone())
+                .with_arg("timeout_ms", "1000"),
+        )
+        .unwrap();
+
+        assert!(
+            waited.summary.contains("explicit.internal"),
+            "{}",
+            waited.summary
+        );
+        assert!(
+            !waited.summary.contains("parent.internal"),
             "{}",
             waited.summary
         );
