@@ -339,6 +339,7 @@ Command palette commands currently implemented:
 | `help`, `/help`, `/?` | Show the TUI help index in the right-side detail panel |
 | `help <command>`, `/help <command>` | Show command-specific usage, aliases, and description |
 | `settings`, `/settings`, `config`, `/config` | Show mode, config file locations, and focused configuration command entry points |
+| `setup`, `onboarding`, `doctor`, `/setup`, `/onboarding`, `/doctor` | Show a read-only onboarding checklist with selected workspace config, model, API key env, live-model readiness, and next commands |
 | `config tui`, `config native`, `config web`, `/config tui`, `/config native`, `/config web` | Show the requested config surface and focused DeepSeekCode config commands |
 | `config model [pick\|show\|list\|<name>]`, `/config model [pick\|show\|list\|<name>]` | Route to selected workspace model picker, inspection, catalog, or update commands |
 | `config provider [pick\|show\|list\|<name> [model]]`, `/config provider [pick\|show\|list\|<name> [model]]` | Route to provider preset picker, inspection, or updates |

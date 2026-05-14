@@ -1322,6 +1322,7 @@ fn mcp_detail_summary(
         TuiMcpDetailKind::Mode => Err(app_error("mode details are not MCP details")),
         TuiMcpDetailKind::Help => Err(app_error("help details are not MCP details")),
         TuiMcpDetailKind::Settings => Err(app_error("settings details are not MCP details")),
+        TuiMcpDetailKind::Setup => Err(app_error("setup details are not MCP details")),
         TuiMcpDetailKind::Theme => Err(app_error("theme details are not MCP details")),
         TuiMcpDetailKind::StatusLine => Err(app_error("statusline details are not MCP details")),
         TuiMcpDetailKind::Verbose => Err(app_error("verbose details are not MCP details")),

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use std::{fs, io};
+use std::{env, fs, io};
 
 use crossterm::{
     event::{
@@ -21,6 +21,8 @@ use ratatui::{
     Frame, Terminal,
 };
 
+use crate::config::load::config_assignments;
+use crate::config::types::AppConfig;
 use crate::core::runtime::{
     AutomationRecord, ItemRecord, RuntimeEvent, SessionRecord, TaskRecord, ThreadRecord,
     UsageRecord,
@@ -604,6 +606,7 @@ pub enum TuiMcpDetailKind {
     Mode,
     Help,
     Settings,
+    Setup,
     Theme,
     StatusLine,
     Verbose,
@@ -666,6 +669,7 @@ impl TuiMcpDetailKind {
             Self::Mode => "mode",
             Self::Help => "help",
             Self::Settings => "settings",
+            Self::Setup => "setup",
             Self::Theme => "theme",
             Self::StatusLine => "statusline",
             Self::Verbose => "verbose",
@@ -728,6 +732,7 @@ impl TuiMcpDetailKind {
             Self::Mode => "Mode",
             Self::Help => "Help",
             Self::Settings => "Settings",
+            Self::Setup => "Setup",
             Self::Theme => "Theme",
             Self::StatusLine => "Statusline",
             Self::Verbose => "Verbose Transcript",
@@ -790,6 +795,7 @@ impl TuiMcpDetailKind {
             Self::Mode => Self::Manager,
             Self::Help => Self::Manager,
             Self::Settings => Self::Manager,
+            Self::Setup => Self::Manager,
             Self::Theme => Self::Manager,
             Self::StatusLine => Self::Manager,
             Self::Verbose => Self::Manager,
@@ -852,6 +858,7 @@ impl TuiMcpDetailKind {
             Self::Mode => Self::Manager,
             Self::Help => Self::Manager,
             Self::Settings => Self::Manager,
+            Self::Setup => Self::Manager,
             Self::Theme => Self::Manager,
             Self::StatusLine => Self::Manager,
             Self::Verbose => Self::Manager,
@@ -2873,6 +2880,23 @@ fn parse_tui_settings_command(line: &str) -> Option<Result<(), String>> {
     }
 }
 
+fn parse_tui_setup_command(line: &str) -> Option<Result<(), String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/setup")
+        .or_else(|| strip_tui_command_prefix(trimmed, "setup"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "/onboarding"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "onboarding"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "/doctor"))
+        .or_else(|| strip_tui_command_prefix(trimmed, "doctor"))?;
+    let args = rest.split_whitespace().collect::<Vec<_>>();
+    match args.as_slice() {
+        [] | ["show" | "status" | "help" | "--help" | "-h"] => Some(Ok(())),
+        _ => Some(Err(
+            "usage: setup, onboarding, doctor, /setup, /onboarding, or /doctor".to_string(),
+        )),
+    }
+}
+
 fn strip_tui_command_prefix<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
     let rest = value.strip_prefix(prefix)?;
     if rest.is_empty() || rest.starts_with(char::is_whitespace) {
@@ -3414,6 +3438,13 @@ const TUI_HELP_COMMANDS: &[TuiHelpCommandInfo] = &[
     },
     TuiHelpCommandInfo {
         category: "Workbench",
+        name: "setup",
+        aliases: &["onboarding", "doctor"],
+        usage: "/setup",
+        description: "Show the read-only onboarding checklist for the selected workspace.",
+    },
+    TuiHelpCommandInfo {
+        category: "Workbench",
         name: "theme",
         aliases: &[],
         usage: "/theme [dark|light|grayscale|system]",
@@ -3925,6 +3956,9 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "help mcp",
     "?",
     "settings",
+    "setup",
+    "onboarding",
+    "doctor",
     "config",
     "config tui",
     "config native",
@@ -3955,6 +3989,9 @@ const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
     "/task show ",
     "/task cancel ",
     "/settings",
+    "/setup",
+    "/onboarding",
+    "/doctor",
     "/config",
     "/config tui",
     "/config native",
@@ -6714,6 +6751,19 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(command) = parse_tui_setup_command(&content) {
+                    match command {
+                        Ok(()) => {
+                            self.show_setup_detail();
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some(command) = parse_tui_note_command(&content) {
                     match command {
                         Ok(command) => {
@@ -7637,6 +7687,17 @@ impl TuiApp {
             match command {
                 Ok(command) => {
                     self.show_help_detail(command);
+                }
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_setup_command(command) {
+            match command {
+                Ok(()) => {
+                    self.show_setup_detail();
                 }
                 Err(message) => {
                     self.status = message;
@@ -11445,6 +11506,97 @@ impl TuiApp {
         self.status = "settings shown".to_string();
     }
 
+    fn show_setup_detail(&mut self) {
+        let detail = self.render_setup_detail();
+        self.set_mcp_detail(TuiMcpDetailKind::Setup, detail);
+        self.status = "setup checklist shown".to_string();
+    }
+
+    fn render_setup_detail(&self) -> String {
+        let workspace = self
+            .selected_session()
+            .map(|session| session.workspace.as_str())
+            .unwrap_or(".");
+        let workspace_path = PathBuf::from(workspace);
+        let default_config = AppConfig::default();
+        let config_dir = PathBuf::from(&default_config.workspace.config_dir);
+        let config_path = if config_dir.is_absolute() {
+            config_dir.join("config.toml")
+        } else {
+            workspace_path.join(config_dir).join("config.toml")
+        };
+        let config_present = config_path.exists();
+        let (config, active_profile) = read_tui_setup_config(&config_path);
+        let api_key_present = tui_env_var_nonempty(&config.model.api_key_env);
+        let ready_for_live_model = config_present && api_key_present;
+
+        let mut detail = String::new();
+        let _ = writeln!(detail, "DeepSeekCode Setup");
+        let _ = writeln!(detail, "==================");
+        let _ = writeln!(detail);
+        let _ = writeln!(
+            detail,
+            "Read-only onboarding check for the selected workspace."
+        );
+        let _ = writeln!(detail);
+        push_status_row(&mut detail, "Workspace:", workspace);
+        push_status_row(
+            &mut detail,
+            "Config:",
+            &format!(
+                "{} ({})",
+                config_path.display(),
+                if config_present { "present" } else { "missing" }
+            ),
+        );
+        if let Some(profile) = active_profile.as_deref() {
+            push_status_row(&mut detail, "Profile:", profile);
+        }
+        push_status_row(&mut detail, "Model:", &config.model.model);
+        push_status_row(&mut detail, "Base URL:", &config.model.base_url);
+        push_status_row(
+            &mut detail,
+            "API key env:",
+            &format!(
+                "{} ({})",
+                config.model.api_key_env,
+                if api_key_present {
+                    "present"
+                } else {
+                    "missing"
+                }
+            ),
+        );
+        push_status_row(
+            &mut detail,
+            "Live model:",
+            if ready_for_live_model {
+                "ready"
+            } else {
+                "blocked"
+            },
+        );
+        let _ = writeln!(detail);
+        let _ = writeln!(detail, "Next Commands");
+        let _ = writeln!(detail, "-------------");
+        if !config_present {
+            let _ = writeln!(detail, "- deepseek config init");
+        }
+        if !api_key_present {
+            let _ = writeln!(detail, "- export {}=...", config.model.api_key_env);
+        }
+        let _ = writeln!(detail, "- deepseek doctor");
+        let _ = writeln!(detail, "- deepseek smoke");
+        let _ = writeln!(detail);
+        let _ = writeln!(detail, "TUI Commands");
+        let _ = writeln!(detail, "------------");
+        let _ = writeln!(detail, "- /provider pick");
+        let _ = writeln!(detail, "- /model pick");
+        let _ = writeln!(detail, "- /trust list");
+        let _ = writeln!(detail, "- /settings");
+        detail
+    }
+
     fn render_settings_detail(&self) -> String {
         let mut detail = String::new();
         let _ = writeln!(detail, "DeepSeekCode Settings");
@@ -11488,6 +11640,7 @@ impl TuiApp {
             detail,
             "- /config [tui|native|web|model|provider|profile|mode|theme|verbose|translate]"
         );
+        let _ = writeln!(detail, "- /setup | /onboarding | /doctor");
         let _ = writeln!(detail, "- /mode [agent|plan|yolo|1|2|3]");
         let _ = writeln!(detail, "- /diff");
         let _ = writeln!(detail, "- /clear");
@@ -15034,6 +15187,120 @@ fn render_links_detail(command: TuiLinksCommand) -> String {
     detail
 }
 
+fn read_tui_setup_config(config_path: &Path) -> (AppConfig, Option<String>) {
+    let mut config = AppConfig::default();
+    let env_profile = first_nonempty_tui_env(&["DSCODE_PROFILE", "DEEPSEEK_PROFILE"]);
+    let mut file_profile = None;
+
+    if let Ok(content) = fs::read_to_string(config_path) {
+        let assignments = config_assignments(&content);
+        for (key, value) in assignments
+            .iter()
+            .filter(|(key, _)| !key.starts_with("profiles."))
+        {
+            apply_tui_setup_config_key(key, value, &mut config, &mut file_profile);
+        }
+
+        let active_profile = env_profile.as_ref().or(file_profile.as_ref());
+        if let Some(profile) = active_profile {
+            let prefix = format!("profiles.{profile}.");
+            let mut ignored_profile = None;
+            for (key, value) in assignments.iter().filter_map(|(key, value)| {
+                key.strip_prefix(&prefix).map(|stripped| (stripped, value))
+            }) {
+                apply_tui_setup_config_key(key, value, &mut config, &mut ignored_profile);
+            }
+        }
+    }
+
+    apply_tui_setup_env_overrides(&mut config);
+    (config, env_profile.or(file_profile))
+}
+
+fn apply_tui_setup_config_key(
+    key: &str,
+    value: &str,
+    config: &mut AppConfig,
+    active_profile: &mut Option<String>,
+) {
+    let parsed = tui_config_string_value(value);
+    if parsed.trim().is_empty() {
+        return;
+    }
+    match key {
+        "model.base_url" => config.model.base_url = parsed,
+        "model.model" => config.model.model = parsed,
+        "model.api_key_env" => config.model.api_key_env = parsed,
+        "model.reasoning_effort" => config.model.reasoning_effort = parsed,
+        "workspace.active_profile" => *active_profile = Some(parsed),
+        _ => {}
+    }
+}
+
+fn apply_tui_setup_env_overrides(config: &mut AppConfig) {
+    if let Some(base_url) = first_nonempty_tui_env(&["DEEPSEEK_BASE_URL"]) {
+        config.model.base_url = base_url;
+    }
+    if let Some(model) = first_nonempty_tui_env(&["DEEPSEEK_MODEL"]) {
+        config.model.model = model;
+    }
+    if let Some(api_key_env) = first_nonempty_tui_env(&["DEEPSEEK_API_KEY_ENV"]) {
+        config.model.api_key_env = api_key_env;
+    }
+    if let Some(reasoning_effort) = first_nonempty_tui_env(&["DEEPSEEK_REASONING_EFFORT"]) {
+        config.model.reasoning_effort = reasoning_effort;
+    }
+}
+
+fn first_nonempty_tui_env(keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .filter_map(|key| env::var(key).ok())
+        .find(|value| !value.trim().is_empty())
+}
+
+fn tui_env_var_nonempty(key: &str) -> bool {
+    env::var(key).is_ok_and(|value| !value.trim().is_empty())
+}
+
+fn tui_config_string_value(value: &str) -> String {
+    let trimmed = value.trim();
+    if let Some(value) = parse_basic_toml_string(trimmed) {
+        return value;
+    }
+    trimmed
+        .split('#')
+        .next()
+        .unwrap_or(trimmed)
+        .trim()
+        .to_string()
+}
+
+fn parse_basic_toml_string(value: &str) -> Option<String> {
+    let mut chars = value.strip_prefix('"')?.chars();
+    let mut output = String::new();
+    let mut escaped = false;
+    for ch in &mut chars {
+        if escaped {
+            output.push(match ch {
+                'n' => '\n',
+                'r' => '\r',
+                't' => '\t',
+                '"' => '"',
+                '\\' => '\\',
+                other => other,
+            });
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => escaped = true,
+            '"' => return Some(output),
+            other => output.push(other),
+        }
+    }
+    None
+}
+
 fn render_help_detail(command: &TuiHelpCommand) -> String {
     match command {
         TuiHelpCommand::Show => render_help_index_detail(),
@@ -16937,6 +17204,71 @@ mod tests {
         let (kind, detail) = app.mcp_detail.as_ref().expect("composer settings detail");
         assert_eq!(*kind, TuiMcpDetailKind::Settings);
         assert!(detail.contains("Settings are edited through focused commands"));
+    }
+
+    #[test]
+    fn setup_command_renders_onboarding_checklist() {
+        let root = temp_root("setup-command");
+        let config_dir = root.join(".dscode");
+        fs::create_dir_all(&config_dir).unwrap();
+        let env_name = format!("DEEPSEEK_TUI_SETUP_TEST_KEY_{}", std::process::id());
+        std::env::remove_var(&env_name);
+        fs::write(
+            config_dir.join("config.toml"),
+            format!(
+                r#"[model]
+base_url = "https://api.deepseek.com"
+model = "deepseek-v4-pro"
+api_key_env = "{env_name}"
+"#
+            ),
+        )
+        .unwrap();
+        let workspace = root.display().to_string();
+        let mut app = TuiApp::with_runtime(
+            vec![TuiSession {
+                id: "session-one".to_string(),
+                title: "One".to_string(),
+                workspace: workspace.clone(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-one".to_string()),
+                thread_count: 1,
+            }],
+            vec![TuiThread {
+                id: "thread-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                title: "First thread".to_string(),
+                mode: "agent".to_string(),
+                status: "running".to_string(),
+                latest_turn_id: None,
+                event_seq: 1,
+            }],
+            Vec::new(),
+        );
+
+        run_palette_command(&mut app, "setup");
+
+        assert_eq!(app.status, "setup checklist shown");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("setup detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Setup);
+        assert!(detail.contains("DeepSeekCode Setup"));
+        assert!(detail.contains(&workspace));
+        assert!(detail.contains("deepseek-v4-pro"));
+        assert!(detail.contains(&env_name));
+        assert!(detail.contains("Live model:"));
+        assert!(detail.contains("deepseek doctor"));
+        assert!(detail.contains("/provider pick"));
+
+        app.composer_focused = true;
+        app.composer = "/onboarding".to_string();
+        app.composer_cursor = app.composer.len();
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert_eq!(app.status, "setup checklist shown");
+        assert_eq!(app.composer, "");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("onboarding detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Setup);
+        assert!(detail.contains("Read-only onboarding check"));
     }
 
     #[test]
@@ -21639,6 +21971,11 @@ mod tests {
         assert!(restore.contains(&"/restore list".to_string()));
         assert!(restore.contains(&"/restore hunk ".to_string()));
         assert!(restore.contains(&"/restore revert-turn ".to_string()));
+
+        let setup = composer_slash_completion_matches(&app, "/setup");
+        assert!(setup.contains(&"/setup".to_string()));
+        let onboarding = composer_slash_completion_matches(&app, "/onboard");
+        assert!(onboarding.contains(&"/onboarding".to_string()));
     }
 
     #[test]
@@ -21697,6 +22034,9 @@ mod tests {
             "share",
             "goal",
             "settings",
+            "setup",
+            "onboarding",
+            "doctor",
             "status",
             "statusline",
             "skills",
