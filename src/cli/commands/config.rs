@@ -76,6 +76,19 @@ pub(crate) struct NetworkDefaultResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DiagnosticsConfigSummary {
+    pub(crate) path: std::path::PathBuf,
+    pub(crate) post_edit: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DiagnosticsPostEditResult {
+    pub(crate) path: std::path::PathBuf,
+    pub(crate) value: bool,
+    pub(crate) changed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ModelConfigSummary {
     pub(crate) path: std::path::PathBuf,
     pub(crate) base_url: String,
@@ -242,6 +255,42 @@ pub(crate) fn set_network_default_at(
     Ok(NetworkDefaultResult {
         path,
         value,
+        changed,
+    })
+}
+
+pub(crate) fn diagnostics_config_summary_at(
+    root: &std::path::Path,
+) -> AppResult<DiagnosticsConfigSummary> {
+    let path = network_config_path_at(root);
+    if !path.exists() {
+        init_config_at(root, false)?;
+    }
+    let content = std::fs::read_to_string(&path)?;
+    let post_edit = read_bool_key(&content, "diagnostics.post_edit")
+        .unwrap_or_else(|| AppConfig::default().diagnostics.post_edit);
+    Ok(DiagnosticsConfigSummary { path, post_edit })
+}
+
+pub(crate) fn set_diagnostics_post_edit_at(
+    root: &std::path::Path,
+    enabled: bool,
+) -> AppResult<DiagnosticsPostEditResult> {
+    let path = network_config_path_at(root);
+    if !path.exists() {
+        init_config_at(root, false)?;
+    }
+    let content = std::fs::read_to_string(&path)?;
+    let previous = read_bool_key(&content, "diagnostics.post_edit")
+        .unwrap_or_else(|| AppConfig::default().diagnostics.post_edit);
+    let changed = previous != enabled;
+    if changed {
+        let updated = replace_or_append_bool_key(&content, "diagnostics.post_edit", enabled);
+        std::fs::write(&path, updated)?;
+    }
+    Ok(DiagnosticsPostEditResult {
+        path,
+        value: enabled,
         changed,
     })
 }
@@ -742,6 +791,25 @@ fn read_string_key(content: &str, key: &str) -> Option<String> {
     None
 }
 
+fn read_bool_key(content: &str, key: &str) -> Option<bool> {
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        let Some(rest) = trimmed.strip_prefix(key) else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let Some(value) = rest.strip_prefix('=') else {
+            continue;
+        };
+        return match value.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" | "on" => Some(true),
+            "false" | "0" | "no" | "off" => Some(false),
+            _ => None,
+        };
+    }
+    None
+}
+
 fn unquote_config_string(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.len() >= 2 && trimmed.starts_with('"') && trimmed.ends_with('"') {
@@ -811,6 +879,10 @@ fn replace_or_append_string_list_key(content: &str, key: &str, values: &[String]
 fn replace_or_append_string_key(content: &str, key: &str, value: &str) -> String {
     let rendered = format!("{key} = \"{}\"", value.replace('"', "\\\""));
     replace_or_append_line(content, key, rendered)
+}
+
+fn replace_or_append_bool_key(content: &str, key: &str, value: bool) -> String {
+    replace_or_append_line(content, key, format!("{key} = {value}"))
 }
 
 fn replace_or_append_line(content: &str, key: &str, rendered: String) -> String {

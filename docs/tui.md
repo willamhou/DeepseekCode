@@ -77,6 +77,9 @@ Current surfaces:
   `AGENTS.md` in the selected session workspace
 - network policy controls with `network list|allow|deny|remove|default`,
   editing the selected session workspace `.dscode/config.toml`
+- LSP-style diagnostics controls with `lsp` / `/lsp` and
+  `lsp on|off|status`, editing `diagnostics.post_edit` in the selected
+  workspace project config
 - runtime status inspection with `status` / `/status`, summarizing selected
   session, active thread, transcript items, tasks, automations, pending
   approvals/user input, token/cache telemetry, context policy, and estimated
@@ -385,6 +388,9 @@ Command palette commands currently implemented:
 | `network deny <host>`, `/network deny <host>` | Deny a host in the selected workspace project config |
 | `network remove <host>`, `/network remove <host>` | Remove a host from allow and deny lists |
 | `network default <allow\|deny\|prompt>` | Set the default host policy |
+| `lsp`, `/lsp`, `lsp status`, `/lsp status` | Show selected workspace `diagnostics.post_edit` state in the right-side detail panel |
+| `lsp on`, `/lsp on` | Enable post-edit diagnostics for successful file edits in the selected workspace project config |
+| `lsp off`, `/lsp off` | Disable post-edit diagnostics for successful file edits in the selected workspace project config |
 | `status`, `/status` | Show selected session, active thread, task/input, usage, cache, context, and cost status in the right-side detail panel |
 | `tokens`, `/tokens` | Show active-thread context, last input/output tokens, cache hit/miss, cumulative token usage, and approximate cost |
 | `cost`, `/cost` | Show active-thread approximate total, input, and output cost with telemetry caveats |

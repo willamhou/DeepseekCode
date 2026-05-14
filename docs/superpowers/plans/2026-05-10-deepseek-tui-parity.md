@@ -393,6 +393,9 @@ Landed first slice:
   `/media` aliases, validating local image/video files and inserting an
   editable attachment reference into the composer with workspace-relative
   `image_analyze` guidance for images
+- local file-backed TUI now supports DeepSeek-TUI-style `/lsp [on|off|status]`,
+  mapping the command to the selected workspace `diagnostics.post_edit` config
+  and rendering the current diagnostics state in the detail panel
 - local file-backed TUI now supports DeepSeek-TUI-style `/clear` conversation
   reset by creating and switching to a fresh empty active thread in the selected
   durable session without deleting older thread history

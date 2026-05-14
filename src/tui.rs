@@ -563,6 +563,7 @@ pub enum TuiMcpDetailKind {
     Shell,
     Memory,
     Network,
+    Lsp,
     Status,
     Tokens,
     Cost,
@@ -612,6 +613,7 @@ impl TuiMcpDetailKind {
             Self::Shell => "shell",
             Self::Memory => "memory",
             Self::Network => "network",
+            Self::Lsp => "lsp",
             Self::Status => "status",
             Self::Tokens => "tokens",
             Self::Cost => "cost",
@@ -661,6 +663,7 @@ impl TuiMcpDetailKind {
             Self::Shell => "Shell Jobs",
             Self::Memory => "Memory",
             Self::Network => "Network",
+            Self::Lsp => "LSP",
             Self::Status => "Status",
             Self::Tokens => "Tokens",
             Self::Cost => "Cost",
@@ -710,6 +713,7 @@ impl TuiMcpDetailKind {
             Self::Shell => Self::Manager,
             Self::Memory => Self::Manager,
             Self::Network => Self::Manager,
+            Self::Lsp => Self::Manager,
             Self::Status => Self::Manager,
             Self::Tokens => Self::Manager,
             Self::Cost => Self::Manager,
@@ -759,6 +763,7 @@ impl TuiMcpDetailKind {
             Self::Shell => Self::Manager,
             Self::Memory => Self::Manager,
             Self::Network => Self::Manager,
+            Self::Lsp => Self::Manager,
             Self::Status => Self::Manager,
             Self::Tokens => Self::Manager,
             Self::Cost => Self::Manager,
@@ -925,6 +930,13 @@ pub enum TuiNetworkCommand {
     Deny { host: String },
     Remove { host: String },
     Default { value: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TuiLspCommand {
+    Status,
+    Set { enabled: bool },
+    Help,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1155,6 +1167,26 @@ fn parse_tui_network_command(line: &str) -> Option<Result<TuiNetworkCommand, Str
         _ => Some(Err(
             "usage: network [list|allow <host>|deny <host>|remove <host>|default <allow|deny|prompt>]"
                 .to_string(),
+        )),
+    }
+}
+
+fn parse_tui_lsp_command(line: &str) -> Option<Result<TuiLspCommand, String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/lsp")
+        .or_else(|| strip_tui_command_prefix(trimmed, "lsp"))?;
+    let args = rest.split_whitespace().collect::<Vec<_>>();
+    match args.as_slice() {
+        [] | ["status"] | ["show"] => Some(Ok(TuiLspCommand::Status)),
+        ["help" | "--help" | "-h"] => Some(Ok(TuiLspCommand::Help)),
+        ["on" | "enable" | "enabled" | "true" | "1"] => {
+            Some(Ok(TuiLspCommand::Set { enabled: true }))
+        }
+        ["off" | "disable" | "disabled" | "false" | "0"] => {
+            Some(Ok(TuiLspCommand::Set { enabled: false }))
+        }
+        _ => Some(Err(
+            "usage: lsp [on|off|status] or /lsp [on|off|status]".to_string()
         )),
     }
 }
@@ -1960,6 +1992,10 @@ pub enum TuiAction {
         workspace: String,
         command: TuiNetworkCommand,
     },
+    Lsp {
+        workspace: String,
+        command: TuiLspCommand,
+    },
     Model {
         workspace: String,
         command: TuiModelCommand,
@@ -2389,6 +2425,13 @@ const TUI_HELP_COMMANDS: &[TuiHelpCommandInfo] = &[
         description: "Inspect or edit selected workspace network policy.",
     },
     TuiHelpCommandInfo {
+        category: "Config",
+        name: "lsp",
+        aliases: &[],
+        usage: "/lsp [on|off|status]",
+        description: "Inspect or edit post-edit diagnostics for the selected workspace.",
+    },
+    TuiHelpCommandInfo {
         category: "Skills",
         name: "skills",
         aliases: &[],
@@ -2607,6 +2650,11 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "network deny ",
     "network remove ",
     "network default ",
+    "lsp",
+    "lsp on",
+    "lsp off",
+    "lsp status",
+    "lsp help",
     "status",
     "statusline",
     "statusline show",
@@ -2795,6 +2843,11 @@ const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
     "/network deny ",
     "/network remove ",
     "/network default ",
+    "/lsp",
+    "/lsp on",
+    "/lsp off",
+    "/lsp status",
+    "/lsp help",
     "/status",
     "/statusline",
     "/statusline show",
@@ -5311,6 +5364,19 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(command) = parse_tui_lsp_command(&content) {
+                    match command {
+                        Ok(command) => {
+                            self.handle_lsp_command(command);
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some(command) = parse_tui_status_command(&content) {
                     match command {
                         Ok(()) => {
@@ -5946,6 +6012,15 @@ impl TuiApp {
                 Ok(command) => {
                     self.request_network_command(command);
                 }
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_lsp_command(command) {
+            match command {
+                Ok(command) => self.handle_lsp_command(command),
                 Err(message) => {
                     self.status = message;
                 }
@@ -7436,6 +7511,45 @@ impl TuiApp {
         self.status = format!("network command queued: {workspace}");
     }
 
+    fn handle_lsp_command(&mut self, command: TuiLspCommand) {
+        if matches!(command, TuiLspCommand::Help) {
+            self.set_mcp_detail(TuiMcpDetailKind::Lsp, self.render_lsp_help_detail());
+            self.status = "lsp help shown".to_string();
+            return;
+        }
+        let workspace = self
+            .selected_session()
+            .map(|session| session.workspace.clone())
+            .unwrap_or_else(|| ".".to_string());
+        self.pending_actions.push(TuiAction::Lsp {
+            workspace: workspace.clone(),
+            command,
+        });
+        self.status = format!("lsp command queued: {workspace}");
+    }
+
+    fn render_lsp_help_detail(&self) -> String {
+        let mut detail = String::new();
+        let _ = writeln!(detail, "DeepSeekCode LSP");
+        let _ = writeln!(detail, "================");
+        let _ = writeln!(detail);
+        let _ = writeln!(
+            detail,
+            "/lsp [on|off|status] controls post-edit diagnostics for the selected workspace."
+        );
+        let _ = writeln!(detail);
+        let _ = writeln!(detail, "Commands");
+        let _ = writeln!(detail, "--------");
+        let _ = writeln!(detail, "- /lsp status");
+        let _ = writeln!(detail, "- /lsp on");
+        let _ = writeln!(detail, "- /lsp off");
+        if let Some(session) = self.selected_session() {
+            let _ = writeln!(detail);
+            push_status_row(&mut detail, "Selected workspace:", &session.workspace);
+        }
+        detail
+    }
+
     fn request_model_command(&mut self, command: TuiModelCommand) {
         let workspace = self
             .selected_session()
@@ -8594,6 +8708,7 @@ impl TuiApp {
         let _ = writeln!(detail, "- /model [name|list]");
         let _ = writeln!(detail, "- /provider [name [model]|list]");
         let _ = writeln!(detail, "- /network [list|allow|deny|remove|default]");
+        let _ = writeln!(detail, "- /lsp [on|off|status]");
         let _ = writeln!(detail, "- /memory [show|path|clear|edit|help]");
         let _ = writeln!(detail, "- /anchor [add|list|remove|path]");
         let _ = writeln!(detail, "- /queue [list|edit <n>|drop <n>|clear]");
@@ -15920,6 +16035,69 @@ mod tests {
                     value: "prompt".to_string(),
                 },
             }]
+        );
+    }
+
+    #[test]
+    fn command_palette_requests_lsp_actions() {
+        let mut app = TuiApp::with_runtime(
+            vec![TuiSession {
+                id: "session-one".to_string(),
+                title: "One".to_string(),
+                workspace: "/tmp/deepseek-lsp".to_string(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-one".to_string()),
+                thread_count: 1,
+            }],
+            vec![TuiThread {
+                id: "thread-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                title: "First thread".to_string(),
+                mode: "agent".to_string(),
+                status: "active".to_string(),
+                latest_turn_id: None,
+                event_seq: 1,
+            }],
+            Vec::new(),
+        );
+
+        run_palette_command(&mut app, "lsp");
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::Lsp {
+                workspace: "/tmp/deepseek-lsp".to_string(),
+                command: TuiLspCommand::Status,
+            }]
+        );
+
+        run_palette_command(&mut app, "/lsp on");
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::Lsp {
+                workspace: "/tmp/deepseek-lsp".to_string(),
+                command: TuiLspCommand::Set { enabled: true },
+            }]
+        );
+
+        run_palette_command(&mut app, "lsp off");
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::Lsp {
+                workspace: "/tmp/deepseek-lsp".to_string(),
+                command: TuiLspCommand::Set { enabled: false },
+            }]
+        );
+
+        run_palette_command(&mut app, "/lsp help");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("lsp help detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Lsp);
+        assert!(detail.contains("/lsp [on|off|status]"));
+        assert!(detail.contains("Selected workspace:"));
+
+        run_palette_command(&mut app, "lsp maybe");
+        assert_eq!(
+            app.status,
+            "usage: lsp [on|off|status] or /lsp [on|off|status]"
         );
     }
 

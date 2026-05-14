@@ -16,10 +16,10 @@ use std::time::Duration;
 
 use crate::cli::app::{McpConfigScope, TuiArgs};
 use crate::cli::commands::config::{
-    model_config_summary_at, network_policy_summary_at, provider_config_summary_at,
-    remove_network_rule_at, set_model_at, set_network_default_at, set_network_rule_at,
-    set_provider_at, ModelConfigSummary, NetworkPolicySummary, NetworkRuleTarget,
-    ProviderConfigSummary,
+    diagnostics_config_summary_at, model_config_summary_at, network_policy_summary_at,
+    provider_config_summary_at, remove_network_rule_at, set_diagnostics_post_edit_at, set_model_at,
+    set_network_default_at, set_network_rule_at, set_provider_at, DiagnosticsConfigSummary,
+    ModelConfigSummary, NetworkPolicySummary, NetworkRuleTarget, ProviderConfigSummary,
 };
 use crate::cli::commands::mcp::{
     add_mcp_server_at, init_mcp_config_at, list_remote_prompts_summary,
@@ -60,7 +60,7 @@ use crate::tools::types::{Tool, ToolInput};
 use crate::tui::{
     discover_custom_slash_commands_dir, render_once, run_interactive,
     run_interactive_with_refresh_actions_and_live, TuiAction, TuiAnchorCommand, TuiApp,
-    TuiApprovalRequest, TuiAutomationRecord, TuiHooksCommand, TuiItem, TuiLiveEvent,
+    TuiApprovalRequest, TuiAutomationRecord, TuiHooksCommand, TuiItem, TuiLiveEvent, TuiLspCommand,
     TuiMcpConfigScope, TuiMcpDetailKind, TuiMemoryCommand, TuiModelCommand, TuiNetworkCommand,
     TuiNoteCommand, TuiProviderCommand, TuiSession, TuiSkillsCommand, TuiTaskRecord, TuiThread,
     TuiUsageSummary, TuiUserInputRequest,
@@ -624,6 +624,9 @@ fn handle_tui_http_action(
         }
         TuiAction::Network { .. } => {
             app.set_status("network commands require local file-backed TUI".to_string());
+        }
+        TuiAction::Lsp { .. } => {
+            app.set_status("lsp commands require local file-backed TUI".to_string());
         }
         TuiAction::Model { .. } => {
             app.set_status("model commands require local file-backed TUI".to_string());
@@ -1236,6 +1239,7 @@ fn mcp_detail_summary(
         TuiMcpDetailKind::Shell => Err(app_error("shell details are not MCP details")),
         TuiMcpDetailKind::Memory => Err(app_error("memory details are not MCP details")),
         TuiMcpDetailKind::Network => Err(app_error("network details are not MCP details")),
+        TuiMcpDetailKind::Lsp => Err(app_error("lsp details are not MCP details")),
         TuiMcpDetailKind::Status => Err(app_error("status details are not MCP details")),
         TuiMcpDetailKind::Tokens => Err(app_error("token details are not MCP details")),
         TuiMcpDetailKind::Cost => Err(app_error("cost details are not MCP details")),
@@ -1421,6 +1425,14 @@ fn format_network_policy_summary(summary: &NetworkPolicySummary) -> String {
         summary.default,
         format_string_list(&summary.allow),
         format_string_list(&summary.deny)
+    )
+}
+
+fn format_lsp_summary(summary: &DiagnosticsConfigSummary) -> String {
+    format!(
+        "DeepSeekCode LSP Diagnostics ({})\n\ndiagnostics.post_edit = {}\n\nUse lsp on, lsp off, or lsp status. Manual diagnostics remain available with diagnostics [--changed|paths...].",
+        summary.path.display(),
+        summary.post_edit
     )
 }
 
@@ -1669,6 +1681,30 @@ fn handle_tui_action_with_live(
                 TuiMcpDetailKind::Network,
                 format_network_policy_summary(&summary),
             );
+            app.set_status(status);
+        }
+        TuiAction::Lsp { workspace, command } => {
+            let workspace = Path::new(&workspace);
+            let status = match command {
+                TuiLspCommand::Status => "lsp diagnostics status shown".to_string(),
+                TuiLspCommand::Set { enabled } => {
+                    let result = set_diagnostics_post_edit_at(workspace, enabled)?;
+                    if result.changed {
+                        format!(
+                            "lsp diagnostics {}",
+                            if result.value { "enabled" } else { "disabled" }
+                        )
+                    } else {
+                        format!(
+                            "lsp diagnostics already {}",
+                            if result.value { "enabled" } else { "disabled" }
+                        )
+                    }
+                }
+                TuiLspCommand::Help => "lsp help shown".to_string(),
+            };
+            let summary = diagnostics_config_summary_at(workspace)?;
+            app.set_mcp_detail(TuiMcpDetailKind::Lsp, format_lsp_summary(&summary));
             app.set_status(status);
         }
         TuiAction::Model { workspace, command } => {
@@ -5973,6 +6009,26 @@ description = "Review pull requests."
     }
 
     #[test]
+    fn handle_tui_http_action_rejects_lsp_commands_as_local_only() {
+        let client = RuntimeHttpClient::from_url("http://127.0.0.1:9").unwrap();
+        let mut app = TuiApp::new(Vec::new());
+
+        handle_tui_http_action(
+            &client,
+            &mut app,
+            TuiAction::Lsp {
+                workspace: ".".to_string(),
+                command: TuiLspCommand::Status,
+            },
+        )
+        .unwrap();
+
+        assert!(render_once(&app, 120, 36)
+            .unwrap()
+            .contains("lsp commands require local file-backed TUI"));
+    }
+
+    #[test]
     fn handle_tui_http_action_rejects_skills_commands_as_local_only() {
         let client = RuntimeHttpClient::from_url("http://127.0.0.1:9").unwrap();
         let mut app = TuiApp::new(Vec::new());
@@ -6528,6 +6584,64 @@ description = "Review pull requests."
         let output = render_once(&app, 120, 36).unwrap();
         assert!(output.contains("network default set: prompt"));
         assert!(output.contains("network.default = prompt"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn handle_tui_action_manages_lsp_diagnostics_config() {
+        let root = temp_root("lsp-diagnostics");
+        let store = RuntimeStore::new(root.join("runtime"));
+        let mut app = TuiApp::new(Vec::new());
+
+        handle_tui_action(
+            &store,
+            None,
+            &mut app,
+            TuiAction::Lsp {
+                workspace: root.display().to_string(),
+                command: TuiLspCommand::Set { enabled: true },
+            },
+        )
+        .unwrap();
+
+        let config = std::fs::read_to_string(root.join(".dscode/config.toml")).unwrap();
+        assert!(config.contains("diagnostics.post_edit = true"));
+        let output = render_once(&app, 120, 36).unwrap();
+        assert!(output.contains("lsp diagnostics enabled"));
+        assert!(output.contains("diagnostics.post_edit = true"));
+
+        handle_tui_action(
+            &store,
+            None,
+            &mut app,
+            TuiAction::Lsp {
+                workspace: root.display().to_string(),
+                command: TuiLspCommand::Status,
+            },
+        )
+        .unwrap();
+
+        assert!(render_once(&app, 120, 36)
+            .unwrap()
+            .contains("lsp diagnostics status shown"));
+
+        handle_tui_action(
+            &store,
+            None,
+            &mut app,
+            TuiAction::Lsp {
+                workspace: root.display().to_string(),
+                command: TuiLspCommand::Set { enabled: false },
+            },
+        )
+        .unwrap();
+
+        let config = std::fs::read_to_string(root.join(".dscode/config.toml")).unwrap();
+        assert!(config.contains("diagnostics.post_edit = false"));
+        let output = render_once(&app, 120, 36).unwrap();
+        assert!(output.contains("lsp diagnostics disabled"));
+        assert!(output.contains("diagnostics.post_edit = false"));
 
         let _ = std::fs::remove_dir_all(root);
     }
