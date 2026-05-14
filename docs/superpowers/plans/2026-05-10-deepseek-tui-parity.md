@@ -410,6 +410,9 @@ Landed first slice:
   both fork the selected durable thread before the latest user request, `/undo`
   switches to that branch, and `/retry` resubmits the latest request there while
   preserving the original thread
+- local file-backed TUI now supports DeepSeek-TUI-style `/cycles`, `/cycle <n>`,
+  and `/recall <query>` over DeepSeekCode durable compaction summaries and the
+  existing `recall_archive` runtime search tool
 - local file-backed TUI now supports DeepSeek-TUI-style `/clear` conversation
   reset by creating and switching to a fresh empty active thread in the selected
   durable session without deleting older thread history

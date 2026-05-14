@@ -74,6 +74,9 @@ Current surfaces:
 - conversation undo/retry with `undo` / `/undo` and `retry` / `/retry`, forking
   the selected durable thread before the latest user request while preserving
   the original thread
+- durable compaction handoff inspection and archive search with `cycles` /
+  `/cycles`, `cycle <n>` / `/cycle <n>`, and `recall <query>` /
+  `/recall <query>`
 - workspace diff inspection with `diff` / `/diff`, showing changed tracked
   files and `git diff --stat` for the selected session workspace
 - slash quit aliases with `exit` / `/exit`, `quit` / `/quit`, and `q` / `/q`
@@ -340,6 +343,9 @@ Command palette commands currently implemented:
 | `undo help`, `/undo help` | Show non-destructive undo behavior |
 | `retry`, `/retry` | Fork before the latest user request, switch to that branch, and resubmit the request |
 | `retry help`, `/retry help` | Show retry behavior |
+| `cycles`, `/cycles` | List durable compaction handoffs for the selected thread |
+| `cycle <n>`, `/cycle <n>` | Show one durable compaction handoff in full |
+| `recall <query>`, `/recall <query>` | Search durable runtime archives with `recall_archive` |
 | `stash`, `stash list`, `/stash list` | List parked composer drafts in the right-side detail panel |
 | `stash pop`, `/stash pop` | Restore the most recently stashed composer draft |
 | `stash clear`, `/stash clear` | Clear all parked composer drafts |
@@ -415,6 +421,7 @@ Command palette commands currently implemented:
 | `edit`, `/edit` | Load the selected thread's latest user message back into the composer for revision |
 | `undo`, `/undo` | Fork before the latest user request and make the fork active |
 | `retry`, `/retry` | Fork before the latest user request and resubmit it |
+| `cycles`, `/cycles`, `cycle <n>`, `/cycle <n>`, `recall <query>`, `/recall <query>` | Inspect durable compaction handoffs or search archived runtime context |
 | `model`, `/model` | Show selected workspace model config in the right-side detail panel |
 | `model <name>`, `/model <name>` | Update selected workspace `model.model`; aliases include `auto`, `flash`, `pro`, `chat`, `coder`, and `reasoner` |
 | `models`, `/models`, `model list` | Show the offline DeepSeekCode model catalog and current project model |

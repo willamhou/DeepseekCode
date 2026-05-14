@@ -569,6 +569,8 @@ pub enum TuiMcpDetailKind {
     Edit,
     Undo,
     Retry,
+    Cycles,
+    Recall,
     Status,
     Tokens,
     Cost,
@@ -624,6 +626,8 @@ impl TuiMcpDetailKind {
             Self::Edit => "edit",
             Self::Undo => "undo",
             Self::Retry => "retry",
+            Self::Cycles => "cycles",
+            Self::Recall => "recall",
             Self::Status => "status",
             Self::Tokens => "tokens",
             Self::Cost => "cost",
@@ -679,6 +683,8 @@ impl TuiMcpDetailKind {
             Self::Edit => "Edit",
             Self::Undo => "Undo",
             Self::Retry => "Retry",
+            Self::Cycles => "Cycles",
+            Self::Recall => "Recall",
             Self::Status => "Status",
             Self::Tokens => "Tokens",
             Self::Cost => "Cost",
@@ -734,6 +740,8 @@ impl TuiMcpDetailKind {
             Self::Edit => Self::Manager,
             Self::Undo => Self::Manager,
             Self::Retry => Self::Manager,
+            Self::Cycles => Self::Manager,
+            Self::Recall => Self::Manager,
             Self::Status => Self::Manager,
             Self::Tokens => Self::Manager,
             Self::Cost => Self::Manager,
@@ -789,6 +797,8 @@ impl TuiMcpDetailKind {
             Self::Edit => Self::Manager,
             Self::Undo => Self::Manager,
             Self::Retry => Self::Manager,
+            Self::Cycles => Self::Manager,
+            Self::Recall => Self::Manager,
             Self::Status => Self::Manager,
             Self::Tokens => Self::Manager,
             Self::Cost => Self::Manager,
@@ -1093,6 +1103,14 @@ pub enum TuiUndoCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TuiRetryCommand {
     Retry,
+    Help,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TuiCycleCommand {
+    List,
+    Show { index: usize },
+    Recall { query: String },
     Help,
 }
 
@@ -1894,6 +1912,53 @@ fn parse_tui_retry_command(line: &str) -> Option<Result<TuiRetryCommand, String>
     }
 }
 
+fn parse_tui_cycle_command(line: &str) -> Option<Result<TuiCycleCommand, String>> {
+    let trimmed = line.trim();
+    if let Some(rest) = strip_tui_command_prefix(trimmed, "/cycles")
+        .or_else(|| strip_tui_command_prefix(trimmed, "cycles"))
+    {
+        let args = rest.split_whitespace().collect::<Vec<_>>();
+        return Some(match args.as_slice() {
+            [] | ["list"] | ["show"] => Ok(TuiCycleCommand::List),
+            ["help" | "--help" | "-h"] => Ok(TuiCycleCommand::Help),
+            _ => Err("usage: cycles or /cycles".to_string()),
+        });
+    }
+    if let Some(rest) = strip_tui_command_prefix(trimmed, "/cycle")
+        .or_else(|| strip_tui_command_prefix(trimmed, "cycle"))
+    {
+        let args = rest.split_whitespace().collect::<Vec<_>>();
+        return Some(match args.as_slice() {
+            ["help" | "--help" | "-h"] => Ok(TuiCycleCommand::Help),
+            [index] => match index.parse::<usize>() {
+                Ok(index) if index > 0 => Ok(TuiCycleCommand::Show { index }),
+                _ => Err(format!("cycle number must be a positive integer: {index}")),
+            },
+            [] => Err("usage: cycle <n> or /cycle <n>".to_string()),
+            _ => Err("usage: cycle <n> or /cycle <n>".to_string()),
+        });
+    }
+    if let Some(rest) = strip_tui_command_prefix(trimmed, "/recall")
+        .or_else(|| strip_tui_command_prefix(trimmed, "recall"))
+    {
+        let query = rest.trim();
+        return Some(
+            if query.is_empty() || matches!(query, "help" | "--help" | "-h") {
+                if query.is_empty() {
+                    Err("usage: recall <query> or /recall <query>".to_string())
+                } else {
+                    Ok(TuiCycleCommand::Help)
+                }
+            } else {
+                Ok(TuiCycleCommand::Recall {
+                    query: query.to_string(),
+                })
+            },
+        );
+    }
+    None
+}
+
 fn parse_tui_clear_command(line: &str) -> Option<Result<TuiClearCommand, String>> {
     let trimmed = line.trim();
     let rest = strip_tui_command_prefix(trimmed, "/clear")
@@ -2151,6 +2216,11 @@ pub enum TuiAction {
     SubmitEditedUserMessage {
         thread_id: String,
         content: String,
+    },
+    RecallArchive {
+        workspace: String,
+        thread_id: Option<String>,
+        query: String,
     },
     RunCustomSlashCommand {
         thread_id: String,
@@ -2520,6 +2590,27 @@ const TUI_HELP_COMMANDS: &[TuiHelpCommandInfo] = &[
         aliases: &[],
         usage: "/retry",
         description: "Fork before the latest user request and resubmit it.",
+    },
+    TuiHelpCommandInfo {
+        category: "Runtime Work",
+        name: "cycles",
+        aliases: &[],
+        usage: "/cycles",
+        description: "List active-thread durable compaction handoffs.",
+    },
+    TuiHelpCommandInfo {
+        category: "Runtime Work",
+        name: "cycle",
+        aliases: &[],
+        usage: "/cycle <n>",
+        description: "Show one durable compaction handoff in full.",
+    },
+    TuiHelpCommandInfo {
+        category: "Runtime Work",
+        name: "recall",
+        aliases: &[],
+        usage: "/recall <query>",
+        description: "Search durable runtime archives with recall_archive.",
     },
     TuiHelpCommandInfo {
         category: "Workbench",
@@ -3096,6 +3187,10 @@ const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
     "/undo help",
     "/retry",
     "/retry help",
+    "/cycles",
+    "/cycles help",
+    "/cycle ",
+    "/recall ",
     "/mode",
     "/mode agent",
     "/mode plan",
@@ -5597,6 +5692,19 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(command) = parse_tui_cycle_command(&content) {
+                    match command {
+                        Ok(command) => {
+                            self.handle_cycle_command(command);
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some(command) = parse_tui_clear_command(&content) {
                     match command {
                         Ok(command) => {
@@ -6319,6 +6427,15 @@ impl TuiApp {
         if let Some(command) = parse_tui_retry_command(command) {
             match command {
                 Ok(command) => self.handle_retry_command(command),
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_cycle_command(command) {
+            match command {
+                Ok(command) => self.handle_cycle_command(command),
                 Err(message) => {
                     self.status = message;
                 }
@@ -9014,6 +9131,111 @@ impl TuiApp {
         detail
     }
 
+    fn handle_cycle_command(&mut self, command: TuiCycleCommand) {
+        match command {
+            TuiCycleCommand::List => self.show_cycles_detail(),
+            TuiCycleCommand::Show { index } => self.show_cycle_detail(index),
+            TuiCycleCommand::Recall { query } => self.request_recall_archive(query),
+            TuiCycleCommand::Help => {
+                self.set_mcp_detail(TuiMcpDetailKind::Cycles, self.render_cycles_help_detail());
+                self.status = "cycles help shown".to_string();
+            }
+        }
+    }
+
+    fn active_cycle_items(&self) -> Vec<&TuiItem> {
+        self.active_thread_items()
+            .into_iter()
+            .filter(|item| item.item_type == "summary" && !item.content.trim().is_empty())
+            .collect()
+    }
+
+    fn show_cycles_detail(&mut self) {
+        let Some(thread) = self.active_thread().cloned() else {
+            self.set_mcp_detail(
+                TuiMcpDetailKind::Cycles,
+                "Cycles\n\nNo active durable thread is selected.".to_string(),
+            );
+            self.status = "no active durable thread for cycles".to_string();
+            return;
+        };
+        let cycles = self.active_cycle_items();
+        let detail = render_cycles_list_detail(&thread, &cycles);
+        let count = cycles.len();
+        self.set_mcp_detail(TuiMcpDetailKind::Cycles, detail);
+        self.status = format!("cycles shown: {count} durable handoff(s)");
+    }
+
+    fn show_cycle_detail(&mut self, index: usize) {
+        let Some(thread) = self.active_thread().cloned() else {
+            self.set_mcp_detail(
+                TuiMcpDetailKind::Cycles,
+                "Cycle\n\nNo active durable thread is selected.".to_string(),
+            );
+            self.status = "no active durable thread for cycle".to_string();
+            return;
+        };
+        let cycles = self.active_cycle_items();
+        let Some(item) = cycles.get(index.saturating_sub(1)) else {
+            let known = if cycles.is_empty() {
+                "(none)".to_string()
+            } else {
+                format!("1..{}", cycles.len())
+            };
+            self.set_mcp_detail(
+                TuiMcpDetailKind::Cycles,
+                format!(
+                    "Cycle {index}\n\nNo durable cycle handoff matched this number.\nKnown cycles: {known}."
+                ),
+            );
+            self.status = format!("cycle {index} not found");
+            return;
+        };
+        let detail = render_cycle_detail(&thread, index, item);
+        let count = cycles.len();
+        drop(cycles);
+        self.set_mcp_detail(TuiMcpDetailKind::Cycles, detail);
+        self.status = format!("showing cycle {index}/{count}");
+    }
+
+    fn request_recall_archive(&mut self, query: String) {
+        let Some(session) = self.selected_session().cloned() else {
+            self.status = "no durable session for recall".to_string();
+            return;
+        };
+        if session.status == "empty" && session.id == "local" {
+            self.status = "no durable session for recall".to_string();
+            return;
+        }
+        let thread_id = self.selected_thread_id.clone();
+        self.pending_actions.push(TuiAction::RecallArchive {
+            workspace: session.workspace,
+            thread_id,
+            query: query.clone(),
+        });
+        self.status = format!("recall queued: {}", clip_line(&query, 60));
+    }
+
+    fn render_cycles_help_detail(&self) -> String {
+        let mut detail = String::new();
+        let _ = writeln!(detail, "DeepSeekCode Cycles and Recall");
+        let _ = writeln!(detail, "==============================");
+        let _ = writeln!(detail);
+        let _ = writeln!(
+            detail,
+            "/cycles lists durable compaction summaries for the selected thread."
+        );
+        let _ = writeln!(detail, "/cycle <n> shows one summary in full.");
+        let _ = writeln!(detail, "/recall <query> searches durable runtime archives.");
+        let _ = writeln!(detail);
+        let _ = writeln!(detail, "Commands");
+        let _ = writeln!(detail, "--------");
+        let _ = writeln!(detail, "- /cycles");
+        let _ = writeln!(detail, "- /cycle <n>");
+        let _ = writeln!(detail, "- /recall <query>");
+        detail
+    }
+
     fn handle_clear_command(&mut self, command: TuiClearCommand) {
         match command {
             TuiClearCommand::Clear => self.request_clear_conversation(),
@@ -9304,6 +9526,7 @@ impl TuiApp {
         let _ = writeln!(detail, "- /edit");
         let _ = writeln!(detail, "- /undo");
         let _ = writeln!(detail, "- /retry");
+        let _ = writeln!(detail, "- /cycles | /cycle <n> | /recall <query>");
         let _ = writeln!(detail, "- /goal [objective [budget: N]|clear]");
         let _ = writeln!(detail, "- /model [name|list]");
         let _ = writeln!(detail, "- /provider [name [model]|list]");
@@ -11719,6 +11942,74 @@ fn render_tui_attachment_block(kind: &str, reference: &str, path: &Path) -> Stri
         ));
     }
     block
+}
+
+fn render_cycles_list_detail(thread: &TuiThread, cycles: &[&TuiItem]) -> String {
+    let mut detail = String::new();
+    let _ = writeln!(detail, "Durable Cycles");
+    let _ = writeln!(detail, "==============");
+    let _ = writeln!(detail);
+    push_status_row(
+        &mut detail,
+        "Thread:",
+        &format!("{} [{}]", thread.title, thread.id),
+    );
+    let _ = writeln!(detail, "Handoffs: {}", cycles.len());
+    let _ = writeln!(detail);
+    if cycles.is_empty() {
+        let _ = writeln!(
+            detail,
+            "No durable compaction summaries have been recorded for this thread."
+        );
+        let _ = writeln!(
+            detail,
+            "Run /compact or let the runtime daemon compact older turns to create handoffs."
+        );
+        return detail;
+    }
+    for (index, item) in cycles.iter().enumerate() {
+        let _ = writeln!(
+            detail,
+            "{}. item={} turn={} status={} chars={}",
+            index + 1,
+            item.id,
+            item.turn_id.as_deref().unwrap_or("-"),
+            item.status,
+            item.content.chars().count()
+        );
+        let _ = writeln!(detail, "   {}", first_nonempty_line(&item.content, 120));
+    }
+    let _ = writeln!(detail);
+    let _ = writeln!(detail, "Use /cycle <n> to show one handoff in full.");
+    detail
+}
+
+fn render_cycle_detail(thread: &TuiThread, index: usize, item: &TuiItem) -> String {
+    let mut detail = String::new();
+    let _ = writeln!(detail, "Durable Cycle {index}");
+    let _ = writeln!(detail, "================");
+    let _ = writeln!(detail);
+    push_status_row(
+        &mut detail,
+        "Thread:",
+        &format!("{} [{}]", thread.title, thread.id),
+    );
+    push_status_row(&mut detail, "Item:", &item.id);
+    push_status_row(&mut detail, "Turn:", item.turn_id.as_deref().unwrap_or("-"));
+    push_status_row(&mut detail, "Status:", &item.status);
+    let _ = writeln!(detail);
+    detail.push_str(item.content.trim());
+    detail.push('\n');
+    detail
+}
+
+fn first_nonempty_line(value: &str, max_chars: usize) -> String {
+    let line = value
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    clip_line(line, max_chars)
 }
 
 fn tui_queue_preview(value: &str) -> String {
@@ -16527,6 +16818,68 @@ mod tests {
             app.status,
             "usage: retry or /retry; use retry help for details"
         );
+    }
+
+    #[test]
+    fn cycles_and_recall_commands_show_summaries_and_queue_search() {
+        let mut app = TuiApp::with_runtime(
+            vec![TuiSession {
+                id: "session-1".to_string(),
+                title: "Session".to_string(),
+                workspace: "/tmp/deepseek-cycles".to_string(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-1".to_string()),
+                thread_count: 1,
+            }],
+            vec![TuiThread {
+                id: "thread-1".to_string(),
+                session_id: Some("session-1".to_string()),
+                title: "Thread".to_string(),
+                mode: "agent".to_string(),
+                status: "idle".to_string(),
+                latest_turn_id: Some("turn-summary".to_string()),
+                event_seq: 0,
+            }],
+            vec![TuiItem {
+                id: "summary-1".to_string(),
+                thread_id: "thread-1".to_string(),
+                turn_id: Some("turn-summary".to_string()),
+                index: 1,
+                item_type: "summary".to_string(),
+                role: Some("system".to_string()),
+                content: "Cycle summary\nDecision: keep the runtime branch.".to_string(),
+                status: "completed".to_string(),
+            }],
+        );
+
+        run_palette_command(&mut app, "cycles");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("cycles detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Cycles);
+        assert!(detail.contains("Durable Cycles"));
+        assert!(detail.contains("summary-1"));
+        assert_eq!(app.status, "cycles shown: 1 durable handoff(s)");
+
+        run_palette_command(&mut app, "cycle 1");
+        let (kind, detail) = app.mcp_detail.as_ref().expect("cycle detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Cycles);
+        assert!(detail.contains("Durable Cycle 1"));
+        assert!(detail.contains("Decision: keep the runtime branch."));
+
+        run_palette_command(&mut app, "cycle nope");
+        assert_eq!(app.status, "cycle number must be a positive integer: nope");
+
+        run_palette_command(&mut app, "recall runtime branch");
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::RecallArchive {
+                workspace: "/tmp/deepseek-cycles".to_string(),
+                thread_id: Some("thread-1".to_string()),
+                query: "runtime branch".to_string(),
+            }]
+        );
+
+        run_palette_command(&mut app, "recall");
+        assert_eq!(app.status, "usage: recall <query> or /recall <query>");
     }
 
     #[test]

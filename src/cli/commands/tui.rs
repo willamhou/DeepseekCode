@@ -56,6 +56,7 @@ use crate::tools::exec_shell::{
     ExecShellListTool, ExecShellResizeTool, ExecShellShowTool, ExecShellSupervisorStatusTool,
     ExecShellTool, ExecShellWaitTool,
 };
+use crate::tools::recall_archive::RecallArchiveTool;
 use crate::tools::types::{Tool, ToolInput};
 use crate::tui::{
     discover_custom_slash_commands_dir, render_once, run_interactive,
@@ -794,8 +795,9 @@ fn handle_tui_http_action(
         }
         TuiAction::UndoConversation { .. }
         | TuiAction::RetryUserMessage { .. }
-        | TuiAction::SubmitEditedUserMessage { .. } => {
-            app.set_status("undo/retry commands require local file-backed TUI".to_string());
+        | TuiAction::SubmitEditedUserMessage { .. }
+        | TuiAction::RecallArchive { .. } => {
+            app.set_status("undo/retry/recall commands require local file-backed TUI".to_string());
         }
         TuiAction::Note { .. } => {
             app.set_status("note commands require local file-backed TUI".to_string());
@@ -1253,6 +1255,8 @@ fn mcp_detail_summary(
         TuiMcpDetailKind::Edit => Err(app_error("edit details are not MCP details")),
         TuiMcpDetailKind::Undo => Err(app_error("undo details are not MCP details")),
         TuiMcpDetailKind::Retry => Err(app_error("retry details are not MCP details")),
+        TuiMcpDetailKind::Cycles => Err(app_error("cycle details are not MCP details")),
+        TuiMcpDetailKind::Recall => Err(app_error("recall details are not MCP details")),
         TuiMcpDetailKind::Status => Err(app_error("status details are not MCP details")),
         TuiMcpDetailKind::Tokens => Err(app_error("token details are not MCP details")),
         TuiMcpDetailKind::Cost => Err(app_error("cost details are not MCP details")),
@@ -1728,6 +1732,13 @@ fn handle_tui_action_with_live(
                     app.set_status(format!("edit submit failed: {error}"));
                 }
             }
+        }
+        TuiAction::RecallArchive {
+            workspace,
+            thread_id,
+            query,
+        } => {
+            run_tui_recall_archive(app, config, &workspace, thread_id.as_deref(), &query);
         }
         TuiAction::RunCustomSlashCommand {
             thread_id,
@@ -2575,6 +2586,50 @@ fn run_tui_undo_conversation(
     app.clear_transient_conversation_state();
     app.select_thread_by_id(&fork.thread.id);
     Ok(fork)
+}
+
+fn run_tui_recall_archive(
+    app: &mut TuiApp,
+    config: Option<&AppConfig>,
+    workspace: &str,
+    thread_id: Option<&str>,
+    query: &str,
+) {
+    let mut recall_config = config.cloned().unwrap_or_else(AppConfig::default);
+    if config.is_none() {
+        recall_config.workspace.config_dir =
+            Path::new(workspace).join(".dscode").display().to_string();
+    }
+    let mut input = ToolInput::new()
+        .with_arg("query", query.to_string())
+        .with_arg("max_results", "5".to_string());
+    if let Some(thread_id) = thread_id {
+        input = input.with_arg("thread_id", thread_id.to_string());
+    }
+    match RecallArchiveTool::new(&recall_config).execute(input) {
+        Ok(output) => {
+            app.set_mcp_detail(
+                TuiMcpDetailKind::Recall,
+                format!(
+                    "Recall Archive\n==============\n\nQuery: {}\nThread: {}\n\n{}",
+                    query,
+                    thread_id.unwrap_or("all recent threads"),
+                    output.summary
+                ),
+            );
+            app.set_status(format!(
+                "recall complete: {}",
+                last_nonempty_line(&output.summary, "ok")
+            ));
+        }
+        Err(error) => {
+            app.set_mcp_detail(
+                TuiMcpDetailKind::Recall,
+                format!("Recall Archive\n==============\n\nQuery: {query}\n\n{error}"),
+            );
+            app.set_status(format!("recall failed: {error}"));
+        }
+    }
 }
 
 fn run_tui_memory_append(app: &mut TuiApp, config: Option<&AppConfig>, note: &str) {
@@ -8537,6 +8592,59 @@ shell_allowlist = ["git diff"]
         assert!(render_once(&app, 160, 48)
             .unwrap()
             .contains("submitted edited message"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn handle_tui_action_runs_recall_archive() {
+        let root = temp_root("recall-action");
+        fs::create_dir_all(&root).unwrap();
+        let store = RuntimeStore::new(root.join(".dscode/runtime"));
+        let thread = store
+            .create_thread(
+                "Recall thread".to_string(),
+                root.display().to_string(),
+                "deepseek-v4-pro".to_string(),
+                "agent".to_string(),
+            )
+            .unwrap();
+        let turn = store
+            .append_turn(
+                &thread.id,
+                "assistant".to_string(),
+                "The invoice reconciliation issue is in sync.".to_string(),
+            )
+            .unwrap();
+        store
+            .append_item(
+                &thread.id,
+                Some(&turn.id),
+                "summary".to_string(),
+                Some("assistant".to_string()),
+                "Carry forward invoice reconciliation details.".to_string(),
+                "completed".to_string(),
+            )
+            .unwrap();
+        let mut app = TuiApp::new(Vec::new());
+
+        handle_tui_action(
+            &store,
+            None,
+            &mut app,
+            TuiAction::RecallArchive {
+                workspace: root.display().to_string(),
+                thread_id: Some(thread.id.clone()),
+                query: "invoice reconciliation".to_string(),
+            },
+        )
+        .unwrap();
+
+        let output = render_once(&app, 160, 48).unwrap();
+        assert!(output.contains("Recall Archive"));
+        assert!(output.contains("invoice reconciliation"));
+        assert!(output.contains("\"hits\""));
+        assert!(output.contains("recall complete"));
 
         let _ = fs::remove_dir_all(root);
     }
