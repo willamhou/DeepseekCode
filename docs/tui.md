@@ -60,8 +60,8 @@ Current surfaces:
 - settings overview with `settings` / `/settings` and DeepSeek-TUI-style
   `config` / `/config` routing for common model/provider/profile/mode/theme
   settings
-- local TUI theme switching with `theme` / `/theme` and
-  `theme dark|light|grayscale|system`
+- persisted local TUI theme switching with `theme` / `/theme`,
+  `theme dark|light|grayscale|system`, and `.dscode/tui/theme.json`
 - statusline overview with `statusline` / `/statusline`
 - verbose transcript switching with `verbose` / `/verbose` and
   `verbose on|off|show`, keeping reasoning compact by default while allowing
@@ -342,12 +342,12 @@ Command palette commands currently implemented:
 | `config provider [pick\|show\|list\|<name> [model]]`, `/config provider [pick\|show\|list\|<name> [model]]` | Route to provider preset picker, inspection, or updates |
 | `config profile [list\|clear\|<name>]`, `/config profile [list\|clear\|<name>]` | Route to active project profile inspection or switching |
 | `config mode [agent\|plan\|yolo]`, `/config mode [agent\|plan\|yolo]` | Show or switch the current TUI mode |
-| `config theme [dark\|light\|grayscale\|system]`, `/config theme [dark\|light\|grayscale\|system]` | Show or switch the current TUI theme |
+| `config theme [dark\|light\|grayscale\|system]`, `/config theme [dark\|light\|grayscale\|system]` | Show or switch the current TUI theme, persisted in `.dscode/tui/theme.json` |
 | `config verbose [on\|off\|toggle\|show]`, `/config verbose [on\|off\|toggle\|show]` | Show or toggle verbose transcript rendering |
 | `config translate [on\|off\|toggle\|show]`, `/config translate [on\|off\|toggle\|show]` | Show or toggle translated natural-language output |
-| `theme`, `/theme` | Cycle the local TUI theme and show the theme detail panel |
+| `theme`, `/theme` | Cycle the local TUI theme, persist it, and show the theme detail panel |
 | `theme show`, `/theme show` | Show current theme and available theme commands |
-| `theme dark|light|grayscale|system`, `/theme dark|light|grayscale|system` | Switch the local TUI theme |
+| `theme dark|light|grayscale|system`, `/theme dark|light|grayscale|system` | Switch and persist the local TUI theme |
 | `statusline`, `/statusline` | Show command bar items, shortcuts, and related status/config commands |
 | `verbose`, `/verbose` | Toggle whether live reasoning text is rendered in full in the transcript |
 | `verbose on|off|show`, `/verbose on|off|show` | Enable, disable, or inspect verbose transcript mode |
@@ -571,8 +571,9 @@ discovery commands still use the scrollable right-side detail panel. Project
 instruction init, session rename, rollback, memory, network policy, composer
 stash, custom slash commands, and MCP manager commands are local-only because
 they operate on the client's runtime/session files, git worktree, project/user
-MCP config, configured MCP transports, `.dscode/tui/composer-stash.json`,
-custom command markdown files, and user memory file; HTTP-runtime TUI
+MCP config, configured MCP transports, `.dscode/tui/theme.json`,
+`.dscode/tui/composer-stash.json`, custom command markdown files, and user
+memory file; HTTP-runtime TUI
 sessions report that those commands require local file-backed TUI. General
 external command execution is currently limited to the allowlisted local
 background shell path.

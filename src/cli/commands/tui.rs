@@ -106,6 +106,9 @@ pub fn run(args: TuiArgs) -> AppResult<()> {
     let runtime_store = RuntimeStore::new(runtime_root);
     let mut app = app_from_store(&runtime_store)?;
     configure_tui_slash_completions(&mut app, &config);
+    app.enable_theme_preferences(
+        PathBuf::from(&config.workspace.config_dir).join("tui/theme.json"),
+    );
     app.enable_reasoning_replay_preferences(
         PathBuf::from(&config.workspace.config_dir).join("tui/reasoning-replay.json"),
     );

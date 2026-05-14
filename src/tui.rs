@@ -3166,6 +3166,7 @@ const MAX_TUI_COMPACTION_KEEP_TAIL_TURNS: usize = 200;
 const DEFAULT_TUI_REASONING_REPLAY_LIMIT: usize = 3;
 const MAX_TUI_REASONING_REPLAY_LIMIT: usize = 20;
 const TUI_CONTEXT_WINDOW_TOKENS: u64 = 1_000_000;
+const TUI_THEME_PREF_KIND: &str = "deepseek.tui.theme.v1";
 const TUI_REASONING_REPLAY_PREF_KIND: &str = "deepseek.tui.reasoning_replay.v1";
 const MAX_TUI_COMMAND_HISTORY: usize = 100;
 const MAX_TUI_COMPOSER_STASH_ENTRIES: usize = 100;
@@ -4124,6 +4125,36 @@ struct ReasoningReplayPreferences {
     pinned_turn_ids: BTreeSet<String>,
 }
 
+fn read_theme_preference(path: &Path) -> AppResult<Option<TuiTheme>> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(path)?;
+    let root = parse_root_object(&content)?;
+    let theme = root
+        .get("theme")
+        .and_then(json_as_string)
+        .and_then(TuiTheme::from_command_arg);
+    Ok(theme)
+}
+
+fn write_theme_preference(path: &Path, theme: TuiTheme) -> AppResult<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut root = BTreeMap::new();
+    root.insert(
+        "kind".to_string(),
+        JsonValue::String(TUI_THEME_PREF_KIND.to_string()),
+    );
+    root.insert(
+        "theme".to_string(),
+        JsonValue::String(theme.command_name().to_string()),
+    );
+    fs::write(path, json_value_to_string(&JsonValue::Object(root)))?;
+    Ok(())
+}
+
 fn read_reasoning_replay_preferences(path: &Path) -> AppResult<Option<ReasoningReplayPreferences>> {
     if !path.is_file() {
         return Ok(None);
@@ -4370,6 +4401,7 @@ pub struct TuiApp {
     queued_draft: Option<TuiQueuedMessage>,
     composer_stash: Vec<ComposerStashEntry>,
     composer_stash_path: Option<PathBuf>,
+    theme_preferences_path: Option<PathBuf>,
     transcript_scroll: usize,
     verbose_transcript: bool,
     translation_enabled: bool,
@@ -4553,6 +4585,7 @@ impl TuiApp {
             queued_draft: None,
             composer_stash: Vec::new(),
             composer_stash_path: None,
+            theme_preferences_path: None,
             transcript_scroll: 0,
             verbose_transcript: false,
             translation_enabled: false,
@@ -4653,6 +4686,31 @@ impl TuiApp {
                     path.display()
                 );
             }
+        }
+    }
+
+    pub fn enable_theme_preferences(&mut self, path: PathBuf) {
+        self.theme_preferences_path = Some(path.clone());
+        match read_theme_preference(&path) {
+            Ok(Some(theme)) => {
+                self.theme = theme;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                self.status = format!(
+                    "failed to load theme preferences from {}: {error}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    fn persist_theme_preferences(&mut self) {
+        let Some(path) = self.theme_preferences_path.as_ref() else {
+            return;
+        };
+        if let Err(error) = write_theme_preference(path, self.theme) {
+            self.status = format!("{}; failed to save theme preference: {error}", self.status);
         }
     }
 
@@ -11382,11 +11440,13 @@ impl TuiApp {
                 self.theme = self.theme.next();
                 self.show_theme_detail();
                 self.status = format!("theme switched: {}", self.theme.title());
+                self.persist_theme_preferences();
             }
             TuiThemeCommand::Set(theme) => {
                 self.theme = theme;
                 self.show_theme_detail();
                 self.status = format!("theme switched: {}", self.theme.title());
+                self.persist_theme_preferences();
             }
         }
     }
@@ -11423,10 +11483,14 @@ impl TuiApp {
             "- /theme system      Terminal-default color assumptions"
         );
         let _ = writeln!(detail);
-        let _ = writeln!(
-            detail,
-            "The theme is local to the running TUI session; persistent color settings remain a separate config task."
-        );
+        if let Some(path) = self.theme_preferences_path.as_ref() {
+            let _ = writeln!(detail, "Persistent TUI preference: {}", path.display());
+        } else {
+            let _ = writeln!(
+                detail,
+                "Theme persistence is disabled for this TUI session."
+            );
+        }
         detail
     }
 
@@ -16391,6 +16455,31 @@ mod tests {
         assert_eq!(app.theme, TuiTheme::Grayscale);
         assert_eq!(app.status, "theme switched: Grayscale");
         assert_eq!(app.composer, "");
+    }
+
+    #[test]
+    fn theme_preferences_persist_across_tui_instances() {
+        let root = temp_root("theme-prefs");
+        let prefs = root.join("theme.json");
+        let mut app = TuiApp::new(Vec::new());
+        app.enable_theme_preferences(prefs.clone());
+
+        run_palette_command(&mut app, "theme light");
+
+        assert_eq!(app.theme, TuiTheme::Light);
+        let saved = fs::read_to_string(&prefs).unwrap();
+        assert!(saved.contains("\"kind\":\"deepseek.tui.theme.v1\""));
+        assert!(saved.contains("\"theme\":\"light\""));
+
+        let (_, detail) = app.mcp_detail.as_ref().expect("theme detail");
+        assert!(detail.contains(&format!("Persistent TUI preference: {}", prefs.display())));
+
+        let mut restored = TuiApp::new(Vec::new());
+        restored.enable_theme_preferences(prefs.clone());
+
+        assert_eq!(restored.theme, TuiTheme::Light);
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

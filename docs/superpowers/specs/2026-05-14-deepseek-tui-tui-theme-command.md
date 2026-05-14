@@ -20,12 +20,15 @@ theme state.
   panel with `TuiMcpDetailKind::Theme`.
 - Wired theme accent, hint, and label colors into mode tabs, sidebar,
   command bar, and command palette rendering.
+- Persisted local TUI theme choice in `.dscode/tui/theme.json` and restored it
+  when the local TUI starts.
 - Added command-palette and composer slash completions.
 - Updated TUI documentation and the DeepSeek-TUI parity plan.
 
 ## Verification
 
 - `cargo test theme_command_switches_and_renders_theme_state --lib`
+- `cargo test theme_preferences_persist_across_tui_instances --lib`
 - `cargo test tui --lib`
 - `cargo fmt --check`
 - `cargo check`
@@ -33,5 +36,6 @@ theme state.
 
 ## Remaining
 
-Theme state is local to the running TUI process and is not yet persisted to
-`.dscode/config.toml`. Persistent theme settings remain a separate config task.
+No known DeepSeek-TUI theme-command parity blocker remains. A future global
+config theme key in `.dscode/config.toml` could be added as product polish, but
+local TUI restarts now preserve the selected theme.

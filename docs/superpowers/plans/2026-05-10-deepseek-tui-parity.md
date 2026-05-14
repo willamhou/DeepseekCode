@@ -576,7 +576,8 @@ Landed first slice:
   surfaces the active config surface instead of returning usage errors
 - TUI now supports DeepSeek-TUI-style `/theme [dark|light|grayscale|system]`,
   cycling or switching local TUI theme state and wiring theme accents into tabs,
-  sidebar, command bar, and command palette rendering
+  sidebar, command bar, and command palette rendering; theme choice now
+  persists across local TUI restarts in `.dscode/tui/theme.json`
 - TUI now supports DeepSeek-TUI-style `/statusline`, rendering current command
   bar items, shortcuts, and related status/config commands in the detail panel
 - TUI now supports DeepSeek-TUI-style `/verbose [on|off]`, keeping reasoning
