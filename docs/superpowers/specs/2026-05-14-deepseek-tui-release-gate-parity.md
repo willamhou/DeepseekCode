@@ -23,6 +23,9 @@ gate already used elsewhere is serial test execution.
   `cargo test -- --test-threads=1` in the release build matrix.
 - Updated the generated release notes text in the workflow so published release
   notes name the actual serial test gate.
+- Changed the npm artifact directory setup from a single-line `run:` command to
+  a block scalar so the JavaScript object literal `recursive: true` is not
+  parsed as YAML structure by GitHub Actions.
 - Updated `docs/release.md` to use the same serial test command in the local
   release gate.
 
@@ -39,6 +42,8 @@ gate already used elsewhere is serial test execution.
 - `for package_dir in npm/platforms/*; do (cd "$package_dir" && npm_config_cache=/tmp/deepseek-npm-cache npm pack --dry-run); done`
 - `cargo fmt --check`
 - `git diff --check`
+- `rg -n '^\s*run: .*: ' .github/workflows/release.yml` returned no matches
+  after the workflow YAML fix.
 - Local Homebrew formula syntax smoke was not run because `ruby` is not
   installed in this workspace image; the GitHub-hosted release runner still
   performs `ruby -c packaging/homebrew/deepseek.rb`.

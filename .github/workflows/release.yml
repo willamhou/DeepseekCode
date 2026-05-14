@@ -101,7 +101,8 @@ jobs:
         run: node npm/scripts/verify-platform-package.js --platform ${{ matrix.npm_platform }}
 
       - name: Prepare npm Artifact Directory
-        run: node -e "require('fs').mkdirSync('dist-npm', { recursive: true })"
+        run: |
+          node -e "require('fs').mkdirSync('dist-npm', { recursive: true })"
 
       - name: Pack npm Platform Package
         working-directory: npm/platforms/${{ matrix.npm_platform }}
