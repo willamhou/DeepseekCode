@@ -1354,8 +1354,8 @@ inspect persisted shell jobs without separately calling the model tool.
 `exec_shell_supervisor_status cwd=<path>` inspects that manifest/socket state,
 reports absent/stale/ready status and supported method names, probes socket
 protocol health with a bounded `health` request, probes `status` for the
-daemon's active job count, probes `show` for protocol job-inventory parity when
-the daemon is healthy, and never prints
+daemon's active job count backed by durable shell job manifests, probes `show`
+for protocol job-inventory parity when the daemon is healthy, and never prints
 `control_token_hash`. Unsupported PTY methods return structured `unsupported`
 responses until native supervisor-owned PTY sessions land.
 Local file-backed TUI sessions surface the same read-only protocol check through

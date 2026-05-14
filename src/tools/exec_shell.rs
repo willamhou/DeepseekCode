@@ -1820,6 +1820,15 @@ fn list_durable_shell_jobs(cwd: &str) -> AppResult<Vec<DurableShellJobRecord>> {
     Ok(records)
 }
 
+pub(crate) fn count_active_durable_shell_jobs(cwd: &Path) -> AppResult<u64> {
+    let cwd = cwd.to_string_lossy();
+    let records = list_durable_shell_jobs(cwd.as_ref())?;
+    Ok(records
+        .iter()
+        .filter(|record| record.status == "running")
+        .count() as u64)
+}
+
 fn render_shell_supervisor_status(cwd: &str) -> AppResult<String> {
     let state_dir = shell_supervisor_state_dir(cwd);
     let manifest_path = shell_supervisor_manifest_path(cwd);

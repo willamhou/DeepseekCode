@@ -32,8 +32,8 @@ use crate::tools::dispatch_subagent::{
     active_agent_thread_path, agent_threads_dir, thread_file_path, validate_thread_id,
 };
 use crate::tools::exec_shell::{
-    ExecShellListTool, ExecShellSupervisorStatusTool, SHELL_SUPERVISOR_SUPPORTED_METHODS,
-    SHELL_SUPERVISOR_UNSUPPORTED_PTY_METHODS,
+    count_active_durable_shell_jobs, ExecShellListTool, ExecShellSupervisorStatusTool,
+    SHELL_SUPERVISOR_SUPPORTED_METHODS, SHELL_SUPERVISOR_UNSUPPORTED_PTY_METHODS,
 };
 use crate::tools::rlm::{
     rlm_live_session_ids_by_runtime_thread, RlmLiveCancelTool, RlmLiveDrainTool, RlmLiveEventsTool,
@@ -829,6 +829,10 @@ fn shell_supervisor_protocol_response(
     epoch: &str,
 ) -> JsonValue {
     let supported = SHELL_SUPERVISOR_SUPPORTED_METHODS.contains(&method);
+    let (active_jobs, active_jobs_error) = match count_active_durable_shell_jobs(cwd) {
+        Ok(count) => (count, None),
+        Err(error) => (0, Some(error.to_string())),
+    };
     let mut response = BTreeMap::from([
         (
             "kind".to_string(),
@@ -874,9 +878,12 @@ fn shell_supervisor_protocol_response(
         ("native_pty".to_string(), JsonValue::Bool(false)),
         (
             "active_jobs".to_string(),
-            JsonValue::Number("0".to_string()),
+            JsonValue::Number(active_jobs.to_string()),
         ),
     ]);
+    if let Some(error) = active_jobs_error {
+        response.insert("active_jobs_error".to_string(), JsonValue::String(error));
+    }
     if !supported {
         response.insert(
             "error".to_string(),
@@ -964,6 +971,7 @@ fn shell_supervisor_protocol_error_response(
 
 #[cfg(unix)]
 fn write_shell_supervisor_manifest(cwd: &Path, socket: &Path, epoch: &str) -> AppResult<()> {
+    let active_jobs = count_active_durable_shell_jobs(cwd)?;
     let manifest = JsonValue::Object(BTreeMap::from([
         (
             "kind".to_string(),
@@ -995,7 +1003,7 @@ fn write_shell_supervisor_manifest(cwd: &Path, socket: &Path, epoch: &str) -> Ap
         ),
         (
             "active_jobs".to_string(),
-            JsonValue::Number("0".to_string()),
+            JsonValue::Number(active_jobs.to_string()),
         ),
         (
             "started_at".to_string(),
@@ -2776,6 +2784,67 @@ mod tests {
         assert!(inventory.contains(task_id), "{inventory}");
         assert!(inventory.contains("echo durable"), "{inventory}");
         assert!(inventory.contains("stdout=8"), "{inventory}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn shell_supervisor_protocol_status_counts_active_durable_jobs() {
+        let root = temp_root("shell-supervisor-status-active");
+        let running_dir = root.join(".dscode/shell-jobs").join("shell-running");
+        let exited_dir = root.join(".dscode/shell-jobs").join("shell-exited");
+        std::fs::create_dir_all(&running_dir).unwrap();
+        std::fs::create_dir_all(&exited_dir).unwrap();
+        for (dir, id, status, pid) in [
+            (
+                &running_dir,
+                "shell-running",
+                "running",
+                std::process::id().to_string(),
+            ),
+            (&exited_dir, "shell-exited", "exited", "0".to_string()),
+        ] {
+            let manifest = JsonValue::Object(BTreeMap::from([
+                ("id".to_string(), JsonValue::String(id.to_string())),
+                (
+                    "command".to_string(),
+                    JsonValue::String(format!("echo {id}")),
+                ),
+                (
+                    "cwd".to_string(),
+                    JsonValue::String(root.display().to_string()),
+                ),
+                ("status".to_string(), JsonValue::String(status.to_string())),
+                ("pid".to_string(), JsonValue::Number(pid)),
+                (
+                    "started_at".to_string(),
+                    JsonValue::String("epoch+1".to_string()),
+                ),
+                (
+                    "updated_at".to_string(),
+                    JsonValue::String("epoch+2".to_string()),
+                ),
+            ]));
+            std::fs::write(dir.join("manifest.json"), json_value_to_string(&manifest)).unwrap();
+        }
+
+        let response = shell_supervisor_protocol_response(
+            "status",
+            &root,
+            &root.join(".dscode/shell-supervisor/supervisor.sock"),
+            "epoch+3",
+        );
+        let object = json_as_object(&response).unwrap();
+
+        assert_eq!(json_as_string(object.get("status").unwrap()), Some("ok"));
+        assert_eq!(
+            json_as_string(object.get("method").unwrap()),
+            Some("status")
+        );
+        assert!(matches!(
+            object.get("active_jobs"),
+            Some(JsonValue::Number(value)) if value == "1"
+        ));
+        assert!(!object.contains_key("active_jobs_error"));
         let _ = std::fs::remove_dir_all(root);
     }
 
