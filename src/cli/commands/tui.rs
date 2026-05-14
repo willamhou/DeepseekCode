@@ -5710,9 +5710,14 @@ fn run_tui_shell_supervisor_status(app: &mut TuiApp) {
                 &output.summary,
                 "shell supervisor status shown",
             ));
+            let inventory = match ExecShellListTool.execute(ToolInput::new()) {
+                Ok(inventory) => inventory.summary,
+                Err(error) => format!("job_inventory_error: {error}"),
+            };
+            let detail = format!("{}\n\nShell job inventory\n\n{}", output.summary, inventory);
             app.set_mcp_detail(
                 TuiMcpDetailKind::Shell,
-                format_shell_detail("Shell supervisor status", &output.summary),
+                format_shell_detail("Shell supervisor status", &detail),
             );
         }
         Err(error) => {
@@ -7268,6 +7273,13 @@ mod tests {
     }
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn shell_tool_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
             .lock()
@@ -11684,6 +11696,7 @@ shell_allowlist = ["git diff"]
 
     #[test]
     fn handle_tui_action_runs_and_polls_shell_job() {
+        let _guard = shell_tool_lock();
         let store = temp_store("shell-action");
         let mut app = TuiApp::new(Vec::new());
 
@@ -11797,7 +11810,89 @@ shell_allowlist = ["git diff"]
     }
 
     #[test]
+    fn handle_tui_action_shell_supervisor_shows_job_inventory() {
+        let _guard = shell_tool_lock();
+        let store = temp_store("shell-supervisor-inventory");
+        let mut app = TuiApp::new(Vec::new());
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let task_id = format!("tui-supervisor-inventory-{suffix}");
+        let job_dir = Path::new(".").join(".dscode/shell-jobs").join(&task_id);
+        fs::create_dir_all(&job_dir).unwrap();
+        fs::write(job_dir.join("stdout.log"), "supervisor-inventory\n").unwrap();
+        let manifest = JsonValue::Object(BTreeMap::from([
+            (
+                "kind".to_string(),
+                JsonValue::String("deepseek.exec_shell.job.v1".to_string()),
+            ),
+            ("id".to_string(), JsonValue::String(task_id.clone())),
+            (
+                "command".to_string(),
+                JsonValue::String("echo supervisor-inventory".to_string()),
+            ),
+            ("cwd".to_string(), JsonValue::String(".".to_string())),
+            ("tty".to_string(), JsonValue::Bool(false)),
+            ("pty_backend".to_string(), JsonValue::Null),
+            ("attachable".to_string(), JsonValue::Bool(false)),
+            ("resizable".to_string(), JsonValue::Bool(false)),
+            ("supervisor_pid".to_string(), JsonValue::Null),
+            ("supervisor_socket".to_string(), JsonValue::Null),
+            ("supervisor_epoch".to_string(), JsonValue::Null),
+            ("terminal_event_log".to_string(), JsonValue::Null),
+            ("terminal_event_seq".to_string(), JsonValue::Null),
+            ("control_token_hash".to_string(), JsonValue::Null),
+            ("tty_rows".to_string(), JsonValue::Null),
+            ("tty_cols".to_string(), JsonValue::Null),
+            (
+                "status".to_string(),
+                JsonValue::String("exited".to_string()),
+            ),
+            ("exit_code".to_string(), JsonValue::Number("0".to_string())),
+            ("pid".to_string(), JsonValue::Number("0".to_string())),
+            ("owner_pid".to_string(), JsonValue::Null),
+            ("process_group".to_string(), JsonValue::Null),
+            ("stdin_path".to_string(), JsonValue::Null),
+            ("stdin_keeper_pid".to_string(), JsonValue::Null),
+            ("stdin_closed".to_string(), JsonValue::Bool(true)),
+            (
+                "started_at".to_string(),
+                JsonValue::String("epoch+1".to_string()),
+            ),
+            (
+                "updated_at".to_string(),
+                JsonValue::String("epoch+2".to_string()),
+            ),
+            (
+                "stdout_total_bytes".to_string(),
+                JsonValue::Number("21".to_string()),
+            ),
+            (
+                "stderr_total_bytes".to_string(),
+                JsonValue::Number("0".to_string()),
+            ),
+        ]));
+        fs::write(
+            job_dir.join("manifest.json"),
+            json_value_to_string(&manifest),
+        )
+        .unwrap();
+
+        handle_tui_action(&store, None, &mut app, TuiAction::ShellSupervisorStatus).unwrap();
+
+        let (kind, detail) = app.mcp_detail_for_test().expect("shell detail");
+        assert_eq!(kind, TuiMcpDetailKind::Shell);
+        assert!(detail.contains("Shell supervisor status"), "{detail}");
+        assert!(detail.contains("Shell job inventory"), "{detail}");
+        assert!(detail.contains(&task_id), "{detail}");
+        assert!(detail.contains("echo supervisor-inventory"), "{detail}");
+        let _ = fs::remove_dir_all(job_dir);
+    }
+
+    #[test]
     fn handle_tui_action_runs_approved_shell_job() {
+        let _guard = shell_tool_lock();
         let store = temp_store("approved-shell-action");
         let mut app = TuiApp::new(Vec::new());
 
