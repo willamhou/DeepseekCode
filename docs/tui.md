@@ -413,16 +413,16 @@ Command palette commands currently implemented:
 | `batonpass [focus]`, `/batonpass [focus]`, `接力 [focus]`, `/接力 [focus]` | Aliases for `relay` / `/relay` |
 | `relay help`, `/batonpass help` | Show relay command behavior and active thread/workspace target |
 | `shell <command>`, `shell run <command>`, `! <command>` | Start an allowlisted local background shell job, or request foreground approval for an unallowlisted command |
-| `shell list`, `jobs list` | List known local background shell jobs |
-| `shell show <id>`, `jobs show <id>` | Show a shell job snapshot with accumulated output |
-| `shell attach <id> [cursor|tail]`, `jobs attach <id> [cursor|tail]` | Replay terminal-oriented durable stdout PTY/log bytes |
-| `shell poll <id>`, `jobs poll <id>` | Poll one local background shell job without waiting |
-| `shell wait <id> [ms]`, `jobs wait <id> [ms]` | Wait briefly for one local background shell job and show output deltas |
-| `shell stdin <id> <input>`, `jobs stdin <id> <input>` | Send stdin to a running local background shell job |
-| `shell close-stdin <id>`, `jobs close-stdin <id>` | Close stdin for a running local background shell job |
-| `shell resize <id> <rows> <cols>`, `jobs resize <id> <rows> <cols>` | Resize a TTY-backed shell job with best-effort control |
-| `shell cancel <id|all>`, `jobs cancel <id|all>` | Cancel one or all local background shell jobs |
-| `shell supervisor`, `jobs supervisor` | Show workspace-local shell supervisor manifest, socket, and protocol health |
+| `shell list`, `jobs list`, `/jobs list` | List known local background shell jobs |
+| `shell show <id>`, `jobs show <id>`, `/jobs show <id>` | Show a shell job snapshot with accumulated output |
+| `shell attach <id> [cursor|tail]`, `jobs attach <id> [cursor|tail]`, `/jobs attach <id> [cursor|tail]` | Replay terminal-oriented durable stdout PTY/log bytes |
+| `shell poll <id>`, `jobs poll <id>`, `/jobs poll <id>` | Poll one local background shell job without waiting |
+| `shell wait <id> [ms]`, `jobs wait <id> [ms]`, `/jobs wait <id> [ms]` | Wait briefly for one local background shell job and show output deltas |
+| `shell stdin <id> <input>`, `jobs stdin <id> <input>`, `/jobs stdin <id> <input>` | Send stdin to a running local background shell job |
+| `shell close-stdin <id>`, `jobs close-stdin <id>`, `/jobs close-stdin <id>` | Close stdin for a running local background shell job |
+| `shell resize <id> <rows> <cols>`, `jobs resize <id> <rows> <cols>`, `/jobs resize <id> <rows> <cols>` | Resize a TTY-backed shell job with best-effort control |
+| `shell cancel <id|all>`, `jobs cancel <id|all>`, `/jobs cancel <id|all>` | Cancel one or all local background shell jobs |
+| `shell supervisor`, `jobs supervisor`, `/jobs supervisor` | Show workspace-local shell supervisor manifest, socket, and protocol health |
 | `memory`, `memory show` | Show configured user memory in the right-side detail panel |
 | `memory path` | Show the configured user memory path and enabled/disabled state |
 | `memory clear` | Empty the configured user memory file when memory is enabled |
@@ -516,11 +516,11 @@ Command palette commands currently implemented:
 | `reasoning replay <0..20>` | Set how many persisted reasoning entries local TUI agent runs replay |
 | `reasoning pin <latest\|index\|item-id\|turn-id>` | Keep one reasoning turn in local replay beyond the latest-N window |
 | `reasoning pins`, `reasoning unpin <selector\|all>` | Inspect or clear local reasoning replay pins |
-| `mcp`, `mcp manager`, `mcp open` | Open the full-width MCP manager screen with merged inventory, config sources, and common actions |
+| `mcp`, `/mcp`, `mcp manager`, `/mcp manager`, `mcp open` | Open the full-width MCP manager screen with merged inventory, config sources, and common actions |
 | `mcp manager tab overview|tools|prompts|resources|resource-templates|health` | Switch the full-width MCP manager tab |
 | `mcp manager filter <query>`, `mcp manager filter` | Filter or clear visible lines in the full-width MCP manager screen |
 | `mcp manager tools|prompts|resources|resource-templates [server]` | Show MCP discovery summaries in the full-width manager screen |
-| `mcp list`, `mcp status`, `mcp reload` | Summarize merged MCP config inventory in the status bar |
+| `mcp list`, `/mcp list`, `mcp status`, `/mcp status`, `mcp reload`, `/mcp reload` | Summarize merged MCP config inventory in the status bar |
 | `mcp tools [server]` | List configured MCP server tools in the scrollable right-side panel |
 | `mcp prompts [server]` | List configured MCP server prompts in the scrollable right-side panel |
 | `mcp resources [server]` | List configured MCP server resources in the scrollable right-side panel |
@@ -537,11 +537,11 @@ Command palette commands currently implemented:
 | `mcp validate` | Validate enabled MCP servers and show tools/prompts/resources/templates health in the scrollable right-side panel |
 | `diagnostics`, `diagnostics <paths...>` | Run local workspace or path-scoped diagnostics and summarize the result in the status bar |
 | `diagnostics --changed`, `diag changed` | Run diagnostics against git changed files |
-| `restore snapshot [label]` | Create a local rollback snapshot from the current git worktree |
-| `restore list [limit]` | Show recent local rollback snapshots in the right-side detail panel |
-| `restore show <id|last>` | Show one rollback snapshot or runtime-turn-bound snapshot with patch preview |
-| `restore hunks <id|last>`, `restore diff <id|last>` | List parsed rollback patch hunks in the right-side detail panel |
-| `restore hunk <id|last> [index]` | Show one 1-based rollback patch hunk |
+| `restore snapshot [label]`, `/restore snapshot [label]` | Create a local rollback snapshot from the current git worktree |
+| `restore list [limit]`, `/restore list [limit]` | Show recent local rollback snapshots in the right-side detail panel |
+| `restore show <id|last>`, `/restore show <id|last>` | Show one rollback snapshot or runtime-turn-bound snapshot with patch preview |
+| `restore hunks <id|last>`, `/restore hunks <id|last>`, `restore diff <id|last>`, `/restore diff <id|last>` | List parsed rollback patch hunks in the right-side detail panel |
+| `restore hunk <id|last> [index]`, `/restore hunk <id|last> [index]` | Show one 1-based rollback patch hunk |
 | `revert turn <id|last> [--apply]` | Dry-run or apply a local rollback snapshot and show the restore plan; `--apply` requires modal confirmation |
 | `approval` | Open the approval modal |
 | `cancel`, `stop` | Cancel the active running assistant turn |

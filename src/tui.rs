@@ -2923,6 +2923,16 @@ fn parse_tui_custom_slash_command(line: &str) -> Option<(String, Vec<String>)> {
     ))
 }
 
+fn palette_backed_composer_command(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    let normalized = trimmed.strip_prefix('/').unwrap_or(trimmed);
+    let command = normalized.split_whitespace().next()?;
+    match command {
+        "mcp" | "jobs" | "job" | "restore" | "revert" => Some(normalized.to_string()),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TuiAction {
     SubmitUserMessage {
@@ -7319,6 +7329,12 @@ impl TuiApp {
                 }
                 if let Some(message) = parse_tui_legacy_migration_command(&content) {
                     self.status = message.to_string();
+                    return true;
+                }
+                if let Some(command) = palette_backed_composer_command(&content) {
+                    self.execute_palette_command(&command);
+                    self.composer.clear();
+                    self.composer_cursor = 0;
                     return true;
                 }
                 if let Some((command, args)) = parse_tui_custom_slash_command(&content) {
@@ -18699,6 +18715,41 @@ mod tests {
 
         run_palette_command(&mut app, "mcp validate");
         assert_eq!(app.drain_actions(), vec![TuiAction::McpValidate]);
+    }
+
+    #[test]
+    fn composer_routes_palette_backed_slash_commands_before_custom_fallback() {
+        let mut app = TuiApp::new(Vec::new());
+
+        app.composer_focused = true;
+        app.composer = "/mcp reload".to_string();
+        app.composer_cursor = app.composer.len();
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert_eq!(app.drain_actions(), vec![TuiAction::McpList]);
+        assert_eq!(app.composer, "");
+        assert!(app.status.contains("mcp inventory requested"));
+
+        app.composer_focused = true;
+        app.composer = "/jobs list".to_string();
+        app.composer_cursor = app.composer.len();
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert_eq!(app.drain_actions(), vec![TuiAction::ListShell]);
+        assert_eq!(app.composer, "");
+        assert!(app.status.contains("shell job list requested"));
+
+        app.composer_focused = true;
+        app.composer = "/restore list 7".to_string();
+        app.composer_cursor = app.composer.len();
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::ListRollbackSnapshots { limit: 7 }]
+        );
+        assert_eq!(app.composer, "");
+        assert_eq!(app.status, "rollback snapshot list requested (limit=7)");
     }
 
     #[test]

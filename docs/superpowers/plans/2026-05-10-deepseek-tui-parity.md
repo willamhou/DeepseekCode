@@ -376,6 +376,9 @@ Landed first slice:
   are persisted for detached later inspection through the same job id and cwd;
   `shell supervisor` / `jobs supervisor` also expose workspace-local shell
   supervisor manifest, socket, and protocol health in the shell detail panel
+- local file-backed TUI composer slash commands now route DeepSeek-TUI-style
+  palette-backed `/mcp`, `/jobs`, and `/restore` forms through the same built-in
+  local dispatcher before custom slash fallback
 - local file-backed TUI command palette now routes unallowlisted foreground
   shell commands through an explicit modal approval; approved commands run once
   through a trusted TUI-only background shell path without adding an allowlist
