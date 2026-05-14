@@ -777,6 +777,9 @@ fn handle_tui_http_action(
         TuiAction::ExportThread { .. } => {
             app.set_status("export commands require local file-backed TUI".to_string());
         }
+        TuiAction::ClearConversation { .. } => {
+            app.set_status("clear conversation requires local file-backed TUI".to_string());
+        }
         TuiAction::Hooks { .. } => {
             app.set_status("hooks commands require local file-backed TUI".to_string());
         }
@@ -1207,6 +1210,7 @@ fn mcp_detail_summary(
         TuiMcpDetailKind::Tokens => Err(app_error("token details are not MCP details")),
         TuiMcpDetailKind::Cost => Err(app_error("cost details are not MCP details")),
         TuiMcpDetailKind::Cache => Err(app_error("cache details are not MCP details")),
+        TuiMcpDetailKind::Clear => Err(app_error("clear details are not MCP details")),
         TuiMcpDetailKind::Model => Err(app_error("model details are not MCP details")),
         TuiMcpDetailKind::Provider => Err(app_error("provider details are not MCP details")),
         TuiMcpDetailKind::Skills => Err(app_error("skill details are not MCP details")),
@@ -1845,6 +1849,18 @@ fn handle_tui_action_with_live(
         }
         TuiAction::ExportThread { thread_id, path } => {
             run_tui_export_thread(store, app, &thread_id, path.as_deref())?;
+        }
+        TuiAction::ClearConversation {
+            session_id,
+            previous_thread_id,
+        } => {
+            run_tui_clear_conversation(
+                store,
+                config,
+                app,
+                &session_id,
+                previous_thread_id.as_deref(),
+            )?;
         }
         TuiAction::Hooks { command } => {
             run_tui_hooks_command(app, config, command);
@@ -2967,6 +2983,46 @@ fn tui_export_title(value: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn run_tui_clear_conversation(
+    store: &RuntimeStore,
+    config: Option<&AppConfig>,
+    app: &mut TuiApp,
+    session_id: &str,
+    previous_thread_id: Option<&str>,
+) -> AppResult<()> {
+    let session = store.load_session(session_id)?;
+    let previous_thread =
+        previous_thread_id.and_then(|thread_id| store.load_thread(thread_id).ok());
+    let workspace = previous_thread
+        .as_ref()
+        .map(|thread| thread.workspace.clone())
+        .unwrap_or_else(|| session.workspace.clone());
+    let model = previous_thread
+        .as_ref()
+        .map(|thread| thread.model.clone())
+        .or_else(|| config.map(|config| config.model.model.clone()))
+        .unwrap_or_else(|| AppConfig::default().model.model);
+    let mode = previous_thread
+        .as_ref()
+        .map(|thread| thread.mode.clone())
+        .unwrap_or_else(|| "agent".to_string());
+    let thread = store.create_thread_for_session(
+        session_id,
+        "New conversation".to_string(),
+        workspace,
+        model,
+        mode,
+    )?;
+    refresh_app_from_store(store, app)?;
+    app.clear_transient_conversation_state();
+    app.select_thread_by_id(&thread.id);
+    app.set_status(format!(
+        "cleared conversation; new active thread {}",
+        thread.id
+    ));
+    Ok(())
 }
 
 fn html_escape(value: &str) -> String {
@@ -5297,6 +5353,26 @@ description = "Review pull requests."
     }
 
     #[test]
+    fn handle_tui_http_action_rejects_clear_conversation_as_local_only() {
+        let client = RuntimeHttpClient::from_url("http://127.0.0.1:9").unwrap();
+        let mut app = TuiApp::new(Vec::new());
+
+        handle_tui_http_action(
+            &client,
+            &mut app,
+            TuiAction::ClearConversation {
+                session_id: "session-one".to_string(),
+                previous_thread_id: Some("thread-one".to_string()),
+            },
+        )
+        .unwrap();
+
+        assert!(render_once(&app, 120, 36)
+            .unwrap()
+            .contains("clear conversation requires local file-backed TUI"));
+    }
+
+    #[test]
     fn handle_tui_http_action_rejects_session_rename_as_local_only() {
         let client = RuntimeHttpClient::from_url("http://127.0.0.1:9").unwrap();
         let mut app = TuiApp::new(Vec::new());
@@ -7084,6 +7160,61 @@ shell_allowlist = ["git diff"]
         assert!(markdown.contains("# Chat Export"));
         assert!(markdown.contains("**Thread:** Empty export"));
         assert!(markdown.contains("No transcript items."));
+    }
+
+    #[test]
+    fn handle_tui_action_clears_conversation_by_switching_to_new_thread() {
+        let root = temp_root("clear-action");
+        fs::create_dir_all(&root).unwrap();
+        let store = RuntimeStore::new(root.join(".dscode/runtime"));
+        let session = store
+            .create_session("Daily work".to_string(), root.display().to_string())
+            .unwrap();
+        let thread = store
+            .create_thread_for_session(
+                &session.id,
+                "Old conversation".to_string(),
+                root.display().to_string(),
+                "deepseek-v4-pro".to_string(),
+                "agent".to_string(),
+            )
+            .unwrap();
+        store
+            .append_item(
+                &thread.id,
+                None,
+                "message".to_string(),
+                Some("user".to_string()),
+                "old transcript".to_string(),
+                "completed".to_string(),
+            )
+            .unwrap();
+        let mut app = app_from_store(&store).unwrap();
+
+        handle_tui_action(
+            &store,
+            None,
+            &mut app,
+            TuiAction::ClearConversation {
+                session_id: session.id.clone(),
+                previous_thread_id: Some(thread.id.clone()),
+            },
+        )
+        .unwrap();
+
+        let loaded_session = store.load_session(&session.id).unwrap();
+        let new_thread_id = loaded_session.active_thread_id.expect("active thread");
+        assert_ne!(new_thread_id, thread.id);
+        let new_thread = store.load_thread(&new_thread_id).unwrap();
+        assert_eq!(new_thread.title, "New conversation");
+        assert_eq!(new_thread.model, "deepseek-v4-pro");
+        assert!(store.list_items(&new_thread_id, None).unwrap().is_empty());
+        let output = render_once(&app, 160, 48).unwrap();
+        assert!(output.contains("New conversation"));
+        assert!(!output.contains("old transcript"));
+        assert!(output.contains("cleared conversation; new active thread"));
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

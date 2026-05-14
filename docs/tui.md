@@ -52,6 +52,8 @@ Current surfaces:
   active-thread context window, compaction strategy, token/cache telemetry, and
   reasoning replay state
 - slash quit aliases with `exit` / `/exit`, `quit` / `/quit`, and `q` / `/q`
+- conversation reset with `clear` / `/clear`, creating a fresh empty active
+  thread in the selected durable session without deleting older thread history
 - composer draft stash: `Ctrl+S` parks the current draft, and
   `stash list|pop|clear` / `/stash list|pop|clear` manage parked drafts
 - session rename from the command palette or slash-style composer command with
@@ -302,6 +304,8 @@ Command palette commands currently implemented:
 | `/name [args]` | Expand a custom markdown slash command from `.dscode/commands/name.md` or the configured user commands dir, then submit it to the active thread |
 | `init`, `/init` | Create project `AGENTS.md` instructions in the selected session workspace |
 | `rename <title>`, `/rename <title>` | Rename the selected durable session and persist the new title |
+| `clear`, `/clear` | Start a fresh active thread in the selected durable session without deleting older history |
+| `clear help`, `/clear help` | Show clear/reset behavior and the current session/thread target |
 | `stash`, `stash list`, `/stash list` | List parked composer drafts in the right-side detail panel |
 | `stash pop`, `/stash pop` | Restore the most recently stashed composer draft |
 | `stash clear`, `/stash clear` | Clear all parked composer drafts |

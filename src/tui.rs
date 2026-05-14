@@ -567,6 +567,7 @@ pub enum TuiMcpDetailKind {
     Tokens,
     Cost,
     Cache,
+    Clear,
     Model,
     Provider,
     Skills,
@@ -608,6 +609,7 @@ impl TuiMcpDetailKind {
             Self::Tokens => "tokens",
             Self::Cost => "cost",
             Self::Cache => "cache",
+            Self::Clear => "clear",
             Self::Model => "model",
             Self::Provider => "provider",
             Self::Skills => "skills",
@@ -649,6 +651,7 @@ impl TuiMcpDetailKind {
             Self::Tokens => "Tokens",
             Self::Cost => "Cost",
             Self::Cache => "Cache",
+            Self::Clear => "Clear",
             Self::Model => "Model",
             Self::Provider => "Provider",
             Self::Skills => "Skills",
@@ -690,6 +693,7 @@ impl TuiMcpDetailKind {
             Self::Tokens => Self::Manager,
             Self::Cost => Self::Manager,
             Self::Cache => Self::Manager,
+            Self::Clear => Self::Manager,
             Self::Model => Self::Manager,
             Self::Provider => Self::Manager,
             Self::Skills => Self::Manager,
@@ -731,6 +735,7 @@ impl TuiMcpDetailKind {
             Self::Tokens => Self::Manager,
             Self::Cost => Self::Manager,
             Self::Cache => Self::Manager,
+            Self::Clear => Self::Manager,
             Self::Model => Self::Manager,
             Self::Provider => Self::Manager,
             Self::Skills => Self::Manager,
@@ -968,6 +973,12 @@ pub enum TuiShareCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TuiExportCommand {
     Export { path: Option<String> },
+    Help,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TuiClearCommand {
+    Clear,
     Help,
 }
 
@@ -1551,6 +1562,18 @@ fn parse_tui_export_command(line: &str) -> Option<Result<TuiExportCommand, Strin
     }
 }
 
+fn parse_tui_clear_command(line: &str) -> Option<Result<TuiClearCommand, String>> {
+    let trimmed = line.trim();
+    let rest = strip_tui_command_prefix(trimmed, "/clear")
+        .or_else(|| strip_tui_command_prefix(trimmed, "clear"))?;
+    let args = rest.split_whitespace().collect::<Vec<_>>();
+    match args.as_slice() {
+        [] => Some(Ok(TuiClearCommand::Clear)),
+        ["help" | "--help" | "-h"] => Some(Ok(TuiClearCommand::Help)),
+        _ => Some(Err("usage: clear or /clear".to_string())),
+    }
+}
+
 fn parse_note_index_arg(value: &str) -> Option<usize> {
     value.parse::<usize>().ok().filter(|index| *index > 0)
 }
@@ -1700,6 +1723,10 @@ pub enum TuiAction {
     ExportThread {
         thread_id: String,
         path: Option<String>,
+    },
+    ClearConversation {
+        session_id: String,
+        previous_thread_id: Option<String>,
     },
     Hooks {
         command: TuiHooksCommand,
@@ -1945,6 +1972,13 @@ const TUI_HELP_COMMANDS: &[TuiHelpCommandInfo] = &[
     },
     TuiHelpCommandInfo {
         category: "Workbench",
+        name: "clear",
+        aliases: &[],
+        usage: "/clear",
+        description: "Start a fresh active-thread conversation without deleting history.",
+    },
+    TuiHelpCommandInfo {
+        category: "Workbench",
         name: "settings",
         aliases: &["config"],
         usage: "/settings",
@@ -2150,6 +2184,8 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "exit",
     "quit",
     "q",
+    "clear",
+    "clear help",
     "plan",
     "agent",
     "yolo",
@@ -2362,6 +2398,8 @@ const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
     "/?",
     "/settings",
     "/config",
+    "/clear",
+    "/clear help",
     "/memory",
     "/memory show",
     "/memory path",
@@ -3976,7 +4014,7 @@ impl TuiApp {
         }
     }
 
-    fn select_thread_by_id(&mut self, thread_id: &str) -> bool {
+    pub fn select_thread_by_id(&mut self, thread_id: &str) -> bool {
         let selected = self
             .threads
             .iter()
@@ -4004,6 +4042,17 @@ impl TuiApp {
             clip_line(&thread.title, 60)
         );
         true
+    }
+
+    pub fn clear_transient_conversation_state(&mut self) {
+        self.queued_messages.clear();
+        self.queued_draft = None;
+        self.composer.clear();
+        self.composer_cursor = 0;
+        self.transcript_scroll = 0;
+        self.mcp_detail = None;
+        self.mcp_detail_scroll = 0;
+        self.selected_task_ids.clear();
     }
 
     fn select_relative_thread(&mut self, offset: isize) {
@@ -4760,6 +4809,19 @@ impl TuiApp {
                     }
                     return true;
                 }
+                if let Some(command) = parse_tui_clear_command(&content) {
+                    match command {
+                        Ok(command) => {
+                            self.handle_clear_command(command);
+                            self.composer.clear();
+                            self.composer_cursor = 0;
+                        }
+                        Err(message) => {
+                            self.status = message;
+                        }
+                    }
+                    return true;
+                }
                 if let Some(command) = parse_tui_hooks_command(&content) {
                     match command {
                         Ok(command) => {
@@ -5340,6 +5402,15 @@ impl TuiApp {
         if let Some(command) = parse_tui_export_command(command) {
             match command {
                 Ok(command) => self.handle_export_command(command),
+                Err(message) => {
+                    self.status = message;
+                }
+            }
+            return;
+        }
+        if let Some(command) = parse_tui_clear_command(command) {
+            match command {
+                Ok(command) => self.handle_clear_command(command),
                 Err(message) => {
                     self.status = message;
                 }
@@ -6249,7 +6320,7 @@ impl TuiApp {
             }
             ["cancel"] | ["stop"] => self.request_cancel_run(),
             ["help"] => {
-                self.status = "commands: mode plan|agent|yolo, goal [objective|clear], sessions [filter], threads [filter], task <summary>|select all|select clear|pause [id]|resume [id]|cancel [id]|bulk pause|bulk resume|bulk cancel, shell <cmd>|list|show|wait|poll|stdin|close-stdin|cancel, stash [list|pop|clear], memory [show|path|clear|edit|help], anchor [text|list|remove], queue [list|edit|drop|clear], share, export [path], mcp manager|list|tools|prompts|resources|resource-templates|close|init|add|enable|disable|remove|user add|user enable|user disable|user remove|validate, diagnostics [--changed|paths...], restore snapshot|list|show, revert turn <id> [--apply], compact, approval, cancel".to_string();
+                self.status = "commands: mode plan|agent|yolo, clear, goal [objective|clear], sessions [filter], threads [filter], task <summary>|select all|select clear|pause [id]|resume [id]|cancel [id]|bulk pause|bulk resume|bulk cancel, shell <cmd>|list|show|wait|poll|stdin|close-stdin|cancel, stash [list|pop|clear], memory [show|path|clear|edit|help], anchor [text|list|remove], queue [list|edit|drop|clear], share, export [path], mcp manager|list|tools|prompts|resources|resource-templates|close|init|add|enable|disable|remove|user add|user enable|user disable|user remove|validate, diagnostics [--changed|paths...], restore snapshot|list|show, revert turn <id> [--apply], compact, approval, cancel".to_string();
             }
             _ => {
                 self.status = format!("unknown command: {command}");
@@ -7182,6 +7253,69 @@ impl TuiApp {
         detail
     }
 
+    fn handle_clear_command(&mut self, command: TuiClearCommand) {
+        match command {
+            TuiClearCommand::Clear => self.request_clear_conversation(),
+            TuiClearCommand::Help => {
+                self.set_mcp_detail(TuiMcpDetailKind::Clear, self.render_clear_help_detail());
+                self.status = "clear help shown".to_string();
+            }
+        }
+    }
+
+    fn request_clear_conversation(&mut self) {
+        let Some(session) = self.selected_session().cloned() else {
+            self.status = "no durable session to clear".to_string();
+            return;
+        };
+        if session.status == "empty" && session.id == "local" {
+            self.status = "no durable session to clear".to_string();
+            return;
+        }
+        self.pending_actions.push(TuiAction::ClearConversation {
+            session_id: session.id.clone(),
+            previous_thread_id: self.selected_thread_id.clone(),
+        });
+        self.status = format!("clear conversation queued for session {}", session.id);
+    }
+
+    fn render_clear_help_detail(&self) -> String {
+        let mut detail = String::new();
+        let _ = writeln!(detail, "DeepSeekCode Clear");
+        let _ = writeln!(detail, "==================");
+        let _ = writeln!(detail);
+        let _ = writeln!(
+            detail,
+            "/clear starts a fresh active thread in the selected durable session."
+        );
+        let _ = writeln!(detail);
+        let _ = writeln!(
+            detail,
+            "Existing durable history is kept. The selected session points at the new empty thread, queued follow-ups are dropped, and the visible transcript becomes empty."
+        );
+        let _ = writeln!(detail);
+        match self.selected_session() {
+            Some(session) if !(session.status == "empty" && session.id == "local") => {
+                push_status_row(
+                    &mut detail,
+                    "Session:",
+                    &format!("{} [{}]", session.title, session.id),
+                );
+                if let Some(thread) = self.active_thread() {
+                    push_status_row(
+                        &mut detail,
+                        "Current thread:",
+                        &format!("{} [{}]", thread.title, thread.id),
+                    );
+                }
+            }
+            _ => {
+                let _ = writeln!(detail, "No durable session is selected.");
+            }
+        }
+        detail
+    }
+
     fn handle_goal_command(&mut self, command: TuiGoalCommand) {
         match command {
             TuiGoalCommand::Show => {
@@ -7356,6 +7490,7 @@ impl TuiApp {
         let _ = writeln!(detail, "Config Commands");
         let _ = writeln!(detail, "---------------");
         let _ = writeln!(detail, "- /mode [agent|plan|yolo|1|2|3]");
+        let _ = writeln!(detail, "- /clear");
         let _ = writeln!(detail, "- /theme [dark|light|grayscale|system]");
         let _ = writeln!(detail, "- /verbose [on|off|toggle|show]");
         let _ = writeln!(detail, "- /goal [objective [budget: N]|clear]");
@@ -14059,6 +14194,48 @@ mod tests {
         assert_eq!(*kind, TuiMcpDetailKind::Export);
         assert!(detail.contains("/export [path]"));
         assert!(detail.contains("Transcript items:"));
+        assert_eq!(app.composer, "");
+    }
+
+    #[test]
+    fn clear_command_queues_durable_session_reset() {
+        let mut app = TuiApp::with_runtime(
+            vec![TuiSession {
+                id: "session-one".to_string(),
+                title: "One".to_string(),
+                workspace: "/workspace/project".to_string(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-one".to_string()),
+                thread_count: 1,
+            }],
+            vec![TuiThread {
+                id: "thread-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                title: "First thread".to_string(),
+                mode: "agent".to_string(),
+                status: "active".to_string(),
+                latest_turn_id: None,
+                event_seq: 1,
+            }],
+            Vec::new(),
+        );
+
+        run_palette_command(&mut app, "clear");
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::ClearConversation {
+                session_id: "session-one".to_string(),
+                previous_thread_id: Some("thread-one".to_string()),
+            }]
+        );
+
+        app.composer_focused = true;
+        app.composer = "/clear help".to_string();
+        app.composer_cursor = app.composer.len();
+        assert!(app.handle_key(KeyCode::Enter));
+        let (kind, detail) = app.mcp_detail.as_ref().expect("clear help detail");
+        assert_eq!(*kind, TuiMcpDetailKind::Clear);
+        assert!(detail.contains("/clear starts a fresh active thread"));
         assert_eq!(app.composer, "");
     }
 
