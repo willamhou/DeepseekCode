@@ -110,7 +110,7 @@ DeepSeekCode は自身の開発に使える段階ですが、Claude Code CLI / C
 - ネイティブ supervisor-owned PTY の attach/stdin/resize/replay/wait/cancel。
 - disposable な実外部リポジトリでの live external write-fixture サンプル厚み。
 - npm registry 公開と Homebrew tap。どちらも資格情報が未設定です。
-- 決定的な TUI snapshot を超えた model-backed demo の実証。
+- 決定的な TUI snapshot を超えた、レビュー済みでコミットされた model-backed README メディア。
 
 ## Demo 素材
 
@@ -129,6 +129,13 @@ svg-term --command "bash -lc 'target/debug/deepseek tui --demo --once | sed -e \
 リリースでは、実モデルを使ったループも短い GIF/MP4 として追加します: TUI を開く、
 コーディングリクエストを送る、編集を適用する、テストを走らせる、diff を確認する、
 という流れです。生成したメディアは `docs/demo/` に置きます。
+
+実モデル demo の元証拠は disposable fixture recorder で取得できます。
+
+```bash
+docs/demo/record-model-backed-demo.sh --dry-run
+DEEPSEEK_API_KEY=... docs/demo/record-model-backed-demo.sh
+```
 
 ## 開発チェック
 

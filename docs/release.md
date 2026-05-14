@@ -23,6 +23,13 @@ deepseek doctor --json
 For source builds, `deepseek version` must match the version in `Cargo.toml`.
 `deepseek doctor --json` must emit valid JSON for local supervisors and release automation.
 
+For launch-quality README media, use the model-backed demo recorder against a
+disposable fixture before generating GIF/MP4 assets:
+
+```bash
+DEEPSEEK_API_KEY=... docs/demo/record-model-backed-demo.sh
+```
+
 ## Required Gates
 
 Run the full local release gate before tagging or publishing:
@@ -32,6 +39,7 @@ cargo fmt --check
 cargo test -- --test-threads=1
 cargo package --allow-dirty
 deepseek benchmark
+docs/demo/record-model-backed-demo.sh --dry-run
 ```
 
 `deepseek benchmark` must pass all three layers:

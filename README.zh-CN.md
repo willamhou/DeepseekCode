@@ -105,7 +105,7 @@ Codex CLI 的产品成熟度。最大差距集中在：
 - 原生 supervisor-owned PTY 的 attach/stdin/resize/replay/wait/cancel；
 - 真实 disposable 外部仓库上更厚的 live write-fixture 样本证据；
 - npm registry 发布和 Homebrew tap，这两项还缺少对应凭据；
-- 超出确定性 TUI snapshot 的真实 model-backed demo 证据。
+- 超出确定性 TUI snapshot、已 review 并提交的真实 model-backed README 媒体素材。
 
 ## Demo 素材
 
@@ -123,6 +123,13 @@ svg-term --command "bash -lc 'target/debug/deepseek tui --demo --once | sed -e \
 `docs/demo/deepseek-code-tui.svg` 保留为静态 snapshot。正式发布前建议再录一段
 真实模型循环的短 GIF/MP4：打开 TUI、提交代码请求、应用修改、运行测试、查看
 diff。生成素材统一放在 `docs/demo/`。
+
+真实 model-backed demo 的源证据可以用 disposable fixture recorder 捕获：
+
+```bash
+docs/demo/record-model-backed-demo.sh --dry-run
+DEEPSEEK_API_KEY=... docs/demo/record-model-backed-demo.sh
+```
 
 ## 开发检查
 

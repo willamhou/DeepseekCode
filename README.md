@@ -109,7 +109,8 @@ Claude Code CLI / Codex CLI polish. The largest remaining gaps are:
 - deeper live external write-fixture sample evidence across disposable real
   repositories;
 - npm registry publishing and a Homebrew tap, both blocked on credentials;
-- richer model-backed demo evidence beyond deterministic TUI snapshots.
+- a committed reviewed model-backed README media asset beyond deterministic TUI
+  snapshots.
 
 ## Demo Asset
 
@@ -129,6 +130,14 @@ svg-term --command "bash -lc 'target/debug/deepseek tui --demo --once | sed -e \
 launch-quality release, add a short GIF/MP4 of the real model-backed loop:
 open TUI, submit a coding request, apply an edit, run tests, inspect the diff.
 Keep generated media under `docs/demo/`.
+
+To capture source evidence for that model-backed demo, run the disposable
+fixture recorder:
+
+```bash
+docs/demo/record-model-backed-demo.sh --dry-run
+DEEPSEEK_API_KEY=... docs/demo/record-model-backed-demo.sh
+```
 
 ## Development Checks
 
