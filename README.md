@@ -1,62 +1,43 @@
 # DeepSeekCode
 
-`DeepSeekCode` is a DeepSeek-first terminal code agent and local TUI/runtime
-workbench. The project focuses on one practical loop: inspect a repository,
-edit code, run checks, use the result as feedback, and continue.
+[English](./README.md) | [中文](./README.zh-CN.md)
 
-The implementation is written in Rust and ships the `deepseek` command, with
-`dscode` kept as a compatibility binary.
+DeepSeekCode is a DeepSeek-first terminal coding agent and local TUI/runtime
+workbench. It is built for the loop you actually use while programming:
+inspect a repository, edit files, run checks, review the result, and keep
+iterating from the same terminal.
 
-## Current Status
+> Status: usable for dogfooding and repository work. It is not yet a polished
+> hosted product, and the native PTY supervisor/release channels are still in
+> progress.
 
-This repository is an active workbench, not a polished hosted product.
+<p align="center">
+  <img src="./docs/demo/deepseek-code-tui.svg" alt="DeepSeekCode TUI demo snapshot" width="100%">
+</p>
 
-- The core local agent loop is usable: read/search files, apply patches, run
-  permissioned shell commands, maintain sessions, and resume work.
-- The TUI has moved beyond a demo shell: it has durable sessions/threads,
-  transcript rendering, cursor-aware composer and command palette input,
-  transcript scrollback, approvals, cancellation, runtime tasks, usage/cost
-  panels, diagnostics, compaction, automations, and local rollback commands.
-- The runtime contract is file-backed first, with an HTTP/SSE mode for local
-  supervisors and TUI clients.
-- Compared with `DeepSeek-TUI`, the common terminal/runtime workflow is now
-  substantially closer, including live RLM runtime events and ACP RLM
-  subscriptions. The remaining gap is concentrated in hard infrastructure
-  edges: cross-process shell takeover, platform-specific rollback fidelity,
-  public binary/npm/Homebrew/GHCR release evidence, and external write-fixture
-  validation.
+## What Works Today
 
-## Feature Surface
-
-- DeepSeek-first model configuration and API key handling
-- Interactive REPL and one-shot task execution
-- Workspace scanning, file read/search, patch application, diff review
-- Permission-gated shell execution and approval flow
-- Read-only web/search/fetch tools with localhost blocking, configurable host
-  allow/deny/prompt policy, runtime approvals, and local audit logging
+- `deepseek run` for one-shot coding tasks.
+- `deepseek tui` for a keyboard-driven terminal workbench with Plan / Agent /
+  YOLO modes.
 - Durable sessions, threads, turns, items, events, tasks, usage, and
-  automations under `.dscode/runtime/`
-- `deepseek tui` terminal workbench with Plan / Agent / YOLO modes
-- Background agent tasks and daemon runner
-- RLM daemon lifecycle CLI commands for status, event replay, long-poll waits,
-  cancellation, recovery, stopping, and manual run/drain controls
-- HTTP runtime with health, session, thread, task, event, usage, diagnostics,
-  automation, and SSE stream endpoints
-- ACP stdio adapter for editor clients, including durable session list/load and
-  RLM event subscriptions
-- LSP-backed and fallback diagnostics runners with JSON/JSONL watch output
-- Git rollback snapshots for TUI-started turns
-- MCP client inventory/tooling/prompts/resources/templates/config CRUD, a full-width TUI MCP manager
-  screen plus scrollable discovery detail panel, MCP stdio server mode with `mcp add-self` registration
-  and approval-gated or trusted opt-in `run_shell` side-effect tool exposure,
-  subagents, RLM child/batch/long-input analysis with durable model-session
-  context, todo tracking, hooks, prompts, skills, and language profiles
-- Release packaging for Cargo, npm platform wrappers, Docker, Homebrew
-  formula rendering, and GitHub Actions release assets
+  automations under `.dscode/runtime/`.
+- File read/search, patch application, diff review, todo tracking, rollback
+  snapshots, notes, memory, hooks, skills, and subagents.
+- Permission-gated shell execution plus background shell jobs, wait/poll,
+  replay, attach snapshots, stdin, resize metadata, cancellation, and a
+  workspace shell-supervisor protocol bridge.
+- Local HTTP/SSE runtime, ACP stdio adapter, MCP client/server tooling, and TUI
+  MCP management screens.
+- RLM helpers for recursive/long-input analysis, model-session context, live
+  queue status, event replay, cancellation, recovery, and drain controls.
+- LSP-backed and fallback diagnostics runners with JSON/JSONL watch output.
+- Release packaging scaffolding for Cargo, npm wrappers, Docker, Homebrew
+  formula rendering, and GitHub release assets.
 
 ## Quick Start
 
-Install from the public source repository:
+Install from source:
 
 ```bash
 cargo install --git https://github.com/willamhou/DeepSeekCode.git --locked
@@ -64,17 +45,15 @@ deepseek version
 deepseek doctor --json
 ```
 
-Or install from a local checkout:
+Or use a local checkout:
 
 ```bash
 cargo install --path .
-deepseek version
 deepseek config init
 deepseek doctor --json
-deepseek
 ```
 
-Run a one-shot task:
+Run a coding task:
 
 ```bash
 deepseek run "explain the current repository structure"
@@ -87,45 +66,43 @@ deepseek tui
 deepseek tui --demo --once
 ```
 
-Start the local HTTP runtime and connect the TUI to it:
+Start the local runtime and connect the TUI:
 
 ```bash
 deepseek serve --http --addr 127.0.0.1:13000
 deepseek tui --runtime-url http://127.0.0.1:13000
 ```
 
-Set `DEEPSEEK_API_KEY` in your environment for real model calls. Local `.env`
-files are intentionally ignored by git.
+Set `DEEPSEEK_API_KEY` for real model calls. Local `.env` files are ignored by
+git.
 
-## Workflow Checks
+## Current Gap
 
-Check whether a real GitHub PR is ready for live review/retry fixtures without
-posting comments:
+DeepSeekCode is close enough to use as its own coding CLI, but it is not yet at
+Claude Code CLI / Codex CLI polish. The largest remaining gaps are:
+
+- native supervisor-owned PTY attach/stdin/resize/replay/wait/cancel;
+- live external write-fixture validation across real repositories;
+- public release evidence for binary, npm, Homebrew, and container channels;
+- product polish around onboarding, auth, model/provider setup, and demos.
+
+## Demo Asset
+
+The README demo image is generated from the deterministic TUI snapshot:
 
 ```bash
-deepseek pr live-status owner/repo#42
-deepseek pr live-status owner/repo#42 --require-write
-deepseek pr live-status owner/repo#42 --json
+target/debug/deepseek tui --demo --once
 ```
 
-Check release publishing prerequisites before tagging:
-
-```bash
-deepseek update publish-status
-deepseek update publish-status --dist dist-assets --npm-dist npm-dist --strict
-deepseek update publish-status --json
-```
-
-`publish-status` also reports the public install channels that are source-only,
-ready to publish, or still missing live publication evidence.
+For a launch-quality README, record a short GIF/MP4 of the real loop:
+open TUI, submit a coding request, apply an edit, run tests, inspect the diff.
+Keep generated media under `docs/demo/`.
 
 ## Development Checks
 
-The main regression loop is:
-
 ```bash
 cargo fmt --check
-cargo test
+cargo test --lib -- --test-threads=1
 cargo package --allow-dirty
 deepseek tui --demo --once
 ```
@@ -136,11 +113,20 @@ For npm wrapper metadata:
 node npm/scripts/check-version-sync.js
 ```
 
-For persistent network host policy:
+For release readiness:
 
 ```bash
-deepseek config network allow api.example.com
-deepseek config network deny tracking.example.com
+deepseek update publish-status
+deepseek update publish-status --dist dist-assets --npm-dist npm-dist --strict
+deepseek update publish-status --json
+```
+
+For PR/CI workflow checks:
+
+```bash
+deepseek pr live-status owner/repo#42
+deepseek pr live-status owner/repo#42 --require-write
+deepseek pr live-status owner/repo#42 --json
 ```
 
 ## Documentation
@@ -158,7 +144,7 @@ deepseek config network deny tracking.example.com
 - [Roadmap](./docs/roadmap.md)
 - [Changelog](./CHANGELOG.md)
 
-## Public Repository Notes
+## Repository Notes
 
 This repository is public for transparency and collaboration. Public visibility
 does not imply a separate open-source grant beyond the terms in
