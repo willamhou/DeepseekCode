@@ -1001,10 +1001,51 @@ pub enum TuiLspCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TuiModelCommand {
+    Pick,
     Show,
     List,
     Set { model: String },
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TuiModelPickerSpec {
+    label: &'static str,
+    model: &'static str,
+    hint: &'static str,
+}
+
+const TUI_MODEL_PICKER_SPECS: &[TuiModelPickerSpec] = &[
+    TuiModelPickerSpec {
+        label: "auto",
+        model: "auto",
+        hint: "route flash/pro by task shape",
+    },
+    TuiModelPickerSpec {
+        label: "flash",
+        model: "deepseek-v4-flash",
+        hint: "fast DeepSeek V4 default",
+    },
+    TuiModelPickerSpec {
+        label: "pro",
+        model: "deepseek-v4-pro",
+        hint: "strong DeepSeek V4 reasoning",
+    },
+    TuiModelPickerSpec {
+        label: "chat",
+        model: "deepseek-chat",
+        hint: "DeepSeek Chat compatibility",
+    },
+    TuiModelPickerSpec {
+        label: "reasoner",
+        model: "deepseek-reasoner",
+        hint: "DeepSeek Reasoner compatibility",
+    },
+    TuiModelPickerSpec {
+        label: "coder",
+        model: "deepseek-coder",
+        hint: "legacy DeepSeek Coder id",
+    },
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TuiModeCommand {
@@ -1774,7 +1815,8 @@ fn parse_tui_model_command(line: &str) -> Option<Result<TuiModelCommand, String>
             Some(Ok(TuiModelCommand::List))
         } else {
             Some(Err(
-                "usage: model [name|list], models, /model [name|list], or /models".to_string(),
+                "usage: model [pick|show|list|name], models, /model [pick|show|list|name], or /models"
+                    .to_string(),
             ))
         };
     }
@@ -1782,13 +1824,15 @@ fn parse_tui_model_command(line: &str) -> Option<Result<TuiModelCommand, String>
         .or_else(|| strip_tui_command_prefix(trimmed, "model"))?;
     let args = rest.split_whitespace().collect::<Vec<_>>();
     match args.as_slice() {
-        [] => Some(Ok(TuiModelCommand::Show)),
-        ["list" | "ls" | "show"] => Some(Ok(TuiModelCommand::List)),
+        [] | ["pick" | "picker"] => Some(Ok(TuiModelCommand::Pick)),
+        ["list" | "ls"] => Some(Ok(TuiModelCommand::List)),
+        ["show" | "status"] => Some(Ok(TuiModelCommand::Show)),
         [model] if !model.starts_with('-') => Some(Ok(TuiModelCommand::Set {
             model: (*model).to_string(),
         })),
         _ => Some(Err(
-            "usage: model [name|list], models, /model [name|list], or /models".to_string(),
+            "usage: model [pick|show|list|name], models, /model [pick|show|list|name], or /models"
+                .to_string(),
         )),
     }
 }
@@ -2598,6 +2642,9 @@ fn parse_tui_config_args(rest: &str) -> Result<TuiConfigCommand, String> {
         ["native"] => Ok(TuiConfigCommand::Editor(TuiConfigEditorMode::Native)),
         ["web"] => Ok(TuiConfigCommand::Editor(TuiConfigEditorMode::Web)),
         ["model"] | ["default_model"] => Ok(TuiConfigCommand::Model(TuiModelCommand::Show)),
+        ["model" | "default_model", "pick" | "picker"] => {
+            Ok(TuiConfigCommand::Model(TuiModelCommand::Pick))
+        }
         ["model" | "default_model", "list" | "ls"] => {
             Ok(TuiConfigCommand::Model(TuiModelCommand::List))
         }
@@ -3319,8 +3366,8 @@ const TUI_HELP_COMMANDS: &[TuiHelpCommandInfo] = &[
         category: "Config",
         name: "model",
         aliases: &[],
-        usage: "/model [name|list]",
-        description: "Inspect or update the selected workspace model.",
+        usage: "/model [pick|show|list|name]",
+        description: "Pick, inspect, or update the selected workspace model.",
     },
     TuiHelpCommandInfo {
         category: "Config",
@@ -3620,6 +3667,8 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "edit",
     "edit help",
     "model",
+    "model show",
+    "model pick",
     "model auto",
     "model deepseek-v4-flash",
     "model deepseek-v4-pro",
@@ -3890,6 +3939,8 @@ const TUI_COMPOSER_SLASH_COMPLETIONS: &[&str] = &[
     "/quit",
     "/q",
     "/model",
+    "/model show",
+    "/model pick",
     "/model auto",
     "/model deepseek-v4-flash",
     "/model deepseek-v4-pro",
@@ -4161,6 +4212,8 @@ pub struct TuiApp {
     show_command_palette: bool,
     show_session_picker: bool,
     show_thread_picker: bool,
+    show_model_picker: bool,
+    model_picker_index: usize,
     show_provider_picker: bool,
     provider_picker_provider_index: usize,
     provider_picker_model_index: usize,
@@ -4338,6 +4391,8 @@ impl TuiApp {
             show_command_palette: false,
             show_session_picker: false,
             show_thread_picker: false,
+            show_model_picker: false,
+            model_picker_index: 0,
             show_provider_picker: false,
             provider_picker_provider_index: 0,
             provider_picker_model_index: 0,
@@ -5655,6 +5710,7 @@ impl TuiApp {
         self.composer.clear();
         self.composer_cursor = 0;
         self.edit_pending_thread_id = None;
+        self.show_model_picker = false;
         self.show_provider_picker = false;
         self.transcript_scroll = 0;
         self.mcp_detail = None;
@@ -5907,6 +5963,9 @@ impl TuiApp {
         if self.show_thread_picker && self.handle_thread_picker_mouse(mouse.column, mouse.row) {
             return true;
         }
+        if self.show_model_picker {
+            return true;
+        }
         if self.show_provider_picker {
             return true;
         }
@@ -6147,6 +6206,9 @@ impl TuiApp {
         }
         if self.show_thread_picker {
             return self.handle_thread_picker_key(code);
+        }
+        if self.show_model_picker {
+            return self.handle_model_picker_key(code);
         }
         if self.show_provider_picker {
             return self.handle_provider_picker_key(code);
@@ -8627,6 +8689,30 @@ impl TuiApp {
         true
     }
 
+    fn handle_model_picker_key(&mut self, code: KeyCode) -> bool {
+        match code {
+            KeyCode::Esc => {
+                self.show_model_picker = false;
+                self.status = "model picker closed".to_string();
+            }
+            KeyCode::Enter => self.apply_model_picker_selection(),
+            KeyCode::Down | KeyCode::Char('j') => self.select_relative_model_picker_model(1),
+            KeyCode::Up | KeyCode::Char('k') => self.select_relative_model_picker_model(-1),
+            KeyCode::Home => {
+                self.model_picker_index = 0;
+                let model = self.selected_model_picker_spec();
+                self.status = format!("model picker selected: {}", model.model);
+            }
+            KeyCode::End => {
+                self.model_picker_index = TUI_MODEL_PICKER_SPECS.len().saturating_sub(1);
+                let model = self.selected_model_picker_spec();
+                self.status = format!("model picker selected: {}", model.model);
+            }
+            _ => {}
+        }
+        true
+    }
+
     fn handle_approval_key(&mut self, code: KeyCode) -> bool {
         if self.pending_shell_approval.is_some() {
             match code {
@@ -9170,6 +9256,10 @@ impl TuiApp {
     }
 
     fn request_model_command(&mut self, command: TuiModelCommand) {
+        if command == TuiModelCommand::Pick {
+            self.open_model_picker();
+            return;
+        }
         let workspace = self
             .selected_session()
             .map(|session| session.workspace.clone())
@@ -9179,6 +9269,52 @@ impl TuiApp {
             command,
         });
         self.status = format!("model command queued: {workspace}");
+    }
+
+    fn open_model_picker(&mut self) {
+        self.show_model_picker = true;
+        self.show_session_picker = false;
+        self.show_thread_picker = false;
+        self.show_provider_picker = false;
+        self.show_command_palette = false;
+        self.model_picker_index = self
+            .model_picker_index
+            .min(TUI_MODEL_PICKER_SPECS.len().saturating_sub(1));
+        self.status = "model picker opened".to_string();
+    }
+
+    fn selected_model_picker_spec(&self) -> &'static TuiModelPickerSpec {
+        &TUI_MODEL_PICKER_SPECS[self
+            .model_picker_index
+            .min(TUI_MODEL_PICKER_SPECS.len() - 1)]
+    }
+
+    fn select_relative_model_picker_model(&mut self, delta: isize) {
+        let len = TUI_MODEL_PICKER_SPECS.len();
+        if len == 0 {
+            self.status = "model picker has no model choices".to_string();
+            return;
+        }
+        self.model_picker_index =
+            relative_picker_index(self.model_picker_index.min(len - 1), len, delta);
+        let model = self.selected_model_picker_spec();
+        self.status = format!("model picker selected: {}", model.model);
+    }
+
+    fn apply_model_picker_selection(&mut self) {
+        let model = self.selected_model_picker_spec();
+        let workspace = self
+            .selected_session()
+            .map(|session| session.workspace.clone())
+            .unwrap_or_else(|| ".".to_string());
+        self.pending_actions.push(TuiAction::Model {
+            workspace: workspace.clone(),
+            command: TuiModelCommand::Set {
+                model: model.model.to_string(),
+            },
+        });
+        self.show_model_picker = false;
+        self.status = format!("model picker queued model: {} ({workspace})", model.model);
     }
 
     fn request_provider_command(&mut self, command: TuiProviderCommand) {
@@ -9201,6 +9337,7 @@ impl TuiApp {
         self.show_provider_picker = true;
         self.show_session_picker = false;
         self.show_thread_picker = false;
+        self.show_model_picker = false;
         self.show_command_palette = false;
         self.provider_picker_provider_index = self
             .provider_picker_provider_index
@@ -10782,7 +10919,7 @@ impl TuiApp {
             detail,
             "DeepSeekCode currently exposes config editing through focused commands:"
         );
-        let _ = writeln!(detail, "- /config model [list|<name>]");
+        let _ = writeln!(detail, "- /config model [pick|show|list|<name>]");
         let _ = writeln!(detail, "- /config provider [pick|show|list|<name> [model]]");
         let _ = writeln!(detail, "- /config profile [list|clear|<name>]");
         let _ = writeln!(detail, "- /config mode [agent|plan|yolo]");
@@ -10881,7 +11018,7 @@ impl TuiApp {
         let _ = writeln!(detail, "- /cycles | /cycle <n> | /recall <query>");
         let _ = writeln!(detail, "- /review <target>");
         let _ = writeln!(detail, "- /goal [objective [budget: N]|clear]");
-        let _ = writeln!(detail, "- /model [name|list]");
+        let _ = writeln!(detail, "- /model [pick|show|list|name]");
         let _ = writeln!(detail, "- /provider [pick|show|list|name [model]]");
         let _ = writeln!(detail, "- /profile [name|list|clear]");
         let _ = writeln!(detail, "- /trust [on|off|add <path>|remove <path>|list]");
@@ -14631,6 +14768,9 @@ fn draw(frame: &mut Frame, app: &TuiApp) {
     if app.show_thread_picker {
         draw_thread_picker(frame, app);
     }
+    if app.show_model_picker {
+        draw_model_picker(frame, app);
+    }
     if app.show_provider_picker {
         draw_provider_picker(frame, app);
     }
@@ -14725,6 +14865,9 @@ fn draw_sidebar(frame: &mut Frame, app: &TuiApp, area: Rect) {
     if app.show_mcp_manager {
         lines.push(Line::from("PgUp/PgDn: scroll MCP manager"));
         lines.push(Line::from("Esc: close MCP manager"));
+    } else if app.show_model_picker {
+        lines.push(Line::from("Enter: apply model"));
+        lines.push(Line::from("Esc: close model picker"));
     } else if app.show_provider_picker {
         lines.push(Line::from("Enter: apply provider"));
         lines.push(Line::from("Esc: close provider picker"));
@@ -15190,6 +15333,73 @@ fn draw_provider_picker(frame: &mut Frame, app: &TuiApp) {
             spec.api_key_env, spec.base_url
         )),
         Line::from(format!("Workspace: {workspace}")),
+    ])
+    .wrap(Wrap { trim: true })
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Action Preview"),
+    );
+    frame.render_widget(footer, layout[2]);
+}
+
+fn draw_model_picker(frame: &mut Frame, app: &TuiApp) {
+    let area = top_center_rect(frame.area(), 90, 18);
+    frame.render_widget(Clear, area);
+    let layout = Layout::vertical([
+        Constraint::Length(4),
+        Constraint::Min(8),
+        Constraint::Length(4),
+    ])
+    .split(area);
+    let header = Paragraph::new(vec![
+        Line::from("Model Picker"),
+        Line::from("Up/Down select, Enter apply, Esc close"),
+    ])
+    .block(Block::default().borders(Borders::ALL).title("Model Picker"));
+    frame.render_widget(header, layout[0]);
+
+    let models = TUI_MODEL_PICKER_SPECS
+        .iter()
+        .enumerate()
+        .map(|(index, model)| {
+            let selected = index == app.model_picker_index;
+            let marker = if selected { "> " } else { "  " };
+            let item = ListItem::new(format!(
+                "{marker}{:<9} {:<24} {}",
+                model.label, model.model, model.hint
+            ));
+            if selected {
+                item.style(
+                    Style::default()
+                        .fg(app.theme.accent_color())
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                item
+            }
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(
+        List::new(models).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Models [active]"),
+        ),
+        layout[1],
+    );
+
+    let model = app.selected_model_picker_spec();
+    let workspace = app
+        .selected_session()
+        .map(|session| session.workspace.as_str())
+        .unwrap_or(".");
+    let footer = Paragraph::new(vec![
+        Line::from(format!("Selection: model {}", model.model)),
+        Line::from(format!(
+            "Direct command: model {} | Workspace: {workspace}",
+            model.model
+        )),
     ])
     .wrap(Wrap { trim: true })
     .block(
@@ -16014,6 +16224,7 @@ mod tests {
         assert_eq!(*kind, TuiMcpDetailKind::Settings);
         assert!(detail.contains("DeepSeekCode Settings"));
         assert!(detail.contains("/tmp/deepseek-settings/.dscode/config.toml"));
+        assert!(detail.contains("/model [pick|show|list|name]"));
         assert!(detail.contains("/provider [pick|show|list|name [model]]"));
         assert!(detail.contains("/mcp manager"));
 
@@ -16099,7 +16310,7 @@ mod tests {
         let (kind, detail) = app.mcp_detail.as_ref().expect("config detail");
         assert_eq!(*kind, TuiMcpDetailKind::Settings);
         assert!(detail.contains("Requested Config Surface"));
-        assert!(detail.contains("/config model [list|<name>]"));
+        assert!(detail.contains("/config model [pick|show|list|<name>]"));
     }
 
     #[test]
@@ -19277,12 +19488,34 @@ mod tests {
             Vec::new(),
         );
 
-        run_palette_command(&mut app, "model");
+        run_palette_command(&mut app, "model show");
         assert_eq!(
             app.drain_actions(),
             vec![TuiAction::Model {
                 workspace: "/tmp/deepseek-model".to_string(),
                 command: TuiModelCommand::Show,
+            }]
+        );
+
+        run_palette_command(&mut app, "model");
+        assert!(app.show_model_picker);
+        assert_eq!(app.status, "model picker opened");
+        assert!(app.drain_actions().is_empty());
+        let output = render_once(&app, 120, 32).unwrap();
+        assert!(output.contains("Model Picker"));
+        assert!(output.contains("Models [active]"));
+        assert!(output.contains("model auto"));
+
+        assert!(app.handle_key(KeyCode::Down));
+        assert!(app.handle_key(KeyCode::Enter));
+        assert!(!app.show_model_picker);
+        assert_eq!(
+            app.drain_actions(),
+            vec![TuiAction::Model {
+                workspace: "/tmp/deepseek-model".to_string(),
+                command: TuiModelCommand::Set {
+                    model: "deepseek-v4-flash".to_string(),
+                },
             }]
         );
 
@@ -19305,6 +19538,41 @@ mod tests {
                 command: TuiModelCommand::List,
             }]
         );
+    }
+
+    #[test]
+    fn composer_model_slash_opens_picker() {
+        let mut app = TuiApp::with_runtime(
+            vec![TuiSession {
+                id: "session-one".to_string(),
+                title: "One".to_string(),
+                workspace: "/tmp/deepseek-model-composer".to_string(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-one".to_string()),
+                thread_count: 1,
+            }],
+            vec![TuiThread {
+                id: "thread-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                title: "First thread".to_string(),
+                mode: "agent".to_string(),
+                status: "active".to_string(),
+                latest_turn_id: None,
+                event_seq: 1,
+            }],
+            Vec::new(),
+        );
+
+        app.composer_focused = true;
+        for ch in "/model".chars() {
+            assert!(app.handle_key(KeyCode::Char(ch)));
+        }
+        assert!(app.handle_key(KeyCode::Enter));
+
+        assert!(app.show_model_picker);
+        assert!(app.composer.is_empty());
+        assert_eq!(app.status, "model picker opened");
+        assert!(app.drain_actions().is_empty());
     }
 
     #[test]

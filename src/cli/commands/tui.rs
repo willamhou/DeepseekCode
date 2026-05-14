@@ -2805,7 +2805,7 @@ fn format_lsp_summary(summary: &DiagnosticsConfigSummary) -> String {
 
 fn format_model_config_summary(summary: &ModelConfigSummary) -> String {
     format!(
-        "DeepSeekCode Model Config ({})\n\nmodel.model = {}\nmodel.reasoning_effort = {}\nmodel.base_url = {}\nmodel.api_key_env = {}\n\nUse model <name> to update model.model in this project config. Common values: auto, deepseek-v4-flash, deepseek-v4-pro.",
+        "DeepSeekCode Model Config ({})\n\nmodel.model = {}\nmodel.reasoning_effort = {}\nmodel.base_url = {}\nmodel.api_key_env = {}\n\nUse model to open the picker, model show to inspect this config, model <name> to update model.model, or models for the offline catalog.",
         summary.path.display(),
         summary.model,
         summary.reasoning_effort,
@@ -3253,6 +3253,7 @@ fn handle_tui_action_with_live(
         TuiAction::Model { workspace, command } => {
             let workspace = Path::new(&workspace);
             let status = match &command {
+                TuiModelCommand::Pick => "model picker shown".to_string(),
                 TuiModelCommand::Show => "model config shown".to_string(),
                 TuiModelCommand::List => "model catalog shown".to_string(),
                 TuiModelCommand::Set { model } => {
@@ -3266,7 +3267,9 @@ fn handle_tui_action_with_live(
             };
             let summary = model_config_summary_at(workspace)?;
             let detail = match command {
-                TuiModelCommand::List => format_model_catalog_summary(&summary),
+                TuiModelCommand::Pick | TuiModelCommand::List => {
+                    format_model_catalog_summary(&summary)
+                }
                 TuiModelCommand::Show | TuiModelCommand::Set { .. } => {
                     format_model_config_summary(&summary)
                 }

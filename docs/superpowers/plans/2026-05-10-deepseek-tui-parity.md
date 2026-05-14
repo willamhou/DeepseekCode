@@ -515,10 +515,10 @@ Landed first slice:
   telemetry as a read-only detail view; `inspect` and `warmup` explicitly
   surface the current prompt-hash persistence and non-mutating warmup limits
 - TUI now supports DeepSeek-TUI-style `/model [name]` and `/models` plus
-  command-palette `model` / `models`, showing and updating the selected
-  workspace `model.model` in `.dscode/config.toml` and listing an offline
-  DeepSeekCode model catalog; online API model fetching and a two-pane picker
-  remain separate UI parity gaps
+  command-palette `model` / `models`, opening an interactive local model
+  picker, showing and updating the selected workspace `model.model` in
+  `.dscode/config.toml`, and listing an offline DeepSeekCode model catalog;
+  online API model fetching remains a separate runtime/API-backed gap
 - TUI now supports DeepSeek-TUI-style `/provider [name] [model]` plus
   command-palette `provider`, opening an interactive two-pane provider/model
   picker, showing the selected workspace provider inferred from

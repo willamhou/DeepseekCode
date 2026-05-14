@@ -17,8 +17,8 @@ errors instead of routing to existing focused configuration commands.
 - Support `/config tui`, `/config native`, and `/config web` as explicit editor
   mode requests that surface the current DeepSeekCode config surface.
 - Route common key commands to existing behavior:
-  - `/config model [list|<name>]`
-  - `/config provider [list|<name> [model]]`
+  - `/config model [pick|show|list|<name>]`
+  - `/config provider [pick|show|list|<name> [model]]`
   - `/config profile [list|clear|<name>]`
   - `/config mode [agent|plan|yolo|1|2|3]`
   - `/config theme [dark|light|grayscale|system]`

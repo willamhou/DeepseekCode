@@ -12,8 +12,9 @@ the TUI command registry had no direct model command. Users had to edit
 
 ## Implementation
 
-- Added built-in `model` / `/model`, `model <name>` / `/model <name>`, and
-  `models` / `/models` parsing before custom slash-command fallback.
+- Added built-in `model` / `/model`, `model show` / `/model show`,
+  `model <name>` / `/model <name>`, and `models` / `/models` parsing before
+  custom slash-command fallback.
 - Added `TuiModelCommand`, `TuiAction::Model`, and `TuiMcpDetailKind::Model`.
 - Routed model commands through the selected session workspace, matching other
   local project-config TUI commands.
@@ -44,7 +45,7 @@ the TUI command registry had no direct model command. Users had to edit
 
 ## Remaining
 
-DeepSeekCode does not yet have DeepSeek-TUI's interactive two-pane model picker
-or online `/models` API fetch. Provider switching remains separate from this
-slice, and remote HTTP-runtime model changes need a runtime API contract before
-they can be safely exposed.
+The interactive local model picker is covered by
+`2026-05-14-deepseek-tui-tui-model-picker.md`. DeepSeekCode still does not have
+online `/models` API fetch, and remote HTTP-runtime model changes need a runtime
+API contract before they can be safely exposed.

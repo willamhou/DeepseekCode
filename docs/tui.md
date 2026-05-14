@@ -117,8 +117,9 @@ Current surfaces:
 - cache telemetry inspection with `cache [count]` / `/cache [count]` plus
   read-only `cache inspect` / `cache warmup` explanations over durable usage
   records
-- model configuration inspection and switching with `model` / `/model`,
-  `model <name>` / `/model <name>`, and offline `models` / `/models`
+- model picker, inspection, and switching with `model` / `/model`,
+  `model show`, `model <name>` / `/model <name>`, and offline
+  `models` / `/models`
 - provider preset picker, inspection, and switching with `provider` /
   `/provider`, `provider show`, `provider list`, and
   `provider <name> [model]`
@@ -337,7 +338,7 @@ Command palette commands currently implemented:
 | `help <command>`, `/help <command>` | Show command-specific usage, aliases, and description |
 | `settings`, `/settings`, `config`, `/config` | Show mode, config file locations, and focused configuration command entry points |
 | `config tui`, `config native`, `config web`, `/config tui`, `/config native`, `/config web` | Show the requested config surface and focused DeepSeekCode config commands |
-| `config model [list\|<name>]`, `/config model [list\|<name>]` | Route to selected workspace model config commands |
+| `config model [pick\|show\|list\|<name>]`, `/config model [pick\|show\|list\|<name>]` | Route to selected workspace model picker, inspection, catalog, or update commands |
 | `config provider [pick\|show\|list\|<name> [model]]`, `/config provider [pick\|show\|list\|<name> [model]]` | Route to provider preset picker, inspection, or updates |
 | `config profile [list\|clear\|<name>]`, `/config profile [list\|clear\|<name>]` | Route to active project profile inspection or switching |
 | `config mode [agent\|plan\|yolo]`, `/config mode [agent\|plan\|yolo]` | Show or switch the current TUI mode |
@@ -467,7 +468,8 @@ Command palette commands currently implemented:
 | `retry`, `/retry` | Fork before the latest user request and resubmit it |
 | `cycles`, `/cycles`, `cycle <n>`, `/cycle <n>`, `recall <query>`, `/recall <query>` | Inspect durable compaction handoffs or search archived runtime context |
 | `review <target>`, `/review <target>` | Run deterministic local review and render JSON output in the right-side detail panel |
-| `model`, `/model` | Show selected workspace model config in the right-side detail panel |
+| `model`, `/model` | Open the model picker for the selected workspace |
+| `model show`, `/model show` | Show selected workspace model config in the right-side detail panel |
 | `model <name>`, `/model <name>` | Update selected workspace `model.model`; aliases include `auto`, `flash`, `pro`, `chat`, `coder`, and `reasoner` |
 | `models`, `/models`, `model list` | Show the offline DeepSeekCode model catalog and current project model |
 | `provider`, `/provider` | Open the provider/model picker for the selected workspace |
