@@ -53,6 +53,10 @@ which adapts DeepSeek-TUI's Lighthouse doctor-script idea to the local
 systemd/launchd template model by checking the selected binary/workspace,
 template command topology, optional rendered `--out` files, and CI-friendly
 JSON evidence without starting services.
+`deepseek agents service-smoke` now also starts the selected binary's HTTP
+runtime on a loopback ephemeral port, probes `/health`, starts the Unix shell
+supervisor protocol bridge, probes `health`, requests `shutdown`, and emits
+local JSON evidence without requiring systemd/launchd installation.
 The largest remaining DeepSeek-TUI / Claude Code CLI / Codex CLI gaps are now:
 
 - native supervisor-owned PTY attach/stdin/resize/replay/wait/cancel polish and
@@ -1182,6 +1186,11 @@ Landed first slice:
   text or `deepseek.agents.service_doctor.v1` JSON evidence. Missing local
   service-manager commands are warnings so release CI can still verify
   generated systemd/launchd files before clean-machine installation.
+- `deepseek agents service-smoke` starts `serve --http --once` from the selected
+  binary, probes runtime `/health`, starts `agents shell-supervisor --json`,
+  probes the Unix socket `health` method, requests `shutdown`, and emits
+  `deepseek.agents.service_smoke.v1` JSON evidence for local release smoke
+  runs before clean-machine service installation.
 - `deepseek update package` includes `SERVICES.md` and packaged service templates under `services/`
 - Cargo registry distribution now has an explicit source-build/package-only
   decision: the release workflow skips Cargo registry publishing while
@@ -1211,7 +1220,7 @@ Remaining:
 - Tagged GitHub Release and GHCR image evidence for the public binary/container
   install channels
 - Actual installed systemd/launchd service smoke evidence on a clean machine
-  beyond the static `service-doctor` template and path checks
+  beyond the local `service-doctor` and `service-smoke` checks
 
 ## Completion Audit Gate
 

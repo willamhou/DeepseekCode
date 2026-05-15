@@ -1,16 +1,17 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::cli::app::{
     AgentsAction, AgentsRlmCancelArgs, AgentsRlmDrainArgs, AgentsRlmEventsArgs,
     AgentsRlmRecoverArgs, AgentsRlmRunNextArgs, AgentsRlmStatusArgs, AgentsRlmStopArgs,
     AgentsRlmWaitArgs, AgentsServiceArgs, AgentsServiceDoctorArgs, AgentsServiceKind,
-    AgentsShellAction, AgentsShellArgs, AgentsShellSupervisorArgs,
+    AgentsServiceSmokeArgs, AgentsShellAction, AgentsShellArgs, AgentsShellSupervisorArgs,
 };
 use crate::config::load::load_or_default;
 use crate::config::types::AppConfig;
@@ -73,6 +74,7 @@ pub fn run(action: AgentsAction) -> AppResult<()> {
         AgentsAction::ShellSupervisor(args) => run_shell_supervisor(args),
         AgentsAction::Service(args) => render_agent_services(args),
         AgentsAction::ServiceDoctor(args) => run_service_doctor(args),
+        AgentsAction::ServiceSmoke(args) => run_service_smoke(args),
         AgentsAction::Threads => list_threads(&config.workspace.config_dir),
         AgentsAction::ShowThread { id } => show_thread(&config.workspace.config_dir, &id),
         AgentsAction::SwitchThread { id } => switch_thread(&config.workspace.config_dir, &id),
@@ -2736,6 +2738,555 @@ fn service_doctor_status_label(status: ServiceDoctorStatus) -> &'static str {
     }
 }
 
+#[derive(Debug, Clone)]
+struct ServiceSmokeReport {
+    binary: String,
+    workdir: PathBuf,
+    requested_addr: String,
+    resolved_addr: String,
+    addr_error: Option<String>,
+    timeout_ms: u64,
+    checks: Vec<ServiceDoctorCheck>,
+}
+
+fn run_service_smoke(args: AgentsServiceSmokeArgs) -> AppResult<()> {
+    let json = args.json;
+    let mut report = build_service_smoke_report(args);
+    run_service_smoke_checks(&mut report);
+    if json {
+        println!("{}", render_service_smoke_json(&report));
+    } else {
+        print!("{}", render_service_smoke_text(&report));
+    }
+    if service_check_blocker_count(&report.checks) > 0 {
+        return Err(app_error(format!(
+            "service smoke found {} blocker(s)",
+            service_check_blocker_count(&report.checks)
+        )));
+    }
+    Ok(())
+}
+
+fn build_service_smoke_report(args: AgentsServiceSmokeArgs) -> ServiceSmokeReport {
+    let binary = resolve_service_smoke_binary(args.bin);
+    let workdir = args
+        .workdir
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let requested_addr = args.addr;
+    let (resolved_addr, addr_error) = match resolve_service_smoke_addr(&requested_addr) {
+        Ok(addr) => (addr, None),
+        Err(error) => (requested_addr.clone(), Some(error.to_string())),
+    };
+    ServiceSmokeReport {
+        binary,
+        workdir,
+        requested_addr,
+        resolved_addr,
+        addr_error,
+        timeout_ms: args.timeout_ms.max(100),
+        checks: Vec::new(),
+    }
+}
+
+fn run_service_smoke_checks(report: &mut ServiceSmokeReport) {
+    service_smoke_check_binary(report);
+    service_smoke_check_workdir(report);
+    service_smoke_check_addr(report);
+    if service_check_blocker_count(&report.checks) == 0 {
+        service_smoke_check_runtime(report);
+        service_smoke_check_shell_supervisor(report);
+    }
+}
+
+fn service_smoke_check_binary(report: &mut ServiceSmokeReport) {
+    if service_value_is_path(&report.binary) {
+        if Path::new(&report.binary).is_file() {
+            push_service_doctor_check(
+                &mut report.checks,
+                ServiceDoctorStatus::Ok,
+                "binary",
+                format!("binary path exists: {}", report.binary),
+            );
+        } else {
+            push_service_doctor_check(
+                &mut report.checks,
+                ServiceDoctorStatus::Blocker,
+                "binary",
+                format!("binary path is missing or not a file: {}", report.binary),
+            );
+        }
+    } else if command_on_path(&report.binary) {
+        push_service_doctor_check(
+            &mut report.checks,
+            ServiceDoctorStatus::Ok,
+            "binary",
+            format!("binary command is on PATH: {}", report.binary),
+        );
+    } else {
+        push_service_doctor_check(
+            &mut report.checks,
+            ServiceDoctorStatus::Blocker,
+            "binary",
+            format!("binary command is not on PATH: {}", report.binary),
+        );
+    }
+}
+
+fn service_smoke_check_workdir(report: &mut ServiceSmokeReport) {
+    if report.workdir.is_dir() {
+        push_service_doctor_check(
+            &mut report.checks,
+            ServiceDoctorStatus::Ok,
+            "workdir",
+            format!("workspace directory exists: {}", report.workdir.display()),
+        );
+    } else {
+        push_service_doctor_check(
+            &mut report.checks,
+            ServiceDoctorStatus::Blocker,
+            "workdir",
+            format!(
+                "workspace directory is missing or not a directory: {}",
+                report.workdir.display()
+            ),
+        );
+    }
+}
+
+fn service_smoke_check_addr(report: &mut ServiceSmokeReport) {
+    if let Some(error) = &report.addr_error {
+        push_service_doctor_check(
+            &mut report.checks,
+            ServiceDoctorStatus::Blocker,
+            "runtime_addr",
+            format!(
+                "failed to resolve service smoke address {}: {error}",
+                report.requested_addr
+            ),
+        );
+    } else {
+        push_service_doctor_check(
+            &mut report.checks,
+            ServiceDoctorStatus::Ok,
+            "runtime_addr",
+            format!(
+                "runtime smoke address resolved: {} -> {}",
+                report.requested_addr, report.resolved_addr
+            ),
+        );
+    }
+}
+
+fn service_smoke_check_runtime(report: &mut ServiceSmokeReport) {
+    let timeout = Duration::from_millis(report.timeout_ms);
+    let mut child = match Command::new(&report.binary)
+        .arg("serve")
+        .arg("--http")
+        .arg("--addr")
+        .arg(&report.resolved_addr)
+        .arg("--once")
+        .current_dir(&report.workdir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            push_service_doctor_check(
+                &mut report.checks,
+                ServiceDoctorStatus::Blocker,
+                "runtime",
+                format!("failed to start HTTP runtime smoke child: {error}"),
+            );
+            return;
+        }
+    };
+
+    match wait_for_http_health(&report.resolved_addr, timeout, &mut child) {
+        Ok(_) => push_service_doctor_check(
+            &mut report.checks,
+            ServiceDoctorStatus::Ok,
+            "runtime",
+            format!("HTTP runtime /health responded at {}", report.resolved_addr),
+        ),
+        Err(error) => push_service_doctor_check(
+            &mut report.checks,
+            ServiceDoctorStatus::Blocker,
+            "runtime",
+            format!("HTTP runtime /health smoke failed: {error}"),
+        ),
+    }
+
+    match wait_child_exit(&mut child, timeout) {
+        Ok(status) if status.success() => push_service_doctor_check(
+            &mut report.checks,
+            ServiceDoctorStatus::Ok,
+            "runtime",
+            format!("HTTP runtime smoke child exited successfully: {status}"),
+        ),
+        Ok(status) => {
+            let stderr = read_child_stderr(&mut child);
+            push_service_doctor_check(
+                &mut report.checks,
+                ServiceDoctorStatus::Blocker,
+                "runtime",
+                format!(
+                    "HTTP runtime smoke child exited with failure: {status}{}",
+                    child_stderr_suffix(&stderr)
+                ),
+            );
+        }
+        Err(error) => {
+            terminate_child(&mut child);
+            push_service_doctor_check(
+                &mut report.checks,
+                ServiceDoctorStatus::Blocker,
+                "runtime",
+                format!("HTTP runtime smoke child did not exit cleanly: {error}"),
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+fn service_smoke_check_shell_supervisor(report: &mut ServiceSmokeReport) {
+    let timeout = Duration::from_millis(report.timeout_ms);
+    let socket = report
+        .workdir
+        .join(".dscode/shell-supervisor/supervisor.sock");
+    if shell_supervisor_socket_is_active(&socket) {
+        push_service_doctor_check(
+            &mut report.checks,
+            ServiceDoctorStatus::Blocker,
+            "shell_supervisor",
+            format!(
+                "shell supervisor socket is already active at {}; rerun with an isolated --workdir",
+                socket.display()
+            ),
+        );
+        return;
+    }
+
+    let mut child = match Command::new(&report.binary)
+        .arg("agents")
+        .arg("shell-supervisor")
+        .arg("--json")
+        .current_dir(&report.workdir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            push_service_doctor_check(
+                &mut report.checks,
+                ServiceDoctorStatus::Blocker,
+                "shell_supervisor",
+                format!("failed to start shell supervisor smoke child: {error}"),
+            );
+            return;
+        }
+    };
+
+    match wait_for_shell_supervisor_health(&socket, timeout, &mut child) {
+        Ok(_) => push_service_doctor_check(
+            &mut report.checks,
+            ServiceDoctorStatus::Ok,
+            "shell_supervisor",
+            format!("shell supervisor health responded at {}", socket.display()),
+        ),
+        Err(error) => push_service_doctor_check(
+            &mut report.checks,
+            ServiceDoctorStatus::Blocker,
+            "shell_supervisor",
+            format!("shell supervisor health smoke failed: {error}"),
+        ),
+    }
+
+    match shell_supervisor_request(&socket, "shutdown") {
+        Ok(_) => {}
+        Err(error) => push_service_doctor_check(
+            &mut report.checks,
+            ServiceDoctorStatus::Warn,
+            "shell_supervisor",
+            format!("shell supervisor shutdown request failed: {error}"),
+        ),
+    }
+
+    match wait_child_exit(&mut child, timeout) {
+        Ok(status) if status.success() => push_service_doctor_check(
+            &mut report.checks,
+            ServiceDoctorStatus::Ok,
+            "shell_supervisor",
+            format!("shell supervisor smoke child exited successfully: {status}"),
+        ),
+        Ok(status) => {
+            let stderr = read_child_stderr(&mut child);
+            push_service_doctor_check(
+                &mut report.checks,
+                ServiceDoctorStatus::Blocker,
+                "shell_supervisor",
+                format!(
+                    "shell supervisor smoke child exited with failure: {status}{}",
+                    child_stderr_suffix(&stderr)
+                ),
+            );
+        }
+        Err(error) => {
+            terminate_child(&mut child);
+            push_service_doctor_check(
+                &mut report.checks,
+                ServiceDoctorStatus::Blocker,
+                "shell_supervisor",
+                format!("shell supervisor smoke child did not exit cleanly: {error}"),
+            );
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn service_smoke_check_shell_supervisor(report: &mut ServiceSmokeReport) {
+    push_service_doctor_check(
+        &mut report.checks,
+        ServiceDoctorStatus::Warn,
+        "shell_supervisor",
+        "shell supervisor smoke is only available on Unix",
+    );
+}
+
+fn resolve_service_smoke_binary(bin: Option<String>) -> String {
+    let Some(bin) = bin else {
+        return std::env::current_exe()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|_| "deepseek".to_string());
+    };
+    let path = PathBuf::from(&bin);
+    if service_value_is_path(&bin) && path.is_relative() {
+        if let Ok(cwd) = std::env::current_dir() {
+            return cwd.join(path).display().to_string();
+        }
+    }
+    bin
+}
+
+fn resolve_service_smoke_addr(addr: &str) -> AppResult<String> {
+    use std::net::{SocketAddr, TcpListener};
+
+    let socket = addr
+        .parse::<SocketAddr>()
+        .map_err(|error| app_error(format!("invalid service-smoke address `{addr}`: {error}")))?;
+    if socket.port() != 0 {
+        return Ok(socket.to_string());
+    }
+    let listener = TcpListener::bind(socket).map_err(|error| {
+        app_error(format!(
+            "failed to reserve service-smoke loopback address {addr}: {error}"
+        ))
+    })?;
+    Ok(listener.local_addr()?.to_string())
+}
+
+fn wait_for_http_health(addr: &str, timeout: Duration, child: &mut Child) -> AppResult<String> {
+    use std::net::TcpStream;
+
+    let start = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            let stderr = read_child_stderr(child);
+            return Err(app_error(format!(
+                "HTTP runtime exited before /health responded: {status}{}",
+                child_stderr_suffix(&stderr)
+            )));
+        }
+        match TcpStream::connect(addr) {
+            Ok(mut stream) => {
+                stream.set_read_timeout(Some(Duration::from_millis(500)))?;
+                stream.set_write_timeout(Some(Duration::from_millis(500)))?;
+                stream.write_all(
+                    b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+                )?;
+                let mut response = String::new();
+                stream.read_to_string(&mut response)?;
+                if response.contains("200 OK") && response.contains("deepseek.runtime.health.v1") {
+                    return Ok(response);
+                }
+                return Err(app_error("unexpected HTTP runtime /health response"));
+            }
+            Err(error) if start.elapsed() < timeout => {
+                let _ = error;
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(error) => {
+                return Err(app_error(format!(
+                    "timed out waiting for HTTP runtime at {addr}: {error}"
+                )));
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn wait_for_shell_supervisor_health(
+    socket: &Path,
+    timeout: Duration,
+    child: &mut Child,
+) -> AppResult<String> {
+    let start = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            let stderr = read_child_stderr(child);
+            return Err(app_error(format!(
+                "shell supervisor exited before health responded: {status}{}",
+                child_stderr_suffix(&stderr)
+            )));
+        }
+        match shell_supervisor_request(socket, "health") {
+            Ok(response) => return Ok(response),
+            Err(error) if start.elapsed() < timeout => {
+                let _ = error;
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(error) => {
+                return Err(app_error(format!(
+                    "timed out waiting for shell supervisor at {}: {error}",
+                    socket.display()
+                )));
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn shell_supervisor_socket_is_active(socket: &Path) -> bool {
+    shell_supervisor_request(socket, "health").is_ok()
+}
+
+#[cfg(unix)]
+fn shell_supervisor_request(socket: &Path, method: &str) -> AppResult<String> {
+    use std::os::unix::net::UnixStream;
+
+    let mut stream = UnixStream::connect(socket)?;
+    stream.set_read_timeout(Some(Duration::from_millis(500)))?;
+    stream.set_write_timeout(Some(Duration::from_millis(500)))?;
+    let request = format!("{{\"method\":\"{}\"}}\n", json_escape(method));
+    stream.write_all(request.as_bytes())?;
+    let mut reader = BufReader::new(stream);
+    let mut response = String::new();
+    reader.read_line(&mut response)?;
+    if response.contains("\"status\":\"ok\"")
+        && response.contains(&format!("\"method\":\"{method}\""))
+    {
+        Ok(response)
+    } else {
+        Err(app_error(format!(
+            "unexpected shell supervisor {method} response: {}",
+            response.trim()
+        )))
+    }
+}
+
+fn wait_child_exit(child: &mut Child, timeout: Duration) -> AppResult<std::process::ExitStatus> {
+    let start = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        if start.elapsed() >= timeout {
+            return Err(app_error("timed out waiting for child process exit"));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn terminate_child(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn read_child_stderr(child: &mut Child) -> String {
+    let mut output = String::new();
+    if let Some(stderr) = child.stderr.as_mut() {
+        let _ = stderr.read_to_string(&mut output);
+    }
+    output.trim().to_string()
+}
+
+fn child_stderr_suffix(stderr: &str) -> String {
+    if stderr.is_empty() {
+        String::new()
+    } else {
+        format!("; stderr: {stderr}")
+    }
+}
+
+fn service_check_blocker_count(checks: &[ServiceDoctorCheck]) -> usize {
+    checks
+        .iter()
+        .filter(|check| check.status == ServiceDoctorStatus::Blocker)
+        .count()
+}
+
+fn service_check_warning_count(checks: &[ServiceDoctorCheck]) -> usize {
+    checks
+        .iter()
+        .filter(|check| check.status == ServiceDoctorStatus::Warn)
+        .count()
+}
+
+fn render_service_smoke_text(report: &ServiceSmokeReport) -> String {
+    let mut out = String::new();
+    out.push_str("DeepSeekCode service smoke\n");
+    out.push_str(&format!("  binary: {}\n", report.binary));
+    out.push_str(&format!("  workdir: {}\n", report.workdir.display()));
+    out.push_str(&format!("  requested_addr: {}\n", report.requested_addr));
+    out.push_str(&format!("  resolved_addr: {}\n", report.resolved_addr));
+    out.push_str(&format!("  timeout_ms: {}\n\n", report.timeout_ms));
+    for check in &report.checks {
+        out.push_str(&format!(
+            "[{}] {}: {}\n",
+            service_doctor_status_label(check.status),
+            check.name,
+            check.message
+        ));
+    }
+    out.push_str(&format!(
+        "\nsummary: {} blocker(s), {} warning(s)\n",
+        service_check_blocker_count(&report.checks),
+        service_check_warning_count(&report.checks)
+    ));
+    out
+}
+
+fn render_service_smoke_json(report: &ServiceSmokeReport) -> String {
+    let checks = report
+        .checks
+        .iter()
+        .map(|check| {
+            format!(
+                "{{\"status\":\"{}\",\"name\":\"{}\",\"message\":\"{}\"}}",
+                service_doctor_status_label(check.status),
+                json_escape(&check.name),
+                json_escape(&check.message)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{{\"kind\":\"deepseek.agents.service_smoke.v1\",\"binary\":\"{}\",\"workdir\":\"{}\",\"requested_addr\":\"{}\",\"resolved_addr\":\"{}\",\"timeout_ms\":{},\"blockers\":{},\"warnings\":{},\"checks\":[{}]}}",
+        json_escape(&report.binary),
+        json_escape(&report.workdir.display().to_string()),
+        json_escape(&report.requested_addr),
+        json_escape(&report.resolved_addr),
+        report.timeout_ms,
+        service_check_blocker_count(&report.checks),
+        service_check_warning_count(&report.checks),
+        checks
+    )
+}
+
 fn run_runtime_daemon_tick(
     config: &AppConfig,
     store: &RuntimeStore,
@@ -4879,6 +5430,91 @@ mod tests {
         let text = render_service_doctor_text(&report);
         assert!(text.contains("[blocker] output"));
         assert!(text.contains("summary:"));
+    }
+
+    #[test]
+    fn service_smoke_resolves_ephemeral_loopback_addr() {
+        let addr = resolve_service_smoke_addr("127.0.0.1:0").unwrap();
+        let parsed = addr.parse::<std::net::SocketAddr>().unwrap();
+        assert_eq!(parsed.ip().to_string(), "127.0.0.1");
+        assert_ne!(parsed.port(), 0);
+    }
+
+    #[test]
+    fn service_smoke_json_reports_blockers_and_warnings() {
+        let mut report = ServiceSmokeReport {
+            binary: "/missing/deepseek".to_string(),
+            workdir: PathBuf::from("/work/repo"),
+            requested_addr: "127.0.0.1:0".to_string(),
+            resolved_addr: "127.0.0.1:4567".to_string(),
+            addr_error: None,
+            timeout_ms: 2500,
+            checks: Vec::new(),
+        };
+        push_service_doctor_check(
+            &mut report.checks,
+            ServiceDoctorStatus::Blocker,
+            "runtime",
+            "health failed",
+        );
+        push_service_doctor_check(
+            &mut report.checks,
+            ServiceDoctorStatus::Warn,
+            "shell_supervisor",
+            "unsupported platform",
+        );
+
+        let json = render_service_smoke_json(&report);
+        assert!(json.contains("\"kind\":\"deepseek.agents.service_smoke.v1\""));
+        assert!(json.contains("\"blockers\":1"));
+        assert!(json.contains("\"warnings\":1"));
+        assert!(json.contains("\"resolved_addr\":\"127.0.0.1:4567\""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn service_smoke_blocks_existing_shell_supervisor_socket() {
+        use std::io::{BufRead as _, Write as _};
+
+        let root = std::env::temp_dir().join(format!(
+            "dsc-smk-{}-{}",
+            std::process::id(),
+            current_epoch_seconds()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let state_dir = root.join(".dscode/shell-supervisor");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        let socket = state_dir.join("supervisor.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            reader.read_line(&mut request).unwrap();
+            assert!(request.contains("\"method\":\"health\""));
+            stream
+                .write_all(b"{\"status\":\"ok\",\"method\":\"health\"}\n")
+                .unwrap();
+        });
+        let mut report = ServiceSmokeReport {
+            binary: "/missing/deepseek".to_string(),
+            workdir: root,
+            requested_addr: "127.0.0.1:0".to_string(),
+            resolved_addr: "127.0.0.1:4567".to_string(),
+            addr_error: None,
+            timeout_ms: 2500,
+            checks: Vec::new(),
+        };
+
+        service_smoke_check_shell_supervisor(&mut report);
+        handle.join().unwrap();
+
+        assert!(report.checks.iter().any(|check| {
+            check.status == ServiceDoctorStatus::Blocker
+                && check.name == "shell_supervisor"
+                && check.message.contains("already active")
+        }));
+        let _ = std::fs::remove_dir_all(&report.workdir);
     }
 
     #[test]

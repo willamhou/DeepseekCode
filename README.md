@@ -162,6 +162,7 @@ deepseek update publish-status
 deepseek update publish-status --dist dist-assets --npm-dist npm-dist --strict
 deepseek update publish-status --json
 deepseek agents service-doctor --kind all --workdir "$PWD" --bin "$(command -v deepseek)" --json
+deepseek agents service-smoke --workdir "$PWD" --bin "$(command -v deepseek)" --json
 ```
 
 For PR/CI workflow checks:

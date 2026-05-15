@@ -508,6 +508,7 @@ pub enum AgentsAction {
     ShellSupervisor(AgentsShellSupervisorArgs),
     Service(AgentsServiceArgs),
     ServiceDoctor(AgentsServiceDoctorArgs),
+    ServiceSmoke(AgentsServiceSmokeArgs),
     Threads,
     ShowThread {
         id: String,
@@ -676,6 +677,15 @@ pub struct AgentsServiceDoctorArgs {
     pub addr: String,
     pub interval_ms: u64,
     pub budget: Option<usize>,
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentsServiceSmokeArgs {
+    pub bin: Option<String>,
+    pub workdir: Option<String>,
+    pub addr: String,
+    pub timeout_ms: u64,
     pub json: bool,
 }
 
@@ -2023,6 +2033,7 @@ fn parse_agents_subcommand(args: Vec<String>) -> Result<AgentsAction, String> {
         }
         "service" => parse_agents_service_args(args.into_iter().skip(1).collect()),
         "service-doctor" => parse_agents_service_doctor_args(args.into_iter().skip(1).collect()),
+        "service-smoke" => parse_agents_service_smoke_args(args.into_iter().skip(1).collect()),
         "threads" => {
             if args.len() > 1 {
                 return Err("agents threads accepts no arguments".to_string());
@@ -2058,7 +2069,7 @@ fn parse_agents_subcommand(args: Vec<String>) -> Result<AgentsAction, String> {
             Ok(AgentsAction::ClearThread)
         }
         other => Err(format!(
-            "unknown agents sub-action `{other}`; expected list|show|validate|run-task|daemon|rlm-status|rlm-events|rlm-wait|rlm-cancel|rlm-recover|rlm-stop|rlm-run-next|rlm-drain|shell|shell-supervisor|service|service-doctor|threads|show-thread|switch|current|clear-current"
+            "unknown agents sub-action `{other}`; expected list|show|validate|run-task|daemon|rlm-status|rlm-events|rlm-wait|rlm-cancel|rlm-recover|rlm-stop|rlm-run-next|rlm-drain|shell|shell-supervisor|service|service-doctor|service-smoke|threads|show-thread|switch|current|clear-current"
         )),
     }
 }
@@ -3183,6 +3194,55 @@ fn parse_agents_service_doctor_args(args: Vec<String>) -> Result<AgentsAction, S
         }
     }
     Ok(AgentsAction::ServiceDoctor(parsed))
+}
+
+fn parse_agents_service_smoke_args(args: Vec<String>) -> Result<AgentsAction, String> {
+    let mut parsed = AgentsServiceSmokeArgs {
+        bin: None,
+        workdir: None,
+        addr: "127.0.0.1:0".to_string(),
+        timeout_ms: 5_000,
+        json: false,
+    };
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--bin" if index + 1 < args.len() => {
+                parsed.bin = Some(args[index + 1].clone());
+                index += 2;
+            }
+            "--bin" => return Err("agents service-smoke --bin requires a path".to_string()),
+            "--workdir" if index + 1 < args.len() => {
+                parsed.workdir = Some(args[index + 1].clone());
+                index += 2;
+            }
+            "--workdir" => return Err("agents service-smoke --workdir requires a path".to_string()),
+            "--addr" if index + 1 < args.len() => {
+                parsed.addr = args[index + 1].clone();
+                index += 2;
+            }
+            "--addr" => return Err("agents service-smoke --addr requires a value".to_string()),
+            "--timeout-ms" if index + 1 < args.len() => {
+                parsed.timeout_ms = args[index + 1].parse::<u64>().map_err(|_| {
+                    "agents service-smoke --timeout-ms must be a number".to_string()
+                })?;
+                index += 2;
+            }
+            "--timeout-ms" => {
+                return Err("agents service-smoke --timeout-ms requires a value".to_string());
+            }
+            "--json" => {
+                parsed.json = true;
+                index += 1;
+            }
+            value => {
+                return Err(format!(
+                    "unknown flag for `agents service-smoke`: {value}; expected --bin|--workdir|--addr|--timeout-ms|--json"
+                ));
+            }
+        }
+    }
+    Ok(AgentsAction::ServiceSmoke(parsed))
 }
 
 fn default_agents_service_kind() -> AgentsServiceKind {
@@ -5161,6 +5221,33 @@ mod tests {
                 && addr == "127.0.0.1:9999"
         ));
 
+        let service_smoke = Cli::from_argv(vec![
+            "agents".to_string(),
+            "service-smoke".to_string(),
+            "--bin".to_string(),
+            "/usr/local/bin/deepseek".to_string(),
+            "--workdir".to_string(),
+            "/work/repo".to_string(),
+            "--addr".to_string(),
+            "127.0.0.1:0".to_string(),
+            "--timeout-ms".to_string(),
+            "2500".to_string(),
+            "--json".to_string(),
+        ])
+        .expect("parse should succeed");
+        assert!(matches!(
+            service_smoke.command,
+            Some(Command::Agents(AgentsAction::ServiceSmoke(AgentsServiceSmokeArgs {
+                ref bin,
+                ref workdir,
+                ref addr,
+                timeout_ms: 2500,
+                json: true,
+            }))) if bin.as_deref() == Some("/usr/local/bin/deepseek")
+                && workdir.as_deref() == Some("/work/repo")
+                && addr == "127.0.0.1:0"
+        ));
+
         let threads = Cli::from_argv(vec!["agents".to_string(), "threads".to_string()])
             .expect("parse should succeed");
         assert!(matches!(
@@ -5236,6 +5323,37 @@ mod tests {
                 && bin.as_deref() == Some("/usr/local/bin/deepseek")
                 && workdir.as_deref() == Some("/work/repo")
                 && addr == "127.0.0.1:9999"
+        ));
+    }
+
+    #[test]
+    fn cli_from_argv_routes_agents_service_smoke() {
+        let cli = Cli::from_argv(vec![
+            "agents".to_string(),
+            "service-smoke".to_string(),
+            "--bin".to_string(),
+            "/usr/local/bin/deepseek".to_string(),
+            "--workdir".to_string(),
+            "/work/repo".to_string(),
+            "--addr".to_string(),
+            "127.0.0.1:0".to_string(),
+            "--timeout-ms".to_string(),
+            "2500".to_string(),
+            "--json".to_string(),
+        ])
+        .expect("parse should succeed");
+
+        assert!(matches!(
+            cli.command,
+            Some(Command::Agents(AgentsAction::ServiceSmoke(AgentsServiceSmokeArgs {
+                ref bin,
+                ref workdir,
+                ref addr,
+                timeout_ms: 2500,
+                json: true,
+            }))) if bin.as_deref() == Some("/usr/local/bin/deepseek")
+                && workdir.as_deref() == Some("/work/repo")
+                && addr == "127.0.0.1:0"
         ));
     }
 
