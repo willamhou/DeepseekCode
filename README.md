@@ -18,6 +18,7 @@ iterating from the same terminal.
 
 ## What Works Today
 
+- `deepseek` for the interactive coding-agent REPL.
 - `deepseek run` for one-shot coding tasks.
 - `deepseek tui` for a keyboard-driven terminal workbench with Plan / Agent /
   YOLO modes.
@@ -81,6 +82,7 @@ deepseek doctor --json
 Run a coding task:
 
 ```bash
+deepseek
 deepseek run "explain the current repository structure"
 ```
 

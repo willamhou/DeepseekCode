@@ -5,6 +5,11 @@ pub struct Cli {
     pub command: Option<Command>,
 }
 
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct HelpArgs {
+    pub topics: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompletionShell {
     Bash,
@@ -354,6 +359,23 @@ impl Cli {
         }
 
         let first = args.remove(0);
+        if is_help_flag(&first) {
+            return Ok(Self {
+                command: Some(Command::Help(HelpArgs::default())),
+            });
+        }
+        if first == "help" {
+            return Ok(Self {
+                command: Some(Command::Help(HelpArgs { topics: args })),
+            });
+        }
+        if args.iter().any(|arg| is_help_flag(arg)) {
+            let mut topics = vec![first];
+            topics.extend(args.into_iter().filter(|arg| !is_help_flag(arg)));
+            return Ok(Self {
+                command: Some(Command::Help(HelpArgs { topics })),
+            });
+        }
         let command = match first.as_str() {
             "version" => Command::Version,
             "completion" => Command::Completion(parse_completion_args(args)?),
@@ -417,6 +439,7 @@ pub enum Command {
     Smoke(SmokeArgs),
     Pr(PrAction),
     Mcp(McpAction),
+    Help(HelpArgs),
     Version,
 }
 
@@ -424,6 +447,10 @@ impl Default for Command {
     fn default() -> Self {
         Self::Chat(ChatArgs::default())
     }
+}
+
+fn is_help_flag(value: &str) -> bool {
+    matches!(value, "--help" | "-h")
 }
 
 fn parse_completion_args(args: Vec<String>) -> Result<CompletionShell, String> {
@@ -4788,6 +4815,45 @@ mod tests {
         let result = Cli::from_argv(argv);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("unknown pr sub-action"));
+    }
+
+    #[test]
+    fn cli_from_argv_parses_global_help_flag() {
+        let cli = Cli::from_argv(vec!["--help".to_string()]).expect("parse should succeed");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Help(HelpArgs { ref topics })) if topics.is_empty()
+        ));
+    }
+
+    #[test]
+    fn cli_from_argv_parses_help_command_topics() {
+        let cli = Cli::from_argv(vec![
+            "help".to_string(),
+            "dogfood".to_string(),
+            "live-plan".to_string(),
+        ])
+        .expect("parse should succeed");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Help(HelpArgs { ref topics }))
+                if topics == &vec!["dogfood".to_string(), "live-plan".to_string()]
+        ));
+    }
+
+    #[test]
+    fn cli_from_argv_routes_subcommand_help_without_running_subcommand_parser() {
+        let cli = Cli::from_argv(vec![
+            "dogfood".to_string(),
+            "replay-benchmark".to_string(),
+            "--help".to_string(),
+        ])
+        .expect("parse should succeed");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Help(HelpArgs { ref topics }))
+                if topics == &vec!["dogfood".to_string(), "replay-benchmark".to_string()]
+        ));
     }
 
     #[test]

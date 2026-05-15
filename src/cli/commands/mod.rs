@@ -8,6 +8,7 @@ pub mod diff;
 pub mod doctor;
 pub mod dogfood;
 pub mod exec;
+pub mod help;
 pub mod mcp;
 pub mod pr;
 pub mod restore;

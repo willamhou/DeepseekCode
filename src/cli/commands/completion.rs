@@ -28,6 +28,7 @@ fn command_words() -> &'static [&'static str] {
         "doctor",
         "dogfood",
         "exec",
+        "help",
         "interactive",
         "mcp",
         "pr",
