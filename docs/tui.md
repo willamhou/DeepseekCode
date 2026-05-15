@@ -120,10 +120,14 @@ Current surfaces:
   records
 - model picker, inspection, and switching with `model` / `/model`,
   `model show`, `model <name>` / `/model <name>`, and offline
-  `models` / `/models`
+  `models` / `/models`; known DeepSeek V4 aliases are normalized for the
+  active provider, so official DeepSeek endpoints receive bare
+  `deepseek-v4-*` ids while compatible backends keep provider-specific ids
 - provider preset picker, inspection, and switching with `provider` /
   `/provider`, `provider show`, `provider list`, and
-  `provider <name> [model]`
+  `provider <name> [model]`; legacy DeepSeek CN aliases such as
+  `deepseek-cn`, `deepseek_china`, `deepseekcn`, and `deepseek-china` map to
+  the canonical DeepSeek preset
 - skill registry inspection and local user-skill management with
   `skills [prefix]` / `/skills [prefix]`, `/skills --remote`,
   `/skills sync`,
@@ -475,12 +479,12 @@ Command palette commands currently implemented:
 | `review <target>`, `/review <target>` | Run deterministic local review and render JSON output in the right-side detail panel |
 | `model`, `/model` | Open the model picker for the selected workspace |
 | `model show`, `/model show` | Show selected workspace model config in the right-side detail panel |
-| `model <name>`, `/model <name>` | Update selected workspace `model.model`; aliases include `auto`, `flash`, `pro`, `chat`, `coder`, and `reasoner` |
+| `model <name>`, `/model <name>` | Update selected workspace `model.model`; aliases include `auto`, `flash`, `pro`, `chat`, `coder`, and `reasoner`, and DeepSeek V4 aliases are normalized for the active provider |
 | `models`, `/models`, `model list` | Show the offline DeepSeekCode model catalog and current project model |
 | `provider`, `/provider` | Open the provider/model picker for the selected workspace |
 | `provider show`, `/provider show` | Show selected workspace provider preset inferred from `model.base_url` |
 | `provider list` | Show supported provider presets: DeepSeek, NVIDIA NIM, OpenAI-compatible, AtlasCloud, OpenRouter, Novita, Fireworks, SGLang, vLLM, and Ollama |
-| `provider <name> [model]`, `/provider <name> [model]` | Update selected workspace `model.base_url`, `model.api_key_env`, and `model.model` with provider defaults or an optional model override |
+| `provider <name> [model]`, `/provider <name> [model]` | Update selected workspace `model.base_url`, `model.api_key_env`, and `model.model` with provider defaults or an optional model override; `deepseek-cn`, `deepseek_china`, `deepseekcn`, and `deepseek-china` are accepted as DeepSeek aliases |
 | `profile`, `/profile` | Show selected workspace active config profile and configured profile entries |
 | `profile list`, `/profile list` | List configured profiles from `profiles.<name>.*` or `[profiles.name]` config sections |
 | `profile <name>`, `/profile <name>` | Persist `workspace.active_profile` so future local TUI turns reload that profile |

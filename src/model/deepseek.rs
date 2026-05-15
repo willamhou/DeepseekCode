@@ -112,7 +112,7 @@ impl DeepSeekClient {
                 "}}"
             ),
             json_escape(model),
-            ReasoningTier::Off.openai_fields(),
+            openai_reasoning_fields(&self.config.base_url, ReasoningTier::Off),
             json_escape(&translation_system_prompt(target_language)),
             json_escape(text),
         );
@@ -217,7 +217,7 @@ impl DeepSeekClient {
             "\"temperature\":0,"
         };
         let tool_fields = openai_tool_fields(&input.available_tools, reasoning);
-        let reasoning_fields = reasoning.openai_fields();
+        let reasoning_fields = openai_reasoning_fields(&self.config.base_url, reasoning);
         let body = format!(
             concat!(
                 "{{",
@@ -1211,11 +1211,18 @@ impl ReasoningTier {
         !matches!(self, Self::Off)
     }
 
-    fn openai_fields(self) -> &'static str {
-        match self {
-            Self::Off => "\"thinking\":{\"type\":\"disabled\"},",
-            Self::High => "\"thinking\":{\"type\":\"enabled\"},\"reasoning_effort\":\"high\",",
-            Self::Max => "\"thinking\":{\"type\":\"enabled\"},\"reasoning_effort\":\"max\",",
+    fn openai_fields(self, compatibility: OpenAiCompatibility) -> &'static str {
+        match compatibility {
+            OpenAiCompatibility::DeepSeekCompatible => match self {
+                Self::Off => "\"thinking\":{\"type\":\"disabled\"},",
+                Self::High => "\"thinking\":{\"type\":\"enabled\"},\"reasoning_effort\":\"high\",",
+                Self::Max => "\"thinking\":{\"type\":\"enabled\"},\"reasoning_effort\":\"max\",",
+            },
+            OpenAiCompatibility::Strict => match self {
+                Self::Off => "",
+                Self::High => "\"reasoning_effort\":\"high\",",
+                Self::Max => "\"reasoning_effort\":\"max\",",
+            },
         }
     }
 
@@ -1234,12 +1241,31 @@ enum ApiFlavor {
     Anthropic,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OpenAiCompatibility {
+    DeepSeekCompatible,
+    Strict,
+}
+
 fn api_flavor(base_url: &str) -> ApiFlavor {
     if base_url.trim_end_matches('/').ends_with("/anthropic") {
         ApiFlavor::Anthropic
     } else {
         ApiFlavor::OpenAi
     }
+}
+
+fn openai_compatibility(base_url: &str) -> OpenAiCompatibility {
+    let lower = base_url.trim_end_matches('/').to_ascii_lowercase();
+    if lower.contains("api.openai.com") || lower.contains("api.fireworks.ai") {
+        OpenAiCompatibility::Strict
+    } else {
+        OpenAiCompatibility::DeepSeekCompatible
+    }
+}
+
+fn openai_reasoning_fields(base_url: &str, tier: ReasoningTier) -> &'static str {
+    tier.openai_fields(openai_compatibility(base_url))
 }
 
 fn translation_system_prompt(target_language: &str) -> String {
@@ -5859,20 +5885,49 @@ mod tests {
     fn reasoning_tier_maps_off_high_and_max_to_api_fields() {
         let off = super::ReasoningTier::from_config("off");
         assert!(!off.thinking_enabled());
-        assert!(off.openai_fields().contains("\"disabled\""));
+        assert!(off
+            .openai_fields(super::OpenAiCompatibility::DeepSeekCompatible)
+            .contains("\"disabled\""));
         assert_eq!(off.anthropic_fields(), "");
 
         let high = super::ReasoningTier::from_config("high");
         assert!(high.thinking_enabled());
         assert!(high
-            .openai_fields()
+            .openai_fields(super::OpenAiCompatibility::DeepSeekCompatible)
             .contains("\"reasoning_effort\":\"high\""));
         assert!(high.anthropic_fields().contains("\"effort\":\"high\""));
 
         let max = super::ReasoningTier::from_config("xhigh");
         assert!(max.thinking_enabled());
-        assert!(max.openai_fields().contains("\"reasoning_effort\":\"max\""));
+        assert!(max
+            .openai_fields(super::OpenAiCompatibility::DeepSeekCompatible)
+            .contains("\"reasoning_effort\":\"max\""));
         assert!(max.anthropic_fields().contains("\"effort\":\"max\""));
+    }
+
+    #[test]
+    fn openai_reasoning_fields_omit_deepseek_thinking_for_strict_gateways() {
+        let off = super::openai_reasoning_fields(
+            "https://api.fireworks.ai/inference/v1",
+            super::ReasoningTier::Off,
+        );
+        assert_eq!(off, "");
+
+        let max = super::openai_reasoning_fields(
+            "https://api.fireworks.ai/inference/v1",
+            super::ReasoningTier::Max,
+        );
+        assert_eq!(max, "\"reasoning_effort\":\"max\",");
+        assert!(!max.contains("\"thinking\""));
+
+        let openai =
+            super::openai_reasoning_fields("https://api.openai.com/v1", super::ReasoningTier::High);
+        assert_eq!(openai, "\"reasoning_effort\":\"high\",");
+        assert!(!openai.contains("\"thinking\""));
+
+        let deepseek =
+            super::openai_reasoning_fields("https://api.deepseek.com", super::ReasoningTier::Off);
+        assert!(deepseek.contains("\"thinking\":{\"type\":\"disabled\"}"));
     }
 
     #[test]

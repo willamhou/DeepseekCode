@@ -382,12 +382,15 @@ pub(crate) fn model_config_summary_at(root: &std::path::Path) -> AppResult<Model
 }
 
 pub(crate) fn set_model_at(root: &std::path::Path, model: &str) -> AppResult<ModelSetResult> {
-    let model = normalize_model_value(model)?;
     let path = network_config_path_at(root);
     if !path.exists() {
         init_config_at(root, false)?;
     }
     let content = std::fs::read_to_string(&path)?;
+    let base_url = read_string_key(&content, "model.base_url")
+        .unwrap_or_else(|| AppConfig::default().model.base_url);
+    let preset = infer_provider_preset(&base_url);
+    let model = provider_model_value(preset, model)?;
     let previous = read_string_key(&content, "model.model")
         .unwrap_or_else(|| AppConfig::default().model.model);
     let changed = previous != model;
@@ -914,7 +917,8 @@ fn provider_preset_names() -> String {
 fn parse_provider_preset(value: &str) -> Option<ProviderPreset> {
     let normalized = value.trim().to_ascii_lowercase();
     let name = match normalized.as_str() {
-        "deepseek" | "deep-seek" => "deepseek",
+        "deepseek" | "deep-seek" | "deepseek-cn" | "deepseek_china" | "deepseekcn"
+        | "deepseek-china" => "deepseek",
         "nvidia" | "nvidia_nim" | "nvidia-nim" | "nim" => "nvidia-nim",
         "openai" | "open-ai" => "openai",
         "atlas" | "atlascloud" | "atlas-cloud" | "atlas_cloud" => "atlascloud",
@@ -966,7 +970,15 @@ fn infer_provider_preset(base_url: &str) -> ProviderPreset {
 
 fn provider_model_value(preset: ProviderPreset, raw: &str) -> AppResult<String> {
     let model = normalize_model_value(raw)?;
-    let lower = model.to_ascii_lowercase();
+    if preset.name == "deepseek" {
+        if let Some(canonical) = canonical_official_deepseek_model_id(&model) {
+            return Ok(canonical.to_string());
+        }
+        return Ok(model);
+    }
+    let lower = canonical_official_deepseek_model_id(&model)
+        .map(str::to_string)
+        .unwrap_or_else(|| model.to_ascii_lowercase());
     let mapped = match (preset.name, lower.as_str()) {
         ("nvidia-nim", "deepseek-v4-pro") => "deepseek-ai/deepseek-v4-pro",
         ("nvidia-nim", "deepseek-v4-flash") => "deepseek-ai/deepseek-v4-flash",
@@ -983,6 +995,24 @@ fn provider_model_value(preset: ProviderPreset, raw: &str) -> AppResult<String> 
         _ => return Ok(model),
     };
     Ok(mapped.to_string())
+}
+
+fn canonical_official_deepseek_model_id(model: &str) -> Option<&'static str> {
+    match model.trim().to_ascii_lowercase().as_str() {
+        "deepseek-v4-pro"
+        | "deepseek-v4pro"
+        | "deepseek-ai/deepseek-v4-pro"
+        | "deepseek-ai/deepseek-v4pro"
+        | "deepseek/deepseek-v4-pro"
+        | "deepseek/deepseek-v4pro" => Some("deepseek-v4-pro"),
+        "deepseek-v4-flash"
+        | "deepseek-v4flash"
+        | "deepseek-ai/deepseek-v4-flash"
+        | "deepseek-ai/deepseek-v4flash"
+        | "deepseek/deepseek-v4-flash"
+        | "deepseek/deepseek-v4flash" => Some("deepseek-v4-flash"),
+        _ => None,
+    }
 }
 
 fn validate_profile_name(profile: &str) -> AppResult<()> {
@@ -1555,6 +1585,58 @@ mod tests {
         assert!(invalid.to_string().contains("valid environment variable"));
         let invalid = persist_auth_secret_at(&root, "DEEPSEEK_API_KEY", "two words").unwrap_err();
         assert!(invalid.to_string().contains("single non-whitespace token"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn provider_preset_accepts_legacy_deepseek_cn_aliases() {
+        for alias in [
+            "deepseek-cn",
+            "deepseek_china",
+            "deepseekcn",
+            "deepseek-china",
+        ] {
+            let preset = parse_provider_preset(alias).expect("legacy DeepSeek CN alias");
+            assert_eq!(preset.name, "deepseek");
+            assert_eq!(preset.base_url, "https://api.deepseek.com");
+        }
+
+        let root = temp_root("provider-legacy-cn-alias");
+        init_config_at(&root, false).unwrap();
+        let result = set_provider_at(&root, "deepseek-cn", None).unwrap();
+        assert_eq!(result.provider, "deepseek");
+        assert_eq!(result.model, "deepseek-v4-pro");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn set_model_at_canonicalizes_deepseek_provider_aliases() {
+        let root = temp_root("model-deepseek-canonical");
+        init_config_at(&root, false).unwrap();
+
+        let result = set_model_at(&root, "deepseek-ai/DeepSeek-V4-Pro").unwrap();
+
+        assert_eq!(result.model, "deepseek-v4-pro");
+        let content = std::fs::read_to_string(root.join(".dscode/config.toml")).unwrap();
+        assert!(content.contains(r#"model.model = "deepseek-v4-pro""#));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn set_model_at_maps_bare_deepseek_model_for_active_provider() {
+        let root = temp_root("model-provider-map");
+        init_config_at(&root, false).unwrap();
+        set_provider_at(&root, "openrouter", None).unwrap();
+
+        let result = set_model_at(&root, "flash").unwrap();
+
+        assert_eq!(result.model, "deepseek/deepseek-v4-flash");
+        let content = std::fs::read_to_string(root.join(".dscode/config.toml")).unwrap();
+        assert!(content.contains(r#"model.base_url = "https://openrouter.ai/api/v1""#));
+        assert!(content.contains(r#"model.model = "deepseek/deepseek-v4-flash""#));
 
         let _ = std::fs::remove_dir_all(root);
     }

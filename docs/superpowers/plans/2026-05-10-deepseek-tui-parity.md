@@ -1,7 +1,7 @@
 # DeepSeek-TUI Parity Plan
 
 **Status:** active
-**Source comparison:** `Hmbown/DeepSeek-TUI` refreshed at `/tmp/deepseek-tui-compare-20260514`; original local HEAD `9483248a9f35b5f2b56c34b5b84fbc5334473c9d`, latest fetched `origin/main` `13e7957621448792beda06ec8615e33cb374adce`.
+**Source comparison:** `Hmbown/DeepSeek-TUI` refreshed at `/tmp/deepseek-tui-compare-20260514`; original local HEAD `9483248a9f35b5f2b56c34b5b84fbc5334473c9d`, latest fetched `origin/main` `b834548d3b1dd60d08f8023d64ba129945f44420`.
 **Current repo:** `willamhou/DeepSeekCode` (`PUBLIC` after 2026-05-12 repo publication), release command `deepseek`, compatibility alias `dscode`.
 
 ## Objective
@@ -57,6 +57,11 @@ JSON evidence without starting services.
 runtime on a loopback ephemeral port, probes `/health`, starts the Unix shell
 supervisor protocol bridge, probes `health`, requests `shutdown`, and emits
 local JSON evidence without requiring systemd/launchd installation.
+The latest upstream refresh also added provider/model compatibility fixes;
+DeepSeekCode now accepts legacy DeepSeek CN provider aliases, normalizes known
+DeepSeek V4 model aliases according to the active provider, and omits
+DeepSeek-only `thinking` fields for strict OpenAI/Fireworks-compatible request
+bodies.
 The largest remaining DeepSeek-TUI / Claude Code CLI / Codex CLI gaps are now:
 
 - native supervisor-owned PTY attach/stdin/resize/replay/wait/cancel polish and
@@ -740,6 +745,14 @@ Landed first slice:
   turn ids in `.dscode/tui/reasoning-replay.json`, so operator replay
   preferences survive TUI restarts without changing durable runtime thread
   records
+- `/provider` accepts legacy DeepSeek CN aliases (`deepseek-cn`,
+  `deepseek_china`, `deepseekcn`, and `deepseek-china`), and `/model` /
+  `set_model_at` now canonicalize known DeepSeek V4 aliases for the active
+  provider so official DeepSeek receives bare `deepseek-v4-*` ids while
+  compatible backends keep provider-specific ids
+- OpenAI-flavored model requests now omit DeepSeek-only top-level `thinking`
+  fields for strict official OpenAI and Fireworks endpoints while preserving the
+  DeepSeek-compatible request shape for DeepSeek-compatible providers
 
 Remaining:
 
