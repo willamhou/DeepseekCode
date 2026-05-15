@@ -441,6 +441,9 @@ Landed first slice:
 - full-width TUI MCP manager now supports drag-select across visible server
   rows, selecting the visible server-row range for the existing bulk
   enable/disable action path while preserving normal click-to-select behavior
+- composer-focused TUI sessions now keep transcript scrollback reachable through
+  `PageUp` / `PageDown`, and default Windows composer arrow keys to transcript
+  scrolling so wheel-as-arrow input does not get swallowed by the composer
 - task panel now summarizes active-thread runtime item state/type counts and
   the latest item content, making streamed background agent run progress and
   tool activity visible alongside durable task records

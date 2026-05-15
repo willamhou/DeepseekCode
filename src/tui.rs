@@ -99,6 +99,14 @@ impl TuiMode {
     }
 }
 
+fn default_composer_arrows_scroll() -> bool {
+    default_composer_arrows_scroll_for_platform(cfg!(windows))
+}
+
+fn default_composer_arrows_scroll_for_platform(is_windows: bool) -> bool {
+    is_windows
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TuiTheme {
     Dark,
@@ -6877,7 +6885,32 @@ impl TuiApp {
         true
     }
 
+    fn handle_composer_scroll_key(&mut self, code: KeyCode, arrows_scroll: bool) -> bool {
+        match code {
+            KeyCode::PageUp => {
+                self.scroll_transcript_up(8);
+                true
+            }
+            KeyCode::PageDown => {
+                self.scroll_transcript_down(8);
+                true
+            }
+            KeyCode::Up if arrows_scroll => {
+                self.scroll_transcript_up(1);
+                true
+            }
+            KeyCode::Down if arrows_scroll => {
+                self.scroll_transcript_down(1);
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn handle_composer_key(&mut self, code: KeyCode) -> bool {
+        if self.handle_composer_scroll_key(code, default_composer_arrows_scroll()) {
+            return true;
+        }
         match code {
             KeyCode::Esc => {
                 self.composer_focused = false;
@@ -23662,6 +23695,73 @@ model.model = "deepseek-v4-pro"
         assert_eq!(app.transcript_scroll, 0);
         let output = render_once(&app, 140, 14).unwrap();
         assert!(output.contains("scroll-message-19"));
+    }
+
+    #[test]
+    fn composer_page_keys_scroll_transcript_while_focused() {
+        let items = (0..20)
+            .map(|index| TuiItem {
+                id: format!("item-{index:02}"),
+                thread_id: "thread-one".to_string(),
+                turn_id: None,
+                index,
+                item_type: "message".to_string(),
+                role: Some("assistant".to_string()),
+                content: format!("composer-scroll-message-{index:02}"),
+                status: "completed".to_string(),
+            })
+            .collect::<Vec<_>>();
+        let mut app = TuiApp::with_runtime(
+            vec![TuiSession {
+                id: "session-one".to_string(),
+                title: "One".to_string(),
+                workspace: ".".to_string(),
+                status: "active".to_string(),
+                active_thread_id: Some("thread-one".to_string()),
+                thread_count: 1,
+            }],
+            vec![TuiThread {
+                id: "thread-one".to_string(),
+                session_id: Some("session-one".to_string()),
+                title: "First thread".to_string(),
+                mode: "agent".to_string(),
+                status: "active".to_string(),
+                latest_turn_id: None,
+                event_seq: 1,
+            }],
+            items,
+        );
+        app.composer_focused = true;
+        app.composer = "draft".to_string();
+        app.composer_cursor = app.composer.len();
+
+        assert!(app.handle_key(KeyCode::PageUp));
+        assert_eq!(app.transcript_scroll, 8);
+        assert_eq!(app.composer, "draft");
+
+        assert!(app.handle_key(KeyCode::PageDown));
+        assert_eq!(app.transcript_scroll, 0);
+        assert_eq!(app.composer_cursor, app.composer.len());
+    }
+
+    #[test]
+    fn composer_arrows_scroll_default_tracks_windows_platform() {
+        assert!(!default_composer_arrows_scroll_for_platform(false));
+        assert!(default_composer_arrows_scroll_for_platform(true));
+    }
+
+    #[test]
+    fn composer_arrow_scroll_helper_supports_windows_wheel_mapping() {
+        let mut app = TuiApp::new(Vec::new());
+        app.transcript = (0..20).map(|index| format!("line-{index:02}")).collect();
+
+        assert!(!app.handle_composer_scroll_key(KeyCode::Up, false));
+        assert_eq!(app.transcript_scroll, 0);
+
+        assert!(app.handle_composer_scroll_key(KeyCode::Up, true));
+        assert_eq!(app.transcript_scroll, 1);
+        assert!(app.handle_composer_scroll_key(KeyCode::Down, true));
+        assert_eq!(app.transcript_scroll, 0);
     }
 
     #[test]

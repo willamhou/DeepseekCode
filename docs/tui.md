@@ -310,7 +310,7 @@ Key bindings:
 | `Ctrl+S` | Stash the focused composer draft and clear the composer |
 | `Ctrl+Left`, `Ctrl+Right` | Move by word in the focused composer or command palette |
 | `Ctrl+C` | Quit the TUI |
-| `Up`, `Down`, `PageUp`, `PageDown` | Recall command-palette history while the palette is active; move through session/thread pickers while visible; scroll the MCP manager/detail panel while visible; otherwise scroll transcript history |
+| `Up`, `Down`, `PageUp`, `PageDown` | Recall command-palette history while the palette is active; move through session/thread pickers while visible; scroll the MCP manager/detail panel while visible; `PageUp` / `PageDown` also scroll transcript history while the composer is focused, and Windows composer `Up` / `Down` defaults to transcript scrolling for wheel-as-arrow input; otherwise scroll transcript history |
 | `Home`, `End` | Move the focused input cursor; jump session/thread pickers, MCP manager/detail, or transcript scrollback to first/last positions |
 | `:` | Open command palette |
 | `s` | Open session picker |
