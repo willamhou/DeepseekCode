@@ -45,6 +45,16 @@ static TUI_TERMINAL_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 #[cfg(unix)]
 static TUI_SIGNAL_CLEANUP_INSTALLED: AtomicBool = AtomicBool::new(false);
+const LEGACY_WINDOWS_CONSOLE_MARKERS: [&str; 8] = [
+    "WT_SESSION",
+    "ConEmuPID",
+    "TERM_PROGRAM",
+    "WEZTERM_EXECUTABLE",
+    "WEZTERM_PANE",
+    "ALACRITTY_WINDOW_ID",
+    "ANSICON",
+    "TERM",
+];
 const DEEPSEEK_CODE_BUG_URL: &str =
     "https://github.com/willamhou/DeepSeekCode/issues/new?labels=bug";
 const DEEPSEEK_CODE_FEATURE_URL: &str =
@@ -105,6 +115,25 @@ fn default_composer_arrows_scroll() -> bool {
 
 fn default_composer_arrows_scroll_for_platform(is_windows: bool) -> bool {
     is_windows
+}
+
+fn tui_mouse_capture_enabled() -> bool {
+    tui_mouse_capture_enabled_for_platform(
+        cfg!(windows),
+        LEGACY_WINDOWS_CONSOLE_MARKERS.map(env_has_nonempty),
+    )
+}
+
+fn tui_mouse_capture_enabled_for_platform(is_windows: bool, markers: [bool; 8]) -> bool {
+    !detected_legacy_windows_console_host_for_platform(is_windows, markers)
+}
+
+fn detected_legacy_windows_console_host_for_platform(is_windows: bool, markers: [bool; 8]) -> bool {
+    is_windows && markers.into_iter().all(|has_marker| !has_marker)
+}
+
+fn env_has_nonempty(key: &str) -> bool {
+    env::var_os(key).is_some_and(|value| !value.is_empty())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16279,7 +16308,12 @@ where
     enable_raw_mode()?;
     let mut terminal_guard = TerminalRestoreGuard::arm();
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let mouse_capture = tui_mouse_capture_enabled();
+    if mouse_capture {
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    } else {
+        execute!(stdout, EnterAlternateScreen)?;
+    }
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     let result = run_loop(
@@ -16290,7 +16324,7 @@ where
         &mut action,
         &mut live,
     );
-    restore_interactive_terminal(&mut terminal)?;
+    restore_interactive_terminal(&mut terminal, mouse_capture)?;
     terminal_guard.disarm();
     result
 }
@@ -16322,13 +16356,18 @@ impl Drop for TerminalRestoreGuard {
 
 fn restore_interactive_terminal(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    mouse_capture: bool,
 ) -> AppResult<()> {
     disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        DisableMouseCapture,
-        LeaveAlternateScreen
-    )?;
+    if mouse_capture {
+        execute!(
+            terminal.backend_mut(),
+            DisableMouseCapture,
+            LeaveAlternateScreen
+        )?;
+    } else {
+        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    }
     terminal.show_cursor()?;
     Ok(())
 }
@@ -23847,6 +23886,30 @@ model.model = "deepseek-v4-pro"
     fn composer_arrows_scroll_default_tracks_windows_platform() {
         assert!(!default_composer_arrows_scroll_for_platform(false));
         assert!(default_composer_arrows_scroll_for_platform(true));
+    }
+
+    #[test]
+    fn legacy_windows_console_host_detects_unmarked_windows_only() {
+        assert!(!detected_legacy_windows_console_host_for_platform(
+            false, [false; 8]
+        ));
+        assert!(detected_legacy_windows_console_host_for_platform(
+            true, [false; 8]
+        ));
+        assert!(!detected_legacy_windows_console_host_for_platform(
+            true,
+            [true, false, false, false, false, false, false, false]
+        ));
+    }
+
+    #[test]
+    fn legacy_windows_console_disables_mouse_capture_only_when_unmarked() {
+        assert!(tui_mouse_capture_enabled_for_platform(false, [false; 8]));
+        assert!(!tui_mouse_capture_enabled_for_platform(true, [false; 8]));
+        assert!(tui_mouse_capture_enabled_for_platform(
+            true,
+            [false, false, true, false, false, false, false, false]
+        ));
     }
 
     #[test]

@@ -161,6 +161,8 @@ Current surfaces:
   modes, click visible session/thread picker rows to select them, scroll the
   wheel to reuse the active scroll/navigation target, and click the transcript
   panel to focus the composer
+- legacy unmarked Windows ConHost sessions keep keyboard navigation but skip
+  mouse capture by default; modern Windows terminal hosts keep mouse support
 - live runtime refresh for file-backed sessions, threads, and items while the
   TUI is open; assistant deltas from TUI-started runs update a running durable
   assistant item before final completion and are also pushed through an

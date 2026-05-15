@@ -66,6 +66,10 @@ TUI transcript, MCP detail, and MCP manager panels now also hard-wrap long CJK
 or no-whitespace runs by terminal display width while preferring whitespace
 breaks for ordinary prose, adapting DeepSeek-TUI's diff/pager CJK wrap fix to
 DeepSeekCode's ratatui workbench panels.
+Legacy unmarked Windows ConHost sessions now also skip TUI mouse capture by
+default while keeping keyboard navigation and modern Windows terminal hosts on
+the richer mouse path, adapting DeepSeek-TUI's latest calm-rendering guard to
+DeepSeekCode's smaller TUI stack.
 The largest remaining DeepSeek-TUI / Claude Code CLI / Codex CLI gaps are now:
 
 - native supervisor-owned PTY attach/stdin/resize/replay/wait/cancel polish and
@@ -436,6 +440,10 @@ Landed first slice:
   click Plan/Agent/YOLO tabs to switch mode, click visible session/thread
   picker rows to select them, scroll the wheel through the active
   scroll/navigation target, and click the transcript panel to focus composer
+- legacy unmarked Windows ConHost sessions now enter the TUI without mouse
+  capture, reducing terminal-control noise while preserving keyboard-driven
+  navigation; Windows Terminal, WezTerm, Alacritty, ConEmu, ANSICON, and TERM
+  markers keep the standard mouse path
 - full-width TUI MCP manager now supports mouse tab switching, server-row
   selection, and action-strip clicks for enable, disable, remove, tools, and
   reload over the same keyboard/config mutation paths
