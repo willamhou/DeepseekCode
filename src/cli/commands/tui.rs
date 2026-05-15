@@ -1222,10 +1222,11 @@ fn app_from_store(store: &RuntimeStore) -> AppResult<TuiApp> {
 }
 
 fn configure_tui_slash_completions(app: &mut TuiApp, config: &AppConfig) {
+    let provider_models = provider_model_completion_values_for_base_url(&config.model.base_url);
     let mut completions = discover_custom_slash_commands_dir(&config.workspace.user_commands_dir());
     completions.extend(
-        provider_model_completion_values_for_base_url(&config.model.base_url)
-            .into_iter()
+        provider_models
+            .iter()
             .flat_map(|model| [format!("/model {model}"), format!("/config model {model}")]),
     );
     let repo_dir = resolve_repo_skills_dir();
@@ -1240,6 +1241,11 @@ fn configure_tui_slash_completions(app: &mut TuiApp, config: &AppConfig) {
         );
     }
     app.set_extra_slash_completions(completions);
+    app.set_extra_command_completions(
+        provider_models
+            .iter()
+            .flat_map(|model| [format!("model {model}"), format!("config model {model}")]),
+    );
 }
 
 fn refresh_app_from_store(store: &RuntimeStore, app: &mut TuiApp) -> AppResult<()> {
@@ -7637,6 +7643,13 @@ description = "Review pull requests."
         assert!(completions.iter().any(|value| value == "/global/fix"));
         assert!(completions.iter().any(|value| value == "/skill pr-review"));
         assert!(completions.iter().any(|value| value == "/pr-review"));
+        let command_completions = app.extra_command_completions_for_test();
+        assert!(command_completions
+            .iter()
+            .any(|value| value == "model deepseek-v4-pro"));
+        assert!(command_completions
+            .iter()
+            .any(|value| value == "config model deepseek-v4-flash"));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -7660,6 +7673,16 @@ description = "Review pull requests."
         assert!(!completions
             .iter()
             .any(|value| value == "/model deepseek/deepseek-v4-pro"));
+        let command_completions = app.extra_command_completions_for_test();
+        assert!(command_completions
+            .iter()
+            .any(|value| value == "model deepseek-ai/deepseek-v4-pro"));
+        assert!(command_completions
+            .iter()
+            .any(|value| value == "config model deepseek-ai/deepseek-v4-flash"));
+        assert!(!command_completions
+            .iter()
+            .any(|value| value == "model deepseek/deepseek-v4-pro"));
     }
 
     fn run_git(cwd: &Path, args: &[&str]) {

@@ -129,8 +129,9 @@ Current surfaces:
   `models` / `/models`; known DeepSeek V4 aliases are normalized for the
   active provider, so official DeepSeek endpoints receive bare
   `deepseek-v4-*` ids while compatible backends keep provider-specific ids.
-  Composer slash completions for `/model <name>` use the selected workspace's
-  current provider so suggested model ids match the active backend.
+  Composer slash completions for `/model <name>` and command-palette
+  completions for `model <name>` use the selected workspace's current provider
+  so suggested model ids match the active backend.
 - provider preset picker, inspection, and switching with `provider` /
   `/provider`, `provider show`, `provider list`, and
   `provider <name> [model]`; legacy DeepSeek CN aliases such as

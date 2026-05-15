@@ -61,9 +61,10 @@ The latest upstream refresh also added provider/model compatibility fixes;
 DeepSeekCode now accepts legacy DeepSeek CN provider aliases, normalizes known
 DeepSeek V4 model aliases according to the active provider, and omits
 DeepSeek-only `thinking` fields for strict OpenAI/Fireworks-compatible request
-bodies. Composer `/model <name>` slash completions now also come from the
-selected workspace's active provider, so compatible backends surface their
-native model ids instead of only DeepSeek bare ids.
+bodies. Composer `/model <name>` slash completions and command-palette
+`model <name>` completions now also come from the selected workspace's active
+provider, so compatible backends surface their native model ids instead of only
+DeepSeek bare ids.
 TUI transcript, MCP detail, and MCP manager panels now also hard-wrap long CJK
 or no-whitespace runs by terminal display width while preferring whitespace
 breaks for ordinary prose, adapting DeepSeek-TUI's diff/pager CJK wrap fix to

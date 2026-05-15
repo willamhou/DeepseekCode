@@ -4018,8 +4018,6 @@ const TUI_COMMAND_COMPLETIONS: &[&str] = &[
     "model show",
     "model pick",
     "model auto",
-    "model deepseek-v4-flash",
-    "model deepseek-v4-pro",
     "models",
     "provider",
     "provider show",
@@ -4739,6 +4737,7 @@ pub struct TuiApp {
     reasoning_replay_pinned_turn_ids: BTreeSet<String>,
     reasoning_replay_preferences_path: Option<PathBuf>,
     extra_slash_completions: Vec<String>,
+    extra_command_completions: Vec<String>,
     pending_actions: Vec<TuiAction>,
     status: String,
     mcp_detail: Option<(TuiMcpDetailKind, String)>,
@@ -4934,6 +4933,7 @@ impl TuiApp {
             reasoning_replay_pinned_turn_ids: BTreeSet::new(),
             reasoning_replay_preferences_path: None,
             extra_slash_completions: Vec::new(),
+            extra_command_completions: Vec::new(),
             pending_actions: Vec::new(),
             status: "ready".to_string(),
             mcp_detail: None,
@@ -5009,6 +5009,30 @@ impl TuiApp {
     #[cfg(test)]
     pub fn extra_slash_completions_for_test(&self) -> &[String] {
         &self.extra_slash_completions
+    }
+
+    pub fn set_extra_command_completions<I, S>(&mut self, completions: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.extra_command_completions = completions
+            .into_iter()
+            .map(Into::into)
+            .filter(|completion| {
+                !completion.starts_with('/')
+                    && completion
+                        .chars()
+                        .all(|ch| !ch.is_control() && ch != '\n' && ch != '\r')
+            })
+            .collect();
+        self.extra_command_completions.sort();
+        self.extra_command_completions.dedup();
+    }
+
+    #[cfg(test)]
+    pub fn extra_command_completions_for_test(&self) -> &[String] {
+        &self.extra_command_completions
     }
 
     pub fn enable_composer_stash(&mut self, path: PathBuf) {
@@ -7859,11 +7883,7 @@ impl TuiApp {
         self.command_history_index = None;
         let cursor = clamp_char_boundary(&self.command_query, self.command_cursor);
         let prefix = &self.command_query[..cursor];
-        let matches = TUI_COMMAND_COMPLETIONS
-            .iter()
-            .copied()
-            .filter(|command| command.starts_with(prefix))
-            .collect::<Vec<_>>();
+        let matches = command_palette_completion_matches(self, prefix);
         if matches.is_empty() {
             self.status = format!(
                 "no command completion for `{}`",
@@ -7871,7 +7891,8 @@ impl TuiApp {
             );
             return;
         }
-        let completed = longest_common_prefix(&matches);
+        let match_refs = matches.iter().map(String::as_str).collect::<Vec<_>>();
+        let completed = longest_common_prefix(&match_refs);
         if completed.len() > prefix.len() {
             let suffix = self.command_query[cursor..].to_string();
             let new_cursor = completed.len();
@@ -15727,6 +15748,24 @@ fn composer_slash_completion_matches(app: &TuiApp, prefix: &str) -> Vec<String> 
         project_custom_slash_commands(app)
             .into_iter()
             .filter(|command| command.starts_with(prefix)),
+    );
+    matches.sort();
+    matches.dedup();
+    matches
+}
+
+fn command_palette_completion_matches(app: &TuiApp, prefix: &str) -> Vec<String> {
+    let mut matches = TUI_COMMAND_COMPLETIONS
+        .iter()
+        .copied()
+        .filter(|command| command.starts_with(prefix))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    matches.extend(
+        app.extra_command_completions
+            .iter()
+            .filter(|command| command.starts_with(prefix))
+            .cloned(),
     );
     matches.sort();
     matches.dedup();
@@ -24182,6 +24221,25 @@ model.api_key_env = "OPENAI_API_KEY"
         assert!(app.handle_key(KeyCode::Tab));
 
         assert_eq!(app.command_query, "mode agent");
+        assert_eq!(app.command_cursor, app.command_query.len());
+        assert_eq!(app.status, "command completed");
+    }
+
+    #[test]
+    fn command_palette_tab_uses_extra_provider_model_completions() {
+        let mut app = TuiApp::new(Vec::new());
+        app.set_extra_command_completions(vec![
+            "model deepseek-ai/deepseek-v4-pro",
+            "config model deepseek-ai/deepseek-v4-pro",
+        ]);
+
+        assert!(app.handle_key(KeyCode::Char(':')));
+        for ch in "model deepseek-ai/deepseek-v4-p".chars() {
+            assert!(app.handle_key(KeyCode::Char(ch)));
+        }
+        assert!(app.handle_key(KeyCode::Tab));
+
+        assert_eq!(app.command_query, "model deepseek-ai/deepseek-v4-pro");
         assert_eq!(app.command_cursor, app.command_query.len());
         assert_eq!(app.status, "command completed");
     }
