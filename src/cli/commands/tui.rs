@@ -9480,8 +9480,12 @@ shell_allowlist = ["git diff"]
         )
         .unwrap();
 
+        {
+            let (_, detail) = app.mcp_detail_for_test().expect("skills list detail");
+            assert!(detail.contains("Available skills matching `pr`"));
+            assert!(detail.contains("pr-review"));
+        }
         let output = render_once(&app, 120, 36).unwrap();
-        assert!(output.contains("Available skills matching `pr`"));
         assert!(output.contains("pr-review"));
 
         handle_tui_action(

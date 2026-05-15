@@ -62,6 +62,10 @@ DeepSeekCode now accepts legacy DeepSeek CN provider aliases, normalizes known
 DeepSeek V4 model aliases according to the active provider, and omits
 DeepSeek-only `thinking` fields for strict OpenAI/Fireworks-compatible request
 bodies.
+TUI transcript, MCP detail, and MCP manager panels now also hard-wrap long CJK
+or no-whitespace runs by terminal display width while preferring whitespace
+breaks for ordinary prose, adapting DeepSeek-TUI's diff/pager CJK wrap fix to
+DeepSeekCode's ratatui workbench panels.
 The largest remaining DeepSeek-TUI / Claude Code CLI / Codex CLI gaps are now:
 
 - native supervisor-owned PTY attach/stdin/resize/replay/wait/cancel polish and
@@ -444,6 +448,9 @@ Landed first slice:
 - composer-focused TUI sessions now keep transcript scrollback reachable through
   `PageUp` / `PageDown`, and default Windows composer arrow keys to transcript
   scrolling so wheel-as-arrow input does not get swallowed by the composer
+- TUI transcript, MCP detail, and MCP manager panels now pre-wrap long CJK or
+  no-whitespace runs by terminal display width before rendering, so scroll
+  bounds and visible text stay aligned for Chinese and long-token content
 - task panel now summarizes active-thread runtime item state/type counts and
   the latest item content, making streamed background agent run progress and
   tool activity visible alongside durable task records

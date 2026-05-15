@@ -14785,6 +14785,63 @@ fn clip_line(value: &str, max_width: usize) -> String {
     clipped
 }
 
+fn wrap_text_for_display_width(value: &str, max_width: usize) -> String {
+    value
+        .split('\n')
+        .flat_map(|line| wrap_line_for_display_width(line, max_width))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn wrap_line_for_display_width(value: &str, max_width: usize) -> Vec<String> {
+    let width_limit = max_width.max(1);
+    if value.is_empty() {
+        return vec![String::new()];
+    }
+
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0usize;
+    let mut last_break = None;
+    for ch in value.chars() {
+        let char_width = ch.width().unwrap_or(0);
+        if current_width + char_width > width_limit && current_width > 0 {
+            if let Some(break_idx) = last_break {
+                let remainder = current.split_off(break_idx);
+                lines.push(std::mem::take(&mut current));
+                current = remainder;
+                current_width = display_width(&current);
+                last_break = last_whitespace_boundary(&current);
+            } else {
+                lines.push(std::mem::take(&mut current));
+                current_width = 0;
+                last_break = None;
+            }
+            while current_width + char_width > width_limit && current_width > 0 {
+                lines.push(std::mem::take(&mut current));
+                current_width = 0;
+                last_break = None;
+            }
+        }
+        current.push(ch);
+        current_width += char_width;
+        if ch.is_whitespace() {
+            last_break = Some(current.len());
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+fn last_whitespace_boundary(value: &str) -> Option<usize> {
+    value
+        .char_indices()
+        .filter_map(|(idx, ch)| ch.is_whitespace().then_some(idx + ch.len_utf8()))
+        .last()
+}
+
 fn display_width(value: &str) -> usize {
     value
         .chars()
@@ -16538,25 +16595,35 @@ fn draw_sidebar(frame: &mut Frame, app: &TuiApp, area: Rect) {
 }
 
 fn draw_transcript(frame: &mut Frame, app: &TuiApp, area: Rect) {
+    let content_width = usize::from(area.width.saturating_sub(2)).max(1);
     let composer_marker = if app.composer_focused { "*" } else { "" };
     let composer = display_with_cursor(&app.composer, app.composer_cursor, app.composer_focused);
     let mut lines = app
         .transcript
         .iter()
-        .map(|line| Line::from(line.as_str()))
+        .flat_map(|line| wrap_line_for_display_width(line, content_width))
+        .map(Line::from)
         .chain(std::iter::once(Line::from("")))
-        .chain(std::iter::once(Line::from(format!(
-            "Composer [{}]{}: {}",
-            app.mode.title(),
-            composer_marker,
-            clip_line(&composer, 100)
-        ))))
+        .chain(
+            wrap_line_for_display_width(
+                &format!(
+                    "Composer [{}]{}: {}",
+                    app.mode.title(),
+                    composer_marker,
+                    clip_line(&composer, 100)
+                ),
+                content_width,
+            )
+            .into_iter()
+            .map(Line::from),
+        )
         .collect::<Vec<_>>();
     if let Some(hint) = composer_slash_hint_line(app) {
-        lines.push(Line::from(vec![Span::styled(
-            clip_line(&hint, 120),
-            Style::default().fg(Color::Gray),
-        )]));
+        lines.extend(
+            wrap_line_for_display_width(&clip_line(&hint, 120), content_width)
+                .into_iter()
+                .map(|line| Line::from(vec![Span::styled(line, Style::default().fg(Color::Gray))])),
+        );
     }
     let visible_lines = usize::from(area.height.saturating_sub(2)).max(1);
     let max_top = lines.len().saturating_sub(visible_lines);
@@ -16571,10 +16638,12 @@ fn draw_transcript(frame: &mut Frame, app: &TuiApp, area: Rect) {
 
 fn draw_tasks(frame: &mut Frame, app: &TuiApp, area: Rect) {
     if let Some((kind, detail)) = app.mcp_detail.as_ref() {
+        let content_width = usize::from(area.width.saturating_sub(2)).max(1);
+        let detail = wrap_text_for_display_width(detail, content_width);
         let visible_lines = usize::from(area.height.saturating_sub(2)).max(1);
         let max_top = detail.lines().count().saturating_sub(visible_lines);
         let scroll = app.mcp_detail_scroll.min(max_top);
-        let detail = Paragraph::new(detail.as_str())
+        let detail = Paragraph::new(detail)
             .scroll((scroll.min(usize::from(u16::MAX)) as u16, 0))
             .wrap(Wrap { trim: true })
             .block(Block::default().borders(Borders::ALL).title(kind.title()));
@@ -16609,6 +16678,8 @@ fn draw_mcp_manager(frame: &mut Frame, app: &TuiApp, area: Rect) {
         app.mcp_manager_selected_server,
         app.mcp_manager_selected_server_keys.len(),
     );
+    let content_width = usize::from(area.width.saturating_sub(2)).max(1);
+    let rendered = wrap_text_for_display_width(&rendered, content_width);
     let visible_lines = usize::from(area.height.saturating_sub(2)).max(1);
     let max_top = rendered.lines().count().saturating_sub(visible_lines);
     let scroll = app.mcp_detail_scroll.min(max_top);
@@ -17631,6 +17702,34 @@ mod tests {
     #[test]
     fn clip_line_keeps_unclipped_text_unchanged() {
         assert_eq!(clip_line("plain text", 20), "plain text");
+    }
+
+    #[test]
+    fn wrap_line_breaks_overlong_cjk_runs_by_display_width() {
+        let text = "这是一个非常长的中文字符串".repeat(6);
+        let lines = wrap_line_for_display_width(&text, 16);
+
+        assert!(lines.len() > 1);
+        assert_eq!(lines.join(""), text);
+        assert!(lines.iter().all(|line| display_width(line) <= 16));
+    }
+
+    #[test]
+    fn wrap_line_prefers_whitespace_for_english_text() {
+        let lines = wrap_line_for_display_width("alpha beta gamma", 12);
+
+        assert_eq!(lines, vec!["alpha beta ".to_string(), "gamma".to_string()]);
+    }
+
+    #[test]
+    fn wrap_text_preserves_existing_lines_while_breaking_cjk_runs() {
+        let cjk = "这是一个非常长的中文字符串".repeat(3);
+        let text = format!("alpha beta\n{cjk}");
+        let wrapped = wrap_text_for_display_width(&text, 14);
+
+        assert!(wrapped.starts_with("alpha beta\n"));
+        assert_eq!(wrapped.replace('\n', ""), text.replace('\n', ""));
+        assert!(wrapped.lines().all(|line| display_width(line) <= 14));
     }
 
     fn left_click(column: u16, row: u16) -> MouseEvent {

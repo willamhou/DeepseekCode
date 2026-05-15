@@ -7,6 +7,9 @@ Current surfaces:
 - Plan / Agent / YOLO mode tabs
 - sidebar with mode, selected durable session metadata, and key hints
 - transcript backed by durable thread items when available
+- transcript, detail, and MCP manager panels hard-wrap long CJK or
+  no-whitespace runs by terminal display width so scrollback stays aligned with
+  rendered content
 - composer input that appends user turns/items to the active durable thread
   and starts a background agent response in interactive TUI sessions
 - composer `# <note>` memory capture and `/memory` local commands for
