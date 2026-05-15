@@ -70,6 +70,10 @@ Legacy unmarked Windows ConHost sessions now also skip TUI mouse capture by
 default while keeping keyboard navigation and modern Windows terminal hosts on
 the richer mouse path, adapting DeepSeek-TUI's latest calm-rendering guard to
 DeepSeekCode's smaller TUI stack.
+TUI display text now strips unsupported OSC/CSI/DCS terminal control wrappers
+before clipping or display-width wrapping, preserving visible OSC 8 link labels
+without leaking hidden URLs or escape bytes into transcript/detail render
+buffers.
 The largest remaining DeepSeek-TUI / Claude Code CLI / Codex CLI gaps are now:
 
 - native supervisor-owned PTY attach/stdin/resize/replay/wait/cancel polish and
@@ -459,6 +463,9 @@ Landed first slice:
 - TUI transcript, MCP detail, and MCP manager panels now pre-wrap long CJK or
   no-whitespace runs by terminal display width before rendering, so scroll
   bounds and visible text stay aligned for Chinese and long-token content
+- TUI transcript, MCP detail, and MCP manager panels now sanitize terminal
+  control wrappers such as OSC 8 hyperlinks before clipping/wrapping, keeping
+  visible labels while avoiding broken escape sequences in plain-text panels
 - task panel now summarizes active-thread runtime item state/type counts and
   the latest item content, making streamed background agent run progress and
   tool activity visible alongside durable task records

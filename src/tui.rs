@@ -14793,7 +14793,8 @@ impl TuiApp {
 }
 
 fn clip_line(value: &str, max_width: usize) -> String {
-    let line = value.lines().next().unwrap_or("").trim();
+    let sanitized = sanitize_tui_text(value);
+    let line = sanitized.lines().next().unwrap_or("").trim();
     if display_width(line) <= max_width {
         return line.to_string();
     }
@@ -14815,7 +14816,8 @@ fn clip_line(value: &str, max_width: usize) -> String {
 }
 
 fn wrap_text_for_display_width(value: &str, max_width: usize) -> String {
-    value
+    let sanitized = sanitize_tui_text(value);
+    sanitized
         .split('\n')
         .flat_map(|line| wrap_line_for_display_width(line, max_width))
         .collect::<Vec<_>>()
@@ -14823,6 +14825,8 @@ fn wrap_text_for_display_width(value: &str, max_width: usize) -> String {
 }
 
 fn wrap_line_for_display_width(value: &str, max_width: usize) -> Vec<String> {
+    let sanitized = sanitize_tui_text(value);
+    let value = sanitized.as_str();
     let width_limit = max_width.max(1);
     if value.is_empty() {
         return vec![String::new()];
@@ -14872,10 +14876,67 @@ fn last_whitespace_boundary(value: &str) -> Option<usize> {
 }
 
 fn display_width(value: &str) -> usize {
-    value
+    sanitize_tui_text(value)
         .chars()
         .map(|ch| ch.width().unwrap_or(0))
         .sum::<usize>()
+}
+
+fn sanitize_tui_text(value: &str) -> String {
+    let mut sanitized = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            skip_escape_sequence(&mut chars);
+            continue;
+        }
+        if ch.is_control() && ch != '\n' && ch != '\t' {
+            continue;
+        }
+        sanitized.push(ch);
+    }
+    sanitized
+}
+
+fn skip_escape_sequence<I>(chars: &mut std::iter::Peekable<I>)
+where
+    I: Iterator<Item = char>,
+{
+    match chars.next() {
+        Some(']') => skip_string_escape_sequence(chars),
+        Some('P' | '^' | '_') => skip_string_escape_sequence(chars),
+        Some('[') => skip_csi_sequence(chars),
+        Some('(' | ')' | '*' | '+' | '-' | '.' | '/') => {
+            let _ = chars.next();
+        }
+        Some(_) | None => {}
+    }
+}
+
+fn skip_string_escape_sequence<I>(chars: &mut std::iter::Peekable<I>)
+where
+    I: Iterator<Item = char>,
+{
+    while let Some(ch) = chars.next() {
+        if ch == '\x07' {
+            break;
+        }
+        if ch == '\x1b' && chars.peek().copied() == Some('\\') {
+            let _ = chars.next();
+            break;
+        }
+    }
+}
+
+fn skip_csi_sequence<I>(chars: &mut std::iter::Peekable<I>)
+where
+    I: Iterator<Item = char>,
+{
+    for ch in chars.by_ref() {
+        if ('@'..='~').contains(&ch) {
+            break;
+        }
+    }
 }
 
 fn clipped_ellipsis(max_width: usize) -> String {
@@ -17769,6 +17830,58 @@ mod tests {
         assert!(wrapped.starts_with("alpha beta\n"));
         assert_eq!(wrapped.replace('\n', ""), text.replace('\n', ""));
         assert!(wrapped.lines().all(|line| display_width(line) <= 14));
+    }
+
+    #[test]
+    fn sanitize_tui_text_strips_osc8_wrappers_and_keeps_label() {
+        let linked = "\x1b]8;;https://example.com/docs\x1b\\docs\x1b]8;;\x1b\\";
+
+        assert_eq!(sanitize_tui_text(linked), "docs");
+    }
+
+    #[test]
+    fn wrap_text_strips_terminal_controls_before_width_wrapping() {
+        let linked = concat!(
+            "see ",
+            "\x1b]8;;https://example.com/really/long/target\x1b\\",
+            "example",
+            "\x1b]8;;\x1b\\",
+            " now"
+        );
+        let wrapped = wrap_text_for_display_width(linked, 8);
+
+        assert!(wrapped.contains("example"));
+        assert!(!wrapped.contains('\x1b'));
+        assert!(!wrapped.contains("https://example.com"));
+        assert!(wrapped.lines().all(|line| display_width(line) <= 8));
+    }
+
+    #[test]
+    fn clip_line_strips_terminal_controls_before_display_width() {
+        let linked = "\x1b]8;;https://example.com/docs\x1b\\这是一个非常长的链接标签\x1b]8;;\x1b\\";
+        let clipped = clip_line(linked, 12);
+
+        assert!(!clipped.contains('\x1b'));
+        assert!(!clipped.contains("https://example.com"));
+        assert!(display_width(&clipped) <= 12);
+        assert!(clipped.ends_with("..."));
+    }
+
+    #[test]
+    fn render_transcript_strips_osc8_link_wrappers() {
+        let linked = concat!(
+            "open ",
+            "\x1b]8;;https://example.com/docs\x1b\\",
+            "docs",
+            "\x1b]8;;\x1b\\"
+        );
+        let mut app = TuiApp::new(Vec::new());
+        app.transcript = vec![linked.to_string()];
+        let output = render_once(&app, 100, 24).unwrap();
+
+        assert!(output.contains("docs"));
+        assert!(!output.contains("\x1b]8;;"));
+        assert!(!output.contains("https://example.com/docs"));
     }
 
     fn left_click(column: u16, row: u16) -> MouseEvent {

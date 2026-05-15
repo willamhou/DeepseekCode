@@ -10,6 +10,9 @@ Current surfaces:
 - transcript, detail, and MCP manager panels hard-wrap long CJK or
   no-whitespace runs by terminal display width so scrollback stays aligned with
   rendered content
+- transcript, detail, and MCP manager panels strip unsupported terminal control
+  wrappers such as OSC 8 hyperlinks before clipping/wrapping, preserving visible
+  link labels without leaking escape bytes into the rendered buffer
 - composer input that appends user turns/items to the active durable thread
   and starts a background agent response in interactive TUI sessions
 - composer `# <note>` memory capture and `/memory` local commands for
