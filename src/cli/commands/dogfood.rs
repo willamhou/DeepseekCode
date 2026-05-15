@@ -8,8 +8,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::cli::app::{
     BenchmarkArgs, DogfoodAction, DogfoodCategoryRequirement, DogfoodExportArgs,
-    DogfoodExternalFixtureArgs, DogfoodLivePlanArgs, DogfoodOutcome, DogfoodPromoteArgs,
-    DogfoodReplayArgs, DogfoodReportArgs, DogfoodRunArgs,
+    DogfoodExternalFixtureArgs, DogfoodLivePlanArgs, DogfoodLiveRunArgs, DogfoodOutcome,
+    DogfoodPromoteArgs, DogfoodReplayArgs, DogfoodReportArgs, DogfoodRunArgs,
 };
 use crate::cli::commands::benchmark::BenchmarkCaseSummary;
 use crate::config::load::load_or_default;
@@ -26,6 +26,7 @@ const CATEGORY_TREND_WINDOW: usize = 5;
 const DEFAULT_LIVE_TARGET_RUNS: usize = 100;
 const DEFAULT_LIVE_TARGET_SUCCESS_RATE: f64 = 90.0;
 const DEFAULT_LIVE_PLAN_LIMIT: usize = 25;
+const DEFAULT_LIVE_RUN_LIMIT: usize = 3;
 const MODEL_TRANSPORT_OFFLINE: &str = "offline";
 const MODEL_TRANSPORT_ONLINE: &str = "online";
 const MODEL_TRANSPORT_UNKNOWN: &str = "unknown";
@@ -42,6 +43,7 @@ pub fn run(action: DogfoodAction) -> AppResult<()> {
         DogfoodAction::ExternalFixture(args) => run_external_fixture_command(&config, args),
         DogfoodAction::ReplayBenchmark(args) => replay_benchmark_command(&config, args),
         DogfoodAction::LivePlan(args) => live_plan_command(&config, args),
+        DogfoodAction::LiveRun(args) => live_run_command(&config, args),
         DogfoodAction::Report(args) => render_report_command(&config, args),
         DogfoodAction::ExportBenchmark(args) => export_benchmark_command(&config, args),
         DogfoodAction::PromoteBenchmark(args) => promote_benchmark_command(&config, args),
@@ -670,6 +672,94 @@ fn live_plan_command(
         println!("{}", render_live_plan_json(&plan));
     } else {
         println!("{}", render_live_plan_text(&plan));
+    }
+    Ok(())
+}
+
+fn live_run_command(
+    config: &crate::config::types::AppConfig,
+    args: DogfoodLiveRunArgs,
+) -> AppResult<()> {
+    let ledger_path = config.workspace.dogfood_ledger_path();
+    let manifest_path = args
+        .manifest
+        .map(PathBuf::from)
+        .unwrap_or_else(|| config.workspace.benchmark_manifest_path());
+    let records = load_records_or_empty(&ledger_path)?;
+    let summaries = crate::cli::commands::benchmark::load_manifest_case_summaries(&manifest_path)?;
+    let targets = live_plan_targets(args.target_categories);
+    let run_limit = args.limit.unwrap_or(DEFAULT_LIVE_RUN_LIMIT);
+    let model_transport = model_transport_for_config(config);
+    let plan = build_live_plan(
+        &ledger_path,
+        &manifest_path,
+        &records,
+        &summaries,
+        model_transport,
+        args.target_live_runs.unwrap_or(DEFAULT_LIVE_TARGET_RUNS),
+        args.target_live_success_rate
+            .unwrap_or(DEFAULT_LIVE_TARGET_SUCCESS_RATE),
+        &targets,
+        run_limit,
+    );
+    let selected = select_live_run_cases(&plan, &args.categories, run_limit);
+
+    println!("DeepSeekCode dogfood live run");
+    println!("ledger: {}", ledger_path.display());
+    println!("manifest: {}", manifest_path.display());
+    println!("current_model_transport: {model_transport}");
+    if !args.categories.is_empty() {
+        println!("categories: {}", args.categories.join(", "));
+    }
+    println!(
+        "selected: {} (limit: {}, execute: {})",
+        selected.len(),
+        run_limit,
+        if args.execute { "yes" } else { "no" }
+    );
+
+    if selected.is_empty() {
+        println!("no recommended live dogfood cases matched the requested filters");
+        return Ok(());
+    }
+
+    for case in &selected {
+        println!("planned: {} ({})", case.name, case.category);
+    }
+
+    if !args.execute {
+        println!("dry run only; add --execute to run model-backed benchmark replays");
+        return Ok(());
+    }
+    if model_transport != MODEL_TRANSPORT_ONLINE {
+        return Err(app_error(
+            "dogfood live-run --execute requires an online model transport; configure the provider API key first",
+        ));
+    }
+
+    for case in &selected {
+        println!("replay: {} ({})", case.name, case.category);
+        run_live_task(
+            config,
+            DogfoodRunArgs {
+                task: String::new(),
+                from_benchmark: Some(case.name.clone()),
+                benchmark_manifest: Some(manifest_path.display().to_string()),
+                skill: None,
+                budget: None,
+                workdir: None,
+                isolate_workdir: false,
+                outcome: None,
+                manual_intervention: false,
+                benchmark_gate: false,
+                notes: Some(format!("live-dogfood; category={}", case.category)),
+            },
+        )?;
+    }
+
+    if args.benchmark_gate {
+        println!("post-live-run benchmark gate: running default benchmark baseline");
+        crate::cli::commands::benchmark::run_with_config(config.clone(), BenchmarkArgs::default())?;
     }
     Ok(())
 }
@@ -1395,6 +1485,12 @@ struct LiveCategoryPlan {
     recommended_cases: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LiveRunCase {
+    category: String,
+    name: String,
+}
+
 fn live_plan_targets(
     configured: Vec<DogfoodCategoryRequirement>,
 ) -> Vec<DogfoodCategoryRequirement> {
@@ -1470,6 +1566,26 @@ fn build_live_plan(
         live_success,
         category_plans,
     }
+}
+
+fn select_live_run_cases(plan: &LivePlan, categories: &[String], limit: usize) -> Vec<LiveRunCase> {
+    let category_filter = categories.iter().cloned().collect::<HashSet<_>>();
+    let mut selected = Vec::new();
+    for category in &plan.category_plans {
+        if !category_filter.is_empty() && !category_filter.contains(&category.category) {
+            continue;
+        }
+        for case in &category.recommended_cases {
+            if selected.len() >= limit {
+                return selected;
+            }
+            selected.push(LiveRunCase {
+                category: category.category.clone(),
+                name: case.clone(),
+            });
+        }
+    }
+    selected
 }
 
 fn replayable_live_cases_for_category(
@@ -3223,6 +3339,65 @@ mod tests {
         assert!(json.contains("\"overall_needed_runs\":1"));
         assert!(json.contains("\"category\":\"pr_workflow\""));
         assert!(json.contains("\"recommended_cases\":[\"fixture-pr-retry-validate-rust-mini\"]"));
+    }
+
+    #[test]
+    fn live_run_selection_applies_category_filter_and_total_limit() {
+        let plan = LivePlan {
+            ledger_path: PathBuf::from(".dscode/dogfood/ledger.jsonl"),
+            manifest_path: PathBuf::from(".dscode/benchmarks.txt"),
+            model_transport: MODEL_TRANSPORT_ONLINE.to_string(),
+            target_live_runs: 100,
+            target_live_success_rate: 90.0,
+            live_runs: 0,
+            live_success: 0,
+            category_plans: vec![
+                LiveCategoryPlan {
+                    category: "write_validate".to_string(),
+                    target_runs: 25,
+                    target_success_rate: 90.0,
+                    live_runs: 0,
+                    live_success: 0,
+                    needed_runs: 25,
+                    replayable_cases: vec!["write-1".to_string(), "write-2".to_string()],
+                    recommended_cases: vec!["write-1".to_string(), "write-2".to_string()],
+                },
+                LiveCategoryPlan {
+                    category: "recovery".to_string(),
+                    target_runs: 25,
+                    target_success_rate: 90.0,
+                    live_runs: 0,
+                    live_success: 0,
+                    needed_runs: 25,
+                    replayable_cases: vec!["recover-1".to_string()],
+                    recommended_cases: vec!["recover-1".to_string()],
+                },
+            ],
+        };
+
+        let all = select_live_run_cases(&plan, &[], 2);
+        assert_eq!(
+            all,
+            vec![
+                LiveRunCase {
+                    category: "write_validate".to_string(),
+                    name: "write-1".to_string(),
+                },
+                LiveRunCase {
+                    category: "write_validate".to_string(),
+                    name: "write-2".to_string(),
+                },
+            ]
+        );
+
+        let recovery = select_live_run_cases(&plan, &["recovery".to_string()], 2);
+        assert_eq!(
+            recovery,
+            vec![LiveRunCase {
+                category: "recovery".to_string(),
+                name: "recover-1".to_string(),
+            }]
+        );
     }
 
     #[test]

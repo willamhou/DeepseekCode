@@ -55,6 +55,7 @@ pub enum DogfoodAction {
     ExternalFixture(DogfoodExternalFixtureArgs),
     ReplayBenchmark(DogfoodReplayArgs),
     LivePlan(DogfoodLivePlanArgs),
+    LiveRun(DogfoodLiveRunArgs),
     Report(DogfoodReportArgs),
     ExportBenchmark(DogfoodExportArgs),
     PromoteBenchmark(DogfoodPromoteArgs),
@@ -182,6 +183,18 @@ pub struct DogfoodLivePlanArgs {
     pub target_categories: Vec<DogfoodCategoryRequirement>,
     pub limit: Option<usize>,
     pub json: bool,
+}
+
+#[derive(Debug, Default)]
+pub struct DogfoodLiveRunArgs {
+    pub manifest: Option<String>,
+    pub target_live_runs: Option<usize>,
+    pub target_live_success_rate: Option<f64>,
+    pub target_categories: Vec<DogfoodCategoryRequirement>,
+    pub categories: Vec<String>,
+    pub limit: Option<usize>,
+    pub execute: bool,
+    pub benchmark_gate: bool,
 }
 
 #[derive(Debug, Default)]
@@ -3456,7 +3469,7 @@ fn parse_dogfood_subcommand(args: Vec<String>) -> Result<DogfoodAction, String> 
     let action = iter
         .next()
         .ok_or_else(|| {
-            "dogfood requires a sub-action: run|external-fixture|replay-benchmark|live-plan|report|export-benchmark|promote-benchmark"
+            "dogfood requires a sub-action: run|external-fixture|replay-benchmark|live-plan|live-run|report|export-benchmark|promote-benchmark"
                 .to_string()
         })?;
     let rest: Vec<String> = iter.collect();
@@ -3471,6 +3484,7 @@ fn parse_dogfood_subcommand(args: Vec<String>) -> Result<DogfoodAction, String> 
         "live-plan" | "plan-live" => {
             parse_dogfood_live_plan_args(rest).map(DogfoodAction::LivePlan)
         }
+        "live-run" | "run-live" => parse_dogfood_live_run_args(rest).map(DogfoodAction::LiveRun),
         "report" => parse_dogfood_report_args(rest).map(DogfoodAction::Report),
         "export-benchmark" | "export-bench" => {
             Ok(DogfoodAction::ExportBenchmark(parse_dogfood_export_args(rest)))
@@ -3481,7 +3495,7 @@ fn parse_dogfood_subcommand(args: Vec<String>) -> Result<DogfoodAction, String> 
             )))
         }
         other => Err(format!(
-            "unknown dogfood sub-action `{other}`; expected run|external-fixture|replay-benchmark|live-plan|report|export-benchmark|promote-benchmark"
+            "unknown dogfood sub-action `{other}`; expected run|external-fixture|replay-benchmark|live-plan|live-run|report|export-benchmark|promote-benchmark"
         )),
     }
 }
@@ -3760,6 +3774,84 @@ fn parse_dogfood_live_plan_args(args: Vec<String>) -> Result<DogfoodLivePlanArgs
         }
     }
     Ok(plan)
+}
+
+fn parse_dogfood_live_run_args(args: Vec<String>) -> Result<DogfoodLiveRunArgs, String> {
+    let mut run = DogfoodLiveRunArgs::default();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--manifest" if index + 1 < args.len() => {
+                run.manifest = Some(args[index + 1].clone());
+                index += 2;
+                continue;
+            }
+            "--target-live-runs" if index + 1 < args.len() => {
+                run.target_live_runs = Some(parse_required_usize(
+                    "--target-live-runs",
+                    &args[index + 1],
+                    1,
+                    100_000,
+                )?);
+                index += 2;
+                continue;
+            }
+            "--target-live-success-rate" if index + 1 < args.len() => {
+                run.target_live_success_rate = Some(parse_percent_arg(
+                    "--target-live-success-rate",
+                    &args[index + 1],
+                )?);
+                index += 2;
+                continue;
+            }
+            "--target-category" if index + 1 < args.len() => {
+                run.target_categories
+                    .push(parse_dogfood_category_requirement(&args[index + 1])?);
+                index += 2;
+                continue;
+            }
+            "--category" if index + 1 < args.len() => {
+                run.categories.push(args[index + 1].clone());
+                index += 2;
+                continue;
+            }
+            "--limit" if index + 1 < args.len() => {
+                run.limit = Some(parse_required_usize(
+                    "--limit",
+                    &args[index + 1],
+                    1,
+                    10_000,
+                )?);
+                index += 2;
+                continue;
+            }
+            "--execute" => {
+                run.execute = true;
+                index += 1;
+                continue;
+            }
+            "--dry-run" => {
+                run.execute = false;
+                index += 1;
+                continue;
+            }
+            "--benchmark-gate" => {
+                run.benchmark_gate = true;
+                index += 1;
+                continue;
+            }
+            "--manifest"
+            | "--target-live-runs"
+            | "--target-live-success-rate"
+            | "--target-category"
+            | "--category"
+            | "--limit" => {
+                return Err(format!("{} requires a value", args[index]));
+            }
+            other => return Err(format!("unknown dogfood live-run flag `{other}`")),
+        }
+    }
+    Ok(run)
 }
 
 fn parse_dogfood_report_args(args: Vec<String>) -> Result<DogfoodReportArgs, String> {
@@ -4455,6 +4547,7 @@ mod tests {
             DogfoodAction::ExternalFixture(_) => panic!("expected dogfood run args"),
             DogfoodAction::ReplayBenchmark(_) => panic!("expected dogfood run args"),
             DogfoodAction::LivePlan(_) => panic!("expected dogfood run args"),
+            DogfoodAction::LiveRun(_) => panic!("expected dogfood run args"),
             DogfoodAction::Report(_) => panic!("expected dogfood run args"),
             DogfoodAction::ExportBenchmark(_) => panic!("expected dogfood run args"),
             DogfoodAction::PromoteBenchmark(_) => panic!("expected dogfood run args"),
@@ -4507,6 +4600,7 @@ mod tests {
             DogfoodAction::Run(_) => panic!("expected external fixture args"),
             DogfoodAction::ReplayBenchmark(_) => panic!("expected external fixture args"),
             DogfoodAction::LivePlan(_) => panic!("expected external fixture args"),
+            DogfoodAction::LiveRun(_) => panic!("expected external fixture args"),
             DogfoodAction::Report(_) => panic!("expected external fixture args"),
             DogfoodAction::ExportBenchmark(_) => panic!("expected external fixture args"),
             DogfoodAction::PromoteBenchmark(_) => panic!("expected external fixture args"),
@@ -4563,6 +4657,7 @@ mod tests {
             DogfoodAction::ExternalFixture(_) => panic!("expected dogfood report args"),
             DogfoodAction::ReplayBenchmark(_) => panic!("expected dogfood report args"),
             DogfoodAction::LivePlan(_) => panic!("expected dogfood report args"),
+            DogfoodAction::LiveRun(_) => panic!("expected dogfood report args"),
             DogfoodAction::ExportBenchmark(_) => panic!("expected dogfood report args"),
             DogfoodAction::PromoteBenchmark(_) => panic!("expected dogfood report args"),
         }
@@ -4603,6 +4698,7 @@ mod tests {
             DogfoodAction::Run(_) => panic!("expected replay args"),
             DogfoodAction::ExternalFixture(_) => panic!("expected replay args"),
             DogfoodAction::LivePlan(_) => panic!("expected replay args"),
+            DogfoodAction::LiveRun(_) => panic!("expected replay args"),
             DogfoodAction::Report(_) => panic!("expected replay args"),
             DogfoodAction::ExportBenchmark(_) => panic!("expected replay args"),
             DogfoodAction::PromoteBenchmark(_) => panic!("expected replay args"),
@@ -4642,9 +4738,53 @@ mod tests {
             DogfoodAction::Run(_) => panic!("expected live plan args"),
             DogfoodAction::ExternalFixture(_) => panic!("expected live plan args"),
             DogfoodAction::ReplayBenchmark(_) => panic!("expected live plan args"),
+            DogfoodAction::LiveRun(_) => panic!("expected live plan args"),
             DogfoodAction::Report(_) => panic!("expected live plan args"),
             DogfoodAction::ExportBenchmark(_) => panic!("expected live plan args"),
             DogfoodAction::PromoteBenchmark(_) => panic!("expected live plan args"),
+        }
+    }
+
+    #[test]
+    fn parses_dogfood_live_run_subcommand() {
+        let parsed = parse_dogfood_subcommand(vec![
+            "live-run".to_string(),
+            "--manifest".to_string(),
+            "benchmarks.txt".to_string(),
+            "--target-live-runs".to_string(),
+            "100".to_string(),
+            "--target-live-success-rate".to_string(),
+            "90".to_string(),
+            "--target-category".to_string(),
+            "write_validate:25:90".to_string(),
+            "--category".to_string(),
+            "write_validate".to_string(),
+            "--limit".to_string(),
+            "2".to_string(),
+            "--execute".to_string(),
+            "--benchmark-gate".to_string(),
+        ])
+        .unwrap();
+
+        match parsed {
+            DogfoodAction::LiveRun(args) => {
+                assert_eq!(args.manifest.as_deref(), Some("benchmarks.txt"));
+                assert_eq!(args.target_live_runs, Some(100));
+                assert_eq!(args.target_live_success_rate, Some(90.0));
+                assert_eq!(args.target_categories.len(), 1);
+                assert_eq!(args.target_categories[0].category, "write_validate");
+                assert_eq!(args.categories, vec!["write_validate".to_string()]);
+                assert_eq!(args.limit, Some(2));
+                assert!(args.execute);
+                assert!(args.benchmark_gate);
+            }
+            DogfoodAction::Run(_) => panic!("expected live run args"),
+            DogfoodAction::ExternalFixture(_) => panic!("expected live run args"),
+            DogfoodAction::ReplayBenchmark(_) => panic!("expected live run args"),
+            DogfoodAction::LivePlan(_) => panic!("expected live run args"),
+            DogfoodAction::Report(_) => panic!("expected live run args"),
+            DogfoodAction::ExportBenchmark(_) => panic!("expected live run args"),
+            DogfoodAction::PromoteBenchmark(_) => panic!("expected live run args"),
         }
     }
 

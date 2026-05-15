@@ -50,6 +50,7 @@ fn global_help() -> &'static str {
         "  deepseek tui\n",
         "  deepseek run \"fix the failing tests and summarize the diff\"\n",
         "  deepseek dogfood live-plan --limit 10\n",
+        "  deepseek dogfood live-run --limit 3\n",
         "\n",
         "More help:\n",
         "  deepseek help tui\n",
@@ -105,6 +106,7 @@ fn dogfood_help(topic: Option<&str>) -> &'static str {
         }
         Some("replay-benchmark") | Some("replay-bench") => dogfood_replay_help(),
         Some("live-plan") | Some("plan-live") => dogfood_live_plan_help(),
+        Some("live-run") | Some("run-live") => dogfood_live_run_help(),
         Some("report") => dogfood_report_help(),
         Some("export-benchmark") | Some("export-bench") => dogfood_export_help(),
         Some("promote-benchmark") | Some("promote-bench") => dogfood_promote_help(),
@@ -117,6 +119,7 @@ fn dogfood_help(topic: Option<&str>) -> &'static str {
             "  deepseek dogfood external-fixture --workdir <path> \"<task>\"\n",
             "  deepseek dogfood replay-benchmark [--manifest <path>] [--category <name>] [--limit <n>]\n",
             "  deepseek dogfood live-plan [--limit <n>] [--json]\n",
+            "  deepseek dogfood live-run [--limit <n>] [--category <name>] [--execute]\n",
             "  deepseek dogfood report [requirements]\n",
             "  deepseek dogfood export-benchmark [--out <path>]\n",
             "  deepseek dogfood promote-benchmark [--dry-run]\n",
@@ -127,6 +130,7 @@ fn dogfood_help(topic: Option<&str>) -> &'static str {
             "More help:\n",
             "  deepseek help dogfood replay-benchmark\n",
             "  deepseek help dogfood live-plan\n",
+            "  deepseek help dogfood live-run\n",
             "  deepseek help dogfood report"
         ),
     }
@@ -175,6 +179,18 @@ fn dogfood_live_plan_help() -> &'static str {
         "  deepseek dogfood live-plan [--manifest <path>] [--target-live-runs <n>] [--target-live-success-rate <percent>] [--target-category <category>:<min-runs>:<min-success-percent>] [--limit <n>] [--json]\n",
         "\n",
         "Shows a zero-side-effect plan for collecting model-backed dogfood evidence."
+    )
+}
+
+fn dogfood_live_run_help() -> &'static str {
+    concat!(
+        "DeepSeekCode dogfood live-run\n",
+        "\n",
+        "Usage:\n",
+        "  deepseek dogfood live-run [--manifest <path>] [--category <name>] [--target-live-runs <n>] [--target-live-success-rate <percent>] [--target-category <category>:<min-runs>:<min-success-percent>] [--limit <n>] [--execute] [--benchmark-gate]\n",
+        "\n",
+        "Selects the next cases from the live dogfood plan. The default is a dry run;\n",
+        "add --execute to run online model-backed benchmark replays."
     )
 }
 

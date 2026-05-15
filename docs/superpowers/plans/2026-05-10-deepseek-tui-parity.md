@@ -103,6 +103,9 @@ live-sample target.
 `deepseek dogfood live-plan` now also turns those live gate gaps into a
 read-only per-category replay plan, including current model transport,
 model-backed progress, replayable benchmark cases, and next batch commands.
+`deepseek dogfood live-run` adds the guarded execution step for that backlog:
+it defaults to a dry-run selection, caps the next batch, and requires
+`--execute` plus online model transport before spending model calls.
 The largest remaining DeepSeek-TUI / Claude Code CLI / Codex CLI gaps are now:
 
 - native supervisor-owned PTY polish and broader platform proof beyond the

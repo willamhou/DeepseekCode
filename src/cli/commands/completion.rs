@@ -49,6 +49,7 @@ fn dogfood_words() -> &'static [&'static str] {
         "external-fixture",
         "replay-benchmark",
         "live-plan",
+        "live-run",
         "report",
         "export-benchmark",
         "promote-benchmark",
