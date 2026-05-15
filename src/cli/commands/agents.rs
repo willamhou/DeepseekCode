@@ -986,6 +986,14 @@ fn run_shell_supervisor_daemon(cwd: &Path, json: bool) -> AppResult<()> {
     fs::create_dir_all(&state_dir)?;
     fs::set_permissions(&state_dir, fs::Permissions::from_mode(0o700))?;
     let socket = state_dir.join("supervisor.sock");
+    if let Some(path_bytes) = unix_socket_path_too_long(&socket) {
+        return Err(app_error(format!(
+            "shell supervisor socket path is too long for Unix domain sockets: {} ({} bytes; limit is < {} bytes). Use a shorter workspace path.",
+            socket.display(),
+            path_bytes,
+            SHELL_SUPERVISOR_UNIX_SOCKET_MAX_BYTES
+        )));
+    }
     if socket.exists() {
         if UnixStream::connect(&socket).is_ok() {
             return Err(app_error(format!(
@@ -2953,9 +2961,21 @@ fn service_smoke_check_runtime(report: &mut ServiceSmokeReport) {
 #[cfg(unix)]
 fn service_smoke_check_shell_supervisor(report: &mut ServiceSmokeReport) {
     let timeout = Duration::from_millis(report.timeout_ms);
-    let socket = report
-        .workdir
-        .join(".dscode/shell-supervisor/supervisor.sock");
+    let socket = service_smoke_shell_supervisor_socket_path(&report.workdir);
+    if let Some(path_bytes) = unix_socket_path_too_long(&socket) {
+        push_service_doctor_check(
+            &mut report.checks,
+            ServiceDoctorStatus::Blocker,
+            "shell_supervisor",
+            format!(
+                "shell supervisor socket path is too long for Unix domain sockets: {} ({} bytes; limit is < {} bytes). Rerun with a shorter --workdir such as /tmp/dsc-smk",
+                socket.display(),
+                path_bytes,
+                SHELL_SUPERVISOR_UNIX_SOCKET_MAX_BYTES
+            ),
+        );
+        return;
+    }
     if shell_supervisor_socket_is_active(&socket) {
         push_service_doctor_check(
             &mut report.checks,
@@ -2991,19 +3011,42 @@ fn service_smoke_check_shell_supervisor(report: &mut ServiceSmokeReport) {
         }
     };
 
-    match wait_for_shell_supervisor_health(&socket, timeout, &mut child) {
-        Ok(_) => push_service_doctor_check(
-            &mut report.checks,
-            ServiceDoctorStatus::Ok,
-            "shell_supervisor",
-            format!("shell supervisor health responded at {}", socket.display()),
-        ),
-        Err(error) => push_service_doctor_check(
-            &mut report.checks,
-            ServiceDoctorStatus::Blocker,
-            "shell_supervisor",
-            format!("shell supervisor health smoke failed: {error}"),
-        ),
+    let supervisor_healthy = match wait_for_shell_supervisor_health(&socket, timeout, &mut child) {
+        Ok(_) => {
+            push_service_doctor_check(
+                &mut report.checks,
+                ServiceDoctorStatus::Ok,
+                "shell_supervisor",
+                format!("shell supervisor health responded at {}", socket.display()),
+            );
+            true
+        }
+        Err(error) => {
+            push_service_doctor_check(
+                &mut report.checks,
+                ServiceDoctorStatus::Blocker,
+                "shell_supervisor",
+                format!("shell supervisor health smoke failed: {error}"),
+            );
+            false
+        }
+    };
+
+    if supervisor_healthy {
+        match shell_supervisor_control_smoke(&socket, report.timeout_ms) {
+            Ok(summary) => push_service_doctor_check(
+                &mut report.checks,
+                ServiceDoctorStatus::Ok,
+                "shell_supervisor_control",
+                summary,
+            ),
+            Err(error) => push_service_doctor_check(
+                &mut report.checks,
+                ServiceDoctorStatus::Blocker,
+                "shell_supervisor_control",
+                format!("shell supervisor control smoke failed: {error}"),
+            ),
+        }
     }
 
     match shell_supervisor_request(&socket, "shutdown") {
@@ -3164,14 +3207,47 @@ fn shell_supervisor_socket_is_active(socket: &Path) -> bool {
     shell_supervisor_request(socket, "health").is_ok()
 }
 
+#[cfg(all(unix, target_os = "linux"))]
+const SHELL_SUPERVISOR_UNIX_SOCKET_MAX_BYTES: usize = 108;
+
+#[cfg(all(unix, not(target_os = "linux")))]
+const SHELL_SUPERVISOR_UNIX_SOCKET_MAX_BYTES: usize = 100;
+
+#[cfg(unix)]
+fn service_smoke_shell_supervisor_socket_path(workdir: &Path) -> PathBuf {
+    let base = workdir.canonicalize().unwrap_or_else(|_| {
+        if workdir.is_absolute() {
+            workdir.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(workdir))
+                .unwrap_or_else(|_| workdir.to_path_buf())
+        }
+    });
+    base.join(".dscode/shell-supervisor/supervisor.sock")
+}
+
+#[cfg(unix)]
+fn unix_socket_path_too_long(path: &Path) -> Option<usize> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let path_bytes = path.as_os_str().as_bytes().len();
+    (path_bytes >= SHELL_SUPERVISOR_UNIX_SOCKET_MAX_BYTES).then_some(path_bytes)
+}
+
 #[cfg(unix)]
 fn shell_supervisor_request(socket: &Path, method: &str) -> AppResult<String> {
+    let request = format!("{{\"method\":\"{}\"}}\n", json_escape(method));
+    shell_supervisor_request_raw(socket, method, &request)
+}
+
+#[cfg(unix)]
+fn shell_supervisor_request_raw(socket: &Path, method: &str, request: &str) -> AppResult<String> {
     use std::os::unix::net::UnixStream;
 
     let mut stream = UnixStream::connect(socket)?;
     stream.set_read_timeout(Some(Duration::from_millis(500)))?;
     stream.set_write_timeout(Some(Duration::from_millis(500)))?;
-    let request = format!("{{\"method\":\"{}\"}}\n", json_escape(method));
     stream.write_all(request.as_bytes())?;
     let mut reader = BufReader::new(stream);
     let mut response = String::new();
@@ -3186,6 +3262,52 @@ fn shell_supervisor_request(socket: &Path, method: &str) -> AppResult<String> {
             response.trim()
         )))
     }
+}
+
+#[cfg(unix)]
+fn shell_supervisor_control_smoke(socket: &Path, timeout_ms: u64) -> AppResult<String> {
+    let tty = cfg!(all(unix, target_os = "linux"));
+    let start_request = format!(
+        "{{\"method\":\"start\",\"arguments\":{{\"command\":\"echo deepseek-shell-supervisor-smoke\",\"tty\":{},\"tty_rows\":24,\"tty_cols\":80,\"timeout_ms\":{}}}}}\n",
+        if tty { "true" } else { "false" },
+        timeout_ms.min(5000)
+    );
+    let start_response = shell_supervisor_request_raw(socket, "start", &start_request)?;
+    let task_id = shell_supervisor_response_string(&start_response, "task_id")
+        .ok_or_else(|| app_error("shell supervisor start smoke response missing task_id"))?;
+    if tty && !start_response.contains(r#""job_pty_backend":"native-supervisor""#) {
+        return Err(app_error(
+            "shell supervisor tty smoke did not start a native-supervisor PTY job",
+        ));
+    }
+
+    let wait_request = format!(
+        "{{\"method\":\"wait\",\"arguments\":{{\"task_id\":\"{}\",\"timeout_ms\":{}}}}}\n",
+        json_escape(&task_id),
+        timeout_ms.min(5000)
+    );
+    shell_supervisor_request_raw(socket, "wait", &wait_request)?;
+
+    let attach_request = format!(
+        "{{\"method\":\"attach\",\"arguments\":{{\"task_id\":\"{}\",\"tail\":true,\"limit_bytes\":4096}}}}\n",
+        json_escape(&task_id)
+    );
+    let attach_response = shell_supervisor_request_raw(socket, "attach", &attach_request)?;
+    if !attach_response.contains("deepseek-shell-supervisor-smoke") {
+        return Err(app_error(
+            "shell supervisor attach smoke did not replay command output",
+        ));
+    }
+    Ok(format!(
+        "shell supervisor start/wait/attach control smoke passed for task {task_id} (tty={tty})"
+    ))
+}
+
+#[cfg(unix)]
+fn shell_supervisor_response_string(response: &str, key: &str) -> Option<String> {
+    let value = parse_json_value(response.trim()).ok()?;
+    let object = json_as_object(&value)?;
+    json_as_string(object.get(key)?).map(str::to_string)
 }
 
 fn wait_child_exit(child: &mut Child, timeout: Duration) -> AppResult<std::process::ExitStatus> {
@@ -5469,6 +5591,100 @@ mod tests {
         assert!(json.contains("\"blockers\":1"));
         assert!(json.contains("\"warnings\":1"));
         assert!(json.contains("\"resolved_addr\":\"127.0.0.1:4567\""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn service_smoke_shell_supervisor_control_smoke_runs_start_wait_attach() {
+        use std::io::{BufRead as _, Write as _};
+
+        let root = std::env::temp_dir().join(format!(
+            "dsc-smk-ctl-{}-{}",
+            std::process::id(),
+            current_epoch_seconds()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let socket = root.join("supervisor.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let tty = cfg!(all(unix, target_os = "linux"));
+        let handle = std::thread::spawn(move || {
+            for expected in ["start", "wait", "attach"] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                let mut request = String::new();
+                reader.read_line(&mut request).unwrap();
+                assert!(request.contains(&format!(r#""method":"{expected}""#)));
+                match expected {
+                    "start" => {
+                        assert!(request.contains(if tty {
+                            r#""tty":true"#
+                        } else {
+                            r#""tty":false"#
+                        }));
+                        let backend = if tty { "native-supervisor" } else { "none" };
+                        stream
+                            .write_all(
+                                format!(
+                                    r#"{{"status":"ok","method":"start","task_id":"task-smoke","job_pty_backend":"{backend}"}}"#
+                                )
+                                .as_bytes(),
+                            )
+                            .unwrap();
+                    }
+                    "wait" => {
+                        assert!(request.contains(r#""task_id":"task-smoke""#));
+                        stream
+                            .write_all(
+                                br#"{"status":"ok","method":"wait","wait_summary":"status: exited"}"#,
+                            )
+                            .unwrap();
+                    }
+                    "attach" => {
+                        assert!(request.contains(r#""task_id":"task-smoke""#));
+                        stream
+                            .write_all(
+                                br#"{"status":"ok","method":"attach","attach_summary":"deepseek-shell-supervisor-smoke"}"#,
+                            )
+                            .unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+                stream.write_all(b"\n").unwrap();
+            }
+        });
+
+        let summary = shell_supervisor_control_smoke(&socket, 2500).unwrap();
+        handle.join().unwrap();
+
+        assert!(summary.contains("task-smoke"));
+        assert!(summary.contains(&format!("tty={tty}")));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn service_smoke_blocks_too_long_shell_supervisor_socket_path() {
+        let long_workdir =
+            PathBuf::from(format!("/tmp/{}", "dsc-service-smoke-long-path-".repeat(5)));
+        let mut report = ServiceSmokeReport {
+            binary: "/missing/deepseek".to_string(),
+            workdir: long_workdir,
+            requested_addr: "127.0.0.1:0".to_string(),
+            resolved_addr: "127.0.0.1:4567".to_string(),
+            addr_error: None,
+            timeout_ms: 2500,
+            checks: Vec::new(),
+        };
+
+        service_smoke_check_shell_supervisor(&mut report);
+
+        assert!(report.checks.iter().any(|check| {
+            check.status == ServiceDoctorStatus::Blocker
+                && check.name == "shell_supervisor"
+                && check.message.contains("socket path is too long")
+        }));
     }
 
     #[cfg(unix)]

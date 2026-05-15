@@ -113,19 +113,23 @@ To prove the selected binary can actually start the two core long-lived local
 surfaces without installing a service manager, run:
 
 ```sh
-deepseek agents service-smoke --workdir "$PWD" --bin "$(command -v deepseek)"
-deepseek agents service-smoke --workdir "$PWD" --bin "$(command -v deepseek)" --json
+mkdir -p /tmp/dsc-smk
+deepseek agents service-smoke --workdir /tmp/dsc-smk --bin "$(command -v deepseek)"
+deepseek agents service-smoke --workdir /tmp/dsc-smk --bin "$(command -v deepseek)" --json
 ```
 
 `service-smoke` starts `serve --http --once` on a loopback ephemeral port,
 probes `/health`, waits for that child to exit, then starts
-`agents shell-supervisor --json`, probes the Unix socket `health` method,
-requests `shutdown`, and waits for the supervisor child to exit. On non-Unix
-platforms, the shell-supervisor portion is reported as a warning because the
-protocol socket is Unix-only. If the target workspace already has a live
-shell-supervisor socket, the smoke check reports a blocker and does not send
-`shutdown` to the existing process; use an isolated `--workdir` for release
-evidence.
+`agents shell-supervisor --json`, probes the Unix socket `health` method, runs
+`start` -> `wait` -> `attach` against a small command, requests `shutdown`, and
+waits for the supervisor child to exit. On Linux, that control smoke requests
+`tty=true` and requires the `native-supervisor` PTY backend; on other Unix
+platforms it uses non-TTY shell execution. On non-Unix platforms, the
+shell-supervisor portion is reported as a warning because the protocol socket
+is Unix-only. If the target workspace already has a live shell-supervisor
+socket, the smoke check reports a blocker and does not send `shutdown` to the
+existing process; use a short isolated `--workdir` such as `/tmp/dsc-smk` for
+release evidence because Unix socket paths have platform length limits.
 
 The shell supervisor service runs `deepseek agents shell-supervisor --json`.
 It binds the workspace-local `.dscode/shell-supervisor/supervisor.sock` and

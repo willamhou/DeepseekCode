@@ -103,7 +103,8 @@ cargo build --release
 ./target/release/deepseek update verify-install --bin ./target/release/deepseek
 ./target/release/deepseek agents service --kind all --out target/service-smoke --bin ./target/release/deepseek --workdir "$PWD"
 ./target/release/deepseek agents service-doctor --kind all --out target/service-smoke --bin ./target/release/deepseek --workdir "$PWD" --json
-./target/release/deepseek agents service-smoke --bin ./target/release/deepseek --workdir "$PWD" --json
+mkdir -p /tmp/dsc-smk
+./target/release/deepseek agents service-smoke --bin ./target/release/deepseek --workdir /tmp/dsc-smk --json
 test -f target/service-smoke/SERVICES.md
 ./target/release/deepseek agents rlm-status --json
 cargo package --allow-dirty
@@ -324,8 +325,8 @@ Release notes should include:
 - `SERVICES.md`, generated service-template smoke output including
   `target/service-smoke/SERVICES.md`, `deepseek agents service-doctor --json`
   output showing zero blockers for rendered templates, `deepseek agents
-  service-smoke --json` output showing runtime and shell-supervisor startup
-  proof, and
+  service-smoke --json` output showing runtime startup plus shell-supervisor
+  start/wait/attach control proof, and
   `deepseek agents rlm-status --json` output showing the live RLM service
   lifecycle surface
 - `npm test` output from `npm/`

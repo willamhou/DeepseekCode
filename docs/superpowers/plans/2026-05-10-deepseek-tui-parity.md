@@ -55,8 +55,12 @@ template command topology, optional rendered `--out` files, and CI-friendly
 JSON evidence without starting services.
 `deepseek agents service-smoke` now also starts the selected binary's HTTP
 runtime on a loopback ephemeral port, probes `/health`, starts the Unix shell
-supervisor protocol bridge, probes `health`, requests `shutdown`, and emits
-local JSON evidence without requiring systemd/launchd installation.
+supervisor protocol bridge, probes `health`, runs `start` -> `wait` -> `attach`
+against a small shell command, verifies Linux `tty=true` jobs use the
+`native-supervisor` PTY backend, requests `shutdown`, and emits local JSON
+evidence without requiring systemd/launchd installation; it also blocks
+too-long Unix socket paths before spawning the supervisor and points release
+smoke runs at short isolated workdirs such as `/tmp/dsc-smk`.
 The latest upstream refresh also added provider/model compatibility fixes;
 DeepSeekCode now accepts legacy DeepSeek CN provider aliases, normalizes known
 DeepSeek V4 model aliases according to the active provider, and omits
@@ -1252,9 +1256,11 @@ Landed first slice:
   generated systemd/launchd files before clean-machine installation.
 - `deepseek agents service-smoke` starts `serve --http --once` from the selected
   binary, probes runtime `/health`, starts `agents shell-supervisor --json`,
-  probes the Unix socket `health` method, requests `shutdown`, and emits
-  `deepseek.agents.service_smoke.v1` JSON evidence for local release smoke
-  runs before clean-machine service installation.
+  probes the Unix socket `health` method, runs `start` -> `wait` -> `attach`,
+  verifies Linux `tty=true` jobs use the `native-supervisor` PTY backend,
+  blocks too-long Unix socket paths before spawning the supervisor, requests
+  `shutdown`, and emits `deepseek.agents.service_smoke.v1` JSON evidence for
+  local release smoke runs before clean-machine service installation.
 - `deepseek update package` includes `SERVICES.md` and packaged service templates under `services/`
 - Cargo registry distribution now has an explicit source-build/package-only
   decision: the release workflow skips Cargo registry publishing while
