@@ -40,7 +40,8 @@ native supervisor-owned PTY support yet.
 
 ## Remaining Gap
 
-The daemon is intentionally a protocol skeleton. It does not allocate native
-PTYs, transfer terminal ownership across processes, stream terminal event logs,
-or make `exec_shell` jobs attachable/resizable through a supervisor. Those stay
-in the shell-supervisor PTY design.
+At this slice, the daemon was intentionally a protocol skeleton. Later
+shell-supervisor start/control slices added durable `start`, `wait`, `replay`,
+`attach`, `stdin`, `resize`, and `cancel` methods, plus native-supervisor PTY
+jobs on supported Unix/Linux builds. The remaining shell gap is full
+interactive terminal takeover and broader platform proof.

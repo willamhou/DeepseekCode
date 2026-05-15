@@ -19,9 +19,10 @@ durable shell jobs.
   `ExecShellListTool` for the request cwd.
 - If inventory rendering fails, the response remains a supported `show`
   response and includes `job_inventory_error` for diagnostics.
-- Unsupported native PTY methods (`start`, `wait`, `replay`, `attach`, `stdin`,
-  `resize`, `cancel`) remain structured `unsupported` responses until
-  supervisor-owned PTYs are implemented.
+- At this slice, native PTY control methods remained structured unsupported
+  responses. Later shell-supervisor start/control slices promote `start`,
+  `wait`, `replay`, `attach`, `stdin`, `resize`, and `cancel` to supported
+  daemon methods.
 
 ## Verification
 
@@ -34,6 +35,7 @@ durable shell jobs.
 
 ## Remaining Gap
 
-This closes the read-only supervisor job-inventory slice. It does not implement
-native supervisor-owned PTY process start, attach, stdin, resize, replay, wait,
-or cancellation.
+This closed the read-only supervisor job-inventory slice. Later slices added
+supervisor process start, attach, stdin, resize, replay, wait, and cancellation
+bridges; the remaining boundary is full interactive terminal takeover and
+broader platform proof.

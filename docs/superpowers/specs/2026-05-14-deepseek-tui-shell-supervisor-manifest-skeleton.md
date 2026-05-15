@@ -31,8 +31,10 @@ show/list/refresh code.
   workspace-local `.dscode/shell-supervisor` manifest/socket state and protocol
   method names without launching a supervisor.
 - Normal tool output deliberately does not print `control_token_hash`.
-- Runtime docs and the DeepSeek-TUI parity plan document the boundary: this is
-  a manifest/protocol skeleton, not native PTY ownership.
+- Runtime docs and the DeepSeek-TUI parity plan documented the boundary for
+  this slice: it only added manifest/protocol metadata. Later
+  shell-supervisor start/control slices add native-supervisor PTY jobs on
+  supported Unix/Linux builds.
 
 ## Verification
 

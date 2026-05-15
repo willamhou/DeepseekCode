@@ -85,6 +85,11 @@ TUI refresh polling now routes through a small saturating timeout helper with
 regression coverage for capped, exact, and missed-refresh waits, adapting
 DeepSeek-TUI's Windows-sensitive `Instant` underflow test fix to DeepSeekCode's
 `elapsed()`-based run loop.
+Shell-supervisor status and runtime docs now also describe the current control
+surface truthfully: the daemon supports health, status, show, start, wait,
+replay, attach, stdin, resize, cancel, and shutdown, and `tty=true` creates
+native-supervisor PTY jobs on supported Unix/Linux builds, while full
+interactive terminal takeover and broader platform proof remain open.
 The largest remaining DeepSeek-TUI / Claude Code CLI / Codex CLI gaps are now:
 
 - native supervisor-owned PTY attach/stdin/resize/replay/wait/cancel polish and

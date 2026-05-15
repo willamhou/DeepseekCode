@@ -2621,7 +2621,7 @@ fn render_shell_supervisor_status(cwd: &str) -> AppResult<String> {
         &protocol_health,
     );
     Ok(format!(
-        "kind: deepseek.exec_shell.supervisor_status.v1\nstatus: {status}\nplatform: {}\ncwd: {}\nstate_dir: {}\nmanifest: {}\nmanifest_exists: {}\nmanifest_kind: {}\nsocket: {}\nsocket_kind: {socket_kind}\nprotocol_health: {protocol_health}\nprotocol_status: {protocol_status}\nprotocol_status_active_jobs: {}\nprotocol_show: {protocol_show}\nsupervisor_pid: {}\nsupervisor_alive: {}\nsupervisor_epoch: {}\nprotocol: {}\nmethods: {}\nunsupported_methods: {}\nactive_jobs: {}\nstarted_at: {}\nupdated_at: {}\nprotocol_job_inventory:\n{}\nnote: this is the shell supervisor protocol/status skeleton; native PTY ownership, live attach, and TIOCSWINSZ resize are not implemented until a real supervisor process writes this state.\n",
+        "kind: deepseek.exec_shell.supervisor_status.v1\nstatus: {status}\nplatform: {}\ncwd: {}\nstate_dir: {}\nmanifest: {}\nmanifest_exists: {}\nmanifest_kind: {}\nsocket: {}\nsocket_kind: {socket_kind}\nprotocol_health: {protocol_health}\nprotocol_status: {protocol_status}\nprotocol_status_active_jobs: {}\nprotocol_show: {protocol_show}\nsupervisor_pid: {}\nsupervisor_alive: {}\nsupervisor_epoch: {}\nprotocol: {}\nmethods: {}\nunsupported_methods: {}\nactive_jobs: {}\nstarted_at: {}\nupdated_at: {}\nprotocol_job_inventory:\n{}\nnote: the workspace shell supervisor protocol supports health/status/show/start/wait/replay/attach/stdin/resize/cancel/shutdown. On supported Unix/Linux builds, supervisor start tty=true creates native-supervisor PTY jobs owned by the running supervisor process; attach output is durable terminal/log replay rather than a full interactive terminal takeover, and broader platform proof remains open.\n",
         shell_supervisor_platform_label(),
         cwd,
         state_dir.display(),
@@ -2998,7 +2998,7 @@ fn render_durable_snapshot(cwd: &str, task_id: &str) -> AppResult<String> {
         "unavailable"
     };
     let mut out = format!(
-        "task_id: {}\nstatus: {}\nmanaged: false\nexit_code: {}\npid: {}\nowner_pid: {}\nowner_alive: {}\nprocess_group: {}\ncommand: {}\ncwd: {}\ntty: {}\npty_backend: {}\nattachable: {}\nresizable: {}\nsupervisor_pid: {}\nsupervisor_alive: {}\nsupervisor_socket: {}\nsupervisor_epoch: {}\nterminal_event_log: {}\nterminal_event_seq: {}\ntty_rows: {}\ntty_cols: {}\nstarted_at: {}\nupdated_at: {}\nstdout_total_bytes: {}\nstderr_total_bytes: {}\nstdin_control: {}\nnote: durable metadata and logs are available; detached cancel is best-effort and detached stdin is available only when stdin_control=detached_fifo. attachable/resizable are true only for future native supervisor-owned PTY sessions.\n",
+        "task_id: {}\nstatus: {}\nmanaged: false\nexit_code: {}\npid: {}\nowner_pid: {}\nowner_alive: {}\nprocess_group: {}\ncommand: {}\ncwd: {}\ntty: {}\npty_backend: {}\nattachable: {}\nresizable: {}\nsupervisor_pid: {}\nsupervisor_alive: {}\nsupervisor_socket: {}\nsupervisor_epoch: {}\nterminal_event_log: {}\nterminal_event_seq: {}\ntty_rows: {}\ntty_cols: {}\nstarted_at: {}\nupdated_at: {}\nstdout_total_bytes: {}\nstderr_total_bytes: {}\nstdin_control: {}\nnote: durable metadata and logs are available; detached cancel is best-effort and detached stdin is available only when stdin_control=detached_fifo. attachable/resizable show whether a native-supervisor PTY has live supervisor controls when the supervisor is reachable; non-supervisor jobs keep those flags false.\n",
         record.id,
         record.status,
         record
@@ -3241,7 +3241,7 @@ fn render_shell_attach_snapshot(
     let end = start.saturating_add(limit_bytes).min(total);
     let data = String::from_utf8_lossy(&bytes[start..end]);
     let mut out = format!(
-        "task_id: {}\nstatus: {}\nmode: terminal_attach_replay\ncommand: {}\ncwd: {}\ntty: {}\npty_backend: {}\nattachable: {}\nresizable: {}\nsupervisor_pid: {}\nsupervisor_alive: {}\nsupervisor_socket: {}\nsupervisor_epoch: {}\nterminal_event_log: {}\nterminal_event_seq: {}\ntty_rows: {}\ntty_cols: {}\nterminal_stream: stdout\noffset: {start}\nnext_offset: {end}\ntotal_bytes: {total}\ntail: {tail}\nwait_ms: {wait_ms}\ntimed_out: {timed_out}\nnote: attach replay is backed by durable stdout PTY/log bytes, not a resident PTY takeover; attachable=true is reserved for future native supervisor-owned PTY sessions; use exec_shell_replay stream=stderr for stderr-only logs.\n",
+        "task_id: {}\nstatus: {}\nmode: terminal_attach_replay\ncommand: {}\ncwd: {}\ntty: {}\npty_backend: {}\nattachable: {}\nresizable: {}\nsupervisor_pid: {}\nsupervisor_alive: {}\nsupervisor_socket: {}\nsupervisor_epoch: {}\nterminal_event_log: {}\nterminal_event_seq: {}\ntty_rows: {}\ntty_cols: {}\nterminal_stream: stdout\noffset: {start}\nnext_offset: {end}\ntotal_bytes: {total}\ntail: {tail}\nwait_ms: {wait_ms}\ntimed_out: {timed_out}\nnote: attach replay is backed by durable stdout PTY/log bytes, not a full terminal takeover; attachable=true means the job has native-supervisor PTY controls when its supervisor is reachable; use exec_shell_replay stream=stderr for stderr-only logs.\n",
         record.id,
         record.status,
         record.command,
@@ -4545,6 +4545,18 @@ mod tests {
             first.summary
         );
         assert!(
+            first.summary.contains("not a full terminal takeover"),
+            "{}",
+            first.summary
+        );
+        assert!(
+            !first
+                .summary
+                .contains("reserved for future native supervisor-owned PTY sessions"),
+            "{}",
+            first.summary
+        );
+        assert!(
             first.summary.contains("attachable: false"),
             "{}",
             first.summary
@@ -4667,6 +4679,20 @@ mod tests {
         assert!(!shown.summary.contains("secret-token-hash"));
         assert!(
             shown.summary.contains("supervised output"),
+            "{}",
+            shown.summary
+        );
+        assert!(
+            shown
+                .summary
+                .contains("attachable/resizable show whether a native-supervisor PTY has live supervisor controls"),
+            "{}",
+            shown.summary
+        );
+        assert!(
+            !shown
+                .summary
+                .contains("future native supervisor-owned PTY sessions"),
             "{}",
             shown.summary
         );
@@ -4845,6 +4871,12 @@ mod tests {
             "methods: health,status,show,start,wait,replay,attach,stdin,resize,cancel,shutdown"
         ));
         assert!(absent.summary.contains("unsupported_methods: "));
+        assert!(absent
+            .summary
+            .contains("supervisor start tty=true creates native-supervisor PTY jobs"));
+        assert!(!absent.summary.contains(
+            "native PTY ownership, live attach, and TIOCSWINSZ resize are not implemented"
+        ));
 
         let state_dir = shell_supervisor_state_dir(&cwd);
         fs::create_dir_all(&state_dir).unwrap();
@@ -4890,6 +4922,27 @@ mod tests {
         );
         assert!(
             status.summary.contains("unsupported_methods: "),
+            "{}",
+            status.summary
+        );
+        assert!(
+            status.summary.contains(
+                "supports health/status/show/start/wait/replay/attach/stdin/resize/cancel/shutdown"
+            ),
+            "{}",
+            status.summary
+        );
+        assert!(
+            status
+                .summary
+                .contains("attach output is durable terminal/log replay"),
+            "{}",
+            status.summary
+        );
+        assert!(
+            !status
+                .summary
+                .contains("not implemented until a real supervisor process"),
             "{}",
             status.summary
         );

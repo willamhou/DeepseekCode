@@ -1385,23 +1385,28 @@ record and `close_stdin=true` closes that FIFO by killing the keeper.
 `exec_shell background=true tty=true` and `task_shell_start tty=true` request a
 Unix `script` PTY backend for new background jobs; manifests record `tty` and
 `pty_backend`, and wait/show snapshots surface the same fields. Shell manifests
-also carry the supervisor capability skeleton for a later native PTY supervisor:
+also carry supervisor capability metadata:
 `attachable`, `resizable`, `supervisor_pid`, `supervisor_socket`,
 `supervisor_epoch`, `terminal_event_log`, and `terminal_event_seq`. Current
 plain-pipe and `script` jobs render `attachable: false` and `resizable: false`;
-those flags are reserved for future supervisor-owned PTY sessions and should not
-be confused with the best-effort `script` resize path.
+native-supervisor jobs started by a running shell-supervisor process render
+`attachable: true` and `resizable: true`. Those flags distinguish durable log
+replay from supervisor-owned PTY sessions and should not be confused with the
+best-effort `script` resize path.
 `deepseek agents shell-supervisor --json` starts the workspace-local protocol
 bridge on Unix, writes `.dscode/shell-supervisor/manifest.json`, binds
 `supervisor.sock`, and answers newline-JSON `health`, `status`, `show`,
-`start`, and `shutdown` requests. The `show` response includes a
+`start`, `wait`, `replay`, `attach`, `stdin`, `resize`, `cancel`, and
+`shutdown` requests. The `show` response includes a
 `job_inventory` summary rendered from the durable `.dscode/shell-jobs` table, so
 a supervisor client can inspect persisted shell jobs without separately calling
 the model tool. The `start` request accepts a safe `command`, optional
 workspace-contained `cwd`, `stdin`, `tty`, `tty_rows`, `tty_cols`, and scalar
 `env` fields, then creates a durable `task_shell_start` background job owned by
-the supervisor process. This is a durable shell bridge over the existing
-plain-pipe/`script` backends, not native PTY ownership.
+the supervisor process. On supported Unix/Linux builds, `tty=true` starts a
+native-supervisor PTY job owned by that supervisor process; non-TTY jobs keep
+using the durable plain-pipe backend. `attach` and `replay` return durable
+terminal/log snapshots rather than taking over the caller's terminal.
 `exec_shell_supervisor_status cwd=<path>` inspects that manifest/socket state,
 reports absent/stale/ready status and supported method names, probes socket
 protocol health with a bounded `health` request, probes `status` for the
@@ -1409,9 +1414,9 @@ daemon's active job count backed by durable shell job manifests, probes `show`
 for protocol job-inventory parity when the daemon is healthy, and never prints
 `control_token_hash`. Each healthy protocol response also refreshes the
 workspace supervisor manifest's `active_jobs` and `updated_at` fields so
-manifest-only observers do not keep a startup-only job count. Unsupported PTY
-session methods return structured `unsupported` responses until native
-supervisor-owned attach, stdin, resize, replay, wait, and cancel land.
+manifest-only observers do not keep a startup-only job count. Remaining
+boundaries are full interactive terminal takeover and broader platform proof
+beyond the current Unix/Linux native-supervisor path.
 Local file-backed TUI sessions surface the same read-only protocol check through
 the command palette with `shell supervisor` and `jobs supervisor`, rendering the
 status plus durable shell job inventory in the shell detail panel.
