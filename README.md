@@ -31,8 +31,8 @@ iterating from the same terminal.
 - OpenAI-compatible single and same-turn batch tool calls, with every call run
   through the normal hook, permission, and recovery paths.
 - Permission-gated shell execution plus background shell jobs, wait/poll,
-  replay, attach snapshots, stdin, resize metadata, cancellation, and a
-  workspace shell-supervisor protocol bridge.
+  replay, attach snapshots, bounded interactive attach, stdin, resize metadata,
+  cancellation, and a workspace shell-supervisor protocol bridge.
 - Runtime approvals support approve-once and approve-for-session, with grouped
   safe command variants and exact denial scoping.
 - Local HTTP/SSE runtime, ACP stdio adapter, MCP client/server tooling, and TUI
@@ -116,13 +116,16 @@ git.
 DeepSeekCode is close enough to use as its own coding CLI, but it is not yet at
 Claude Code CLI / Codex CLI polish. The largest remaining gaps are:
 
-- deeper interactive shell/PTY takeover proof beyond the CI-smoked default TUI
-  entrypoint and current shell-supervisor coverage;
+- byte-level PTY proxying and Windows shell-supervisor ConPTY proof beyond the
+  current bounded interactive attach and CI-smoked default TUI entrypoint;
 - deeper model-backed live dogfood and external write-fixture sample evidence
   across disposable real repositories;
 - npm registry publishing and a Homebrew tap, both blocked on credentials;
 - a committed reviewed model-backed README media asset beyond deterministic TUI
   snapshots.
+
+See [docs/current-status.md](./docs/current-status.md) for the current Chinese
+status, roadmap, and final target.
 
 ## Demo Asset
 

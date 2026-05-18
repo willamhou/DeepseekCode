@@ -93,12 +93,19 @@ DeepSeek-TUI's Windows-sensitive `Instant` underflow test fix to DeepSeekCode's
 Shell-supervisor status and runtime docs now also describe the current control
 surface truthfully: the daemon supports health, status, show, start, wait,
 replay, attach, stdin, resize, cancel, and shutdown, and `tty=true` creates
-native-supervisor PTY jobs on supported Unix/Linux builds, while full
-interactive terminal takeover and broader platform proof remain open.
+native-supervisor PTY jobs on supported Unix/Linux builds, while byte-level PTY
+proxying and broader platform proof remain open.
 The human shell control CLI now also supports `deepseek agents shell attach
 <task_id> --follow`, a cursor-following terminal payload stream over durable
 attach snapshots. This narrows the operator-facing terminal gap without claiming
 raw terminal takeover.
+The human shell control CLI now also supports `deepseek agents shell attach
+<task_id> --interactive` / `--takeover`, a bounded raw-mode local terminal loop
+that forwards keypresses to supervisor `stdin`, forwards terminal resize events
+to supervisor `resize`, and streams stdout replay back to the operator until the
+job exits or `Ctrl-]` detaches. This gives a usable PTY control path while still
+leaving byte-perfect PTY fd proxying and Windows shell-supervisor ConPTY as
+separate proof work.
 Dogfood readiness evidence is now also transport-aware: new ledger rows record
 `model_transport`, the report surfaces model-backed counts and table transport,
 and release gates can require model-backed totals, success rate, and
@@ -172,9 +179,9 @@ handle open through clean exit, and has green evidence from `main` CI run
 green CI run `26013911327`.
 The largest remaining DeepSeek-TUI / Claude Code CLI / Codex CLI gaps are now:
 
-- deeper interactive shell/PTY takeover proof beyond the CI-smoked default TUI
-  entrypoint, current shell-supervisor coverage, and platform
-  compile/version/snapshot checks;
+- byte-level shell/PTY proxy proof and Windows shell-supervisor ConPTY beyond
+  the bounded interactive attach, CI-smoked default TUI entrypoint, current
+  shell-supervisor coverage, and platform compile/version/snapshot checks;
 - model-backed live dogfood and external write-fixture sample depth across
   disposable real repositories;
 - release-channel proof for npm and Homebrew once credentials are available;

@@ -7,6 +7,9 @@ use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+
 use crate::cli::app::{
     AgentsAction, AgentsRlmCancelArgs, AgentsRlmDrainArgs, AgentsRlmEventsArgs,
     AgentsRlmRecoverArgs, AgentsRlmRunNextArgs, AgentsRlmStatusArgs, AgentsRlmStopArgs,
@@ -84,6 +87,9 @@ pub fn run(action: AgentsAction) -> AppResult<()> {
 }
 
 fn run_shell_control(args: AgentsShellArgs) -> AppResult<()> {
+    if agents_shell_attach_interactive_requested(&args) {
+        return run_shell_attach_interactive(args);
+    }
     if agents_shell_attach_follow_requested(&args) {
         return run_shell_attach_follow(args);
     }
@@ -93,8 +99,283 @@ fn run_shell_control(args: AgentsShellArgs) -> AppResult<()> {
     print_shell_control_response(&args, response)
 }
 
+fn agents_shell_attach_interactive_requested(args: &AgentsShellArgs) -> bool {
+    matches!(
+        &args.action,
+        AgentsShellAction::Attach {
+            interactive: true,
+            ..
+        }
+    )
+}
+
 fn agents_shell_attach_follow_requested(args: &AgentsShellArgs) -> bool {
     matches!(&args.action, AgentsShellAction::Attach { follow: true, .. })
+}
+
+fn run_shell_attach_interactive(args: AgentsShellArgs) -> AppResult<()> {
+    if args.json {
+        return Err(app_error(
+            "agents shell attach --interactive cannot be combined with --json",
+        ));
+    }
+    let AgentsShellAction::Attach {
+        task_id,
+        cursor,
+        wait_ms: _,
+        limit_bytes,
+        tail,
+        follow: _,
+        interactive: _,
+        poll_ms,
+        max_ms,
+    } = args.action
+    else {
+        return Err(app_error(
+            "agents shell attach --interactive requires attach action",
+        ));
+    };
+    let cwd = std::env::current_dir()?;
+    let limit_bytes = limit_bytes.unwrap_or(16 * 1024);
+    let poll_delay = Duration::from_millis(poll_ms.unwrap_or(50).clamp(10, 1000));
+    let max_duration = max_ms.map(Duration::from_millis);
+    let started = Instant::now();
+    let mut stdout_offset = cursor.unwrap_or(0);
+    let mut last_output_poll = Instant::now() - poll_delay;
+    eprintln!("attached to {task_id}; detach with Ctrl-]");
+    let _raw = ShellRawModeGuard::enter()?;
+
+    let _ = shell_attach_interactive_resize_to_terminal(&cwd, &task_id);
+    loop {
+        while event::poll(Duration::from_millis(0))? {
+            match event::read()? {
+                Event::Key(key) if shell_attach_interactive_is_detach_key(key) => {
+                    return Ok(());
+                }
+                Event::Key(key) => {
+                    if let Some(input) = shell_attach_interactive_key_input(key) {
+                        shell_attach_interactive_send_stdin(&cwd, &task_id, &input)?;
+                    }
+                }
+                Event::Resize(cols, rows) => {
+                    let _ = shell_attach_interactive_send_resize(&cwd, &task_id, rows, cols);
+                }
+                Event::Paste(input) => {
+                    if !input.is_empty() {
+                        shell_attach_interactive_send_stdin(&cwd, &task_id, &input)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if last_output_poll.elapsed() >= poll_delay {
+            let (next_offset, status, advanced) = shell_attach_interactive_poll_stdout(
+                &cwd,
+                &task_id,
+                stdout_offset,
+                limit_bytes,
+                tail && stdout_offset == 0,
+            )?;
+            stdout_offset = next_offset;
+            last_output_poll = Instant::now();
+            if status != "running" && !advanced {
+                break;
+            }
+        }
+        if max_duration.is_some_and(|max| started.elapsed() >= max) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    Ok(())
+}
+
+struct ShellRawModeGuard;
+
+impl ShellRawModeGuard {
+    fn enter() -> AppResult<Self> {
+        enable_raw_mode()?;
+        Ok(Self)
+    }
+}
+
+impl Drop for ShellRawModeGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+    }
+}
+
+fn shell_attach_interactive_poll_stdout(
+    cwd: &Path,
+    task_id: &str,
+    offset: u64,
+    limit_bytes: u64,
+    tail: bool,
+) -> AppResult<(u64, String, bool)> {
+    let request_args = AgentsShellArgs {
+        action: AgentsShellAction::Replay {
+            task_id: task_id.to_string(),
+            stream: Some("stdout".to_string()),
+            cursor: None,
+            offset: Some(offset),
+            limit_bytes: Some(limit_bytes),
+            tail,
+        },
+        json: false,
+    };
+    let response =
+        send_shell_supervisor_cli_request(cwd, &agents_shell_request_json(&request_args))?;
+    let object = json_as_object(&response)
+        .ok_or_else(|| app_error("shell supervisor response must be a JSON object"))?;
+    let response_status = object
+        .get("status")
+        .and_then(json_as_string)
+        .unwrap_or("unknown");
+    if response_status == "error" || response_status == "unsupported" {
+        let error = object
+            .get("error")
+            .and_then(json_as_string)
+            .unwrap_or("shell supervisor interactive attach failed");
+        return Err(app_error(error.to_string()));
+    }
+    let summary = object
+        .get("replay_summary")
+        .and_then(json_as_string)
+        .ok_or_else(|| app_error("shell supervisor replay response missing replay_summary"))?;
+    if let Some(payload) = shell_summary_section_payload(summary, "data") {
+        let mut stdout = std::io::stdout();
+        stdout.write_all(payload.as_bytes())?;
+        stdout.flush()?;
+    }
+    let next_offset = shell_summary_value(summary, "next_offset")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(offset);
+    let status = shell_summary_value(summary, "status")
+        .unwrap_or("unknown")
+        .to_string();
+    Ok((next_offset, status, next_offset > offset))
+}
+
+fn shell_attach_interactive_send_stdin(cwd: &Path, task_id: &str, input: &str) -> AppResult<()> {
+    let request_args = AgentsShellArgs {
+        action: AgentsShellAction::Stdin {
+            task_id: task_id.to_string(),
+            input: Some(input.to_string()),
+            close_stdin: false,
+            timeout_ms: Some(500),
+        },
+        json: false,
+    };
+    let response =
+        send_shell_supervisor_cli_request(cwd, &agents_shell_request_json(&request_args))?;
+    shell_attach_interactive_check_control_response(&response, "stdin")
+}
+
+fn shell_attach_interactive_send_resize(
+    cwd: &Path,
+    task_id: &str,
+    rows: u16,
+    cols: u16,
+) -> AppResult<()> {
+    let request_args = AgentsShellArgs {
+        action: AgentsShellAction::Resize {
+            task_id: task_id.to_string(),
+            tty_rows: u64::from(rows),
+            tty_cols: u64::from(cols),
+        },
+        json: false,
+    };
+    let response =
+        send_shell_supervisor_cli_request(cwd, &agents_shell_request_json(&request_args))?;
+    shell_attach_interactive_check_control_response(&response, "resize")
+}
+
+fn shell_attach_interactive_resize_to_terminal(cwd: &Path, task_id: &str) -> AppResult<()> {
+    let (cols, rows) = crossterm::terminal::size()?;
+    shell_attach_interactive_send_resize(cwd, task_id, rows, cols)
+}
+
+fn shell_attach_interactive_check_control_response(
+    response: &JsonValue,
+    action: &str,
+) -> AppResult<()> {
+    let object = json_as_object(response)
+        .ok_or_else(|| app_error("shell supervisor response must be a JSON object"))?;
+    let status = object
+        .get("status")
+        .and_then(json_as_string)
+        .unwrap_or("unknown");
+    if status == "error" || status == "unsupported" {
+        let error = object
+            .get("error")
+            .and_then(json_as_string)
+            .unwrap_or("shell supervisor control request failed");
+        return Err(app_error(format!(
+            "interactive attach {action} failed: {error}"
+        )));
+    }
+    Ok(())
+}
+
+fn shell_attach_interactive_is_detach_key(key: KeyEvent) -> bool {
+    key.kind != KeyEventKind::Release
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(key.code, KeyCode::Char(']'))
+}
+
+fn shell_attach_interactive_key_input(key: KeyEvent) -> Option<String> {
+    if key.kind == KeyEventKind::Release {
+        return None;
+    }
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return shell_attach_interactive_control_key_input(key.code);
+    }
+    let prefix = if key.modifiers.contains(KeyModifiers::ALT) {
+        "\x1b"
+    } else {
+        ""
+    };
+    match key.code {
+        KeyCode::Backspace => Some("\x7f".to_string()),
+        KeyCode::Enter => Some("\r".to_string()),
+        KeyCode::Left => Some(format!("{prefix}\x1b[D")),
+        KeyCode::Right => Some(format!("{prefix}\x1b[C")),
+        KeyCode::Up => Some(format!("{prefix}\x1b[A")),
+        KeyCode::Down => Some(format!("{prefix}\x1b[B")),
+        KeyCode::Home => Some(format!("{prefix}\x1b[H")),
+        KeyCode::End => Some(format!("{prefix}\x1b[F")),
+        KeyCode::PageUp => Some(format!("{prefix}\x1b[5~")),
+        KeyCode::PageDown => Some(format!("{prefix}\x1b[6~")),
+        KeyCode::Tab => Some(format!("{prefix}\t")),
+        KeyCode::BackTab => Some(format!("{prefix}\x1b[Z")),
+        KeyCode::Delete => Some(format!("{prefix}\x1b[3~")),
+        KeyCode::Insert => Some(format!("{prefix}\x1b[2~")),
+        KeyCode::Esc => Some("\x1b".to_string()),
+        KeyCode::Char(ch) => Some(format!("{prefix}{ch}")),
+        _ => None,
+    }
+}
+
+fn shell_attach_interactive_control_key_input(code: KeyCode) -> Option<String> {
+    match code {
+        KeyCode::Char(ch) => {
+            let upper = ch.to_ascii_uppercase();
+            if upper.is_ascii_uppercase() {
+                let byte = (upper as u8).saturating_sub(b'A').saturating_add(1);
+                return Some((byte as char).to_string());
+            }
+            match ch {
+                '[' => Some("\x1b".to_string()),
+                '\\' => Some("\x1c".to_string()),
+                '^' => Some("\x1e".to_string()),
+                '_' => Some("\x1f".to_string()),
+                ' ' => Some("\0".to_string()),
+                _ => None,
+            }
+        }
+        _ => shell_attach_interactive_key_input(KeyEvent::new(code, KeyModifiers::NONE)),
+    }
 }
 
 fn run_shell_attach_follow(args: AgentsShellArgs) -> AppResult<()> {
@@ -105,6 +386,7 @@ fn run_shell_attach_follow(args: AgentsShellArgs) -> AppResult<()> {
         limit_bytes,
         tail,
         follow: _,
+        interactive: _,
         poll_ms,
         max_ms,
     } = args.action
@@ -130,6 +412,7 @@ fn run_shell_attach_follow(args: AgentsShellArgs) -> AppResult<()> {
                 limit_bytes,
                 tail: tail && first_request,
                 follow: false,
+                interactive: false,
                 poll_ms: None,
                 max_ms: None,
             },
@@ -196,7 +479,12 @@ fn shell_attach_summary_next_cursor(summary: &str) -> Option<u64> {
 }
 
 fn shell_attach_summary_terminal_payload(summary: &str) -> Option<&str> {
-    let (_, payload) = summary.split_once("terminal:\n")?;
+    shell_summary_section_payload(summary, "terminal")
+}
+
+fn shell_summary_section_payload<'a>(summary: &'a str, section: &str) -> Option<&'a str> {
+    let marker = format!("{section}:\n");
+    let (_, payload) = summary.split_once(&marker)?;
     let payload = payload.trim_end_matches('\n');
     (!payload.is_empty()).then_some(payload)
 }
@@ -276,6 +564,7 @@ fn agents_shell_request_json(args: &AgentsShellArgs) -> JsonValue {
             limit_bytes,
             tail,
             follow: _,
+            interactive: _,
             poll_ms: _,
             max_ms: _,
         } => {
@@ -4871,6 +5160,7 @@ mod tests {
                 limit_bytes: Some(4096),
                 tail: false,
                 follow: true,
+                interactive: false,
                 poll_ms: Some(50),
                 max_ms: Some(1000),
             },
@@ -4920,6 +5210,62 @@ mod tests {
             shell_summary_value(terminal_summary, "status"),
             Some("completed")
         );
+
+        let replay_summary = "task_id: task-3\nstatus: running\nstream: stdout\noffset: 0\nnext_offset: 5\ndata:\nhello\n";
+        assert_eq!(
+            shell_summary_section_payload(replay_summary, "data"),
+            Some("hello")
+        );
+        assert_eq!(
+            shell_summary_value(replay_summary, "next_offset"),
+            Some("5")
+        );
+    }
+
+    #[test]
+    fn agents_shell_attach_interactive_maps_terminal_keys() {
+        assert!(agents_shell_attach_interactive_requested(
+            &AgentsShellArgs {
+                action: AgentsShellAction::Attach {
+                    task_id: "task-1".to_string(),
+                    cursor: None,
+                    wait_ms: None,
+                    limit_bytes: None,
+                    tail: false,
+                    follow: false,
+                    interactive: true,
+                    poll_ms: None,
+                    max_ms: None,
+                },
+                json: false,
+            }
+        ));
+        assert_eq!(
+            shell_attach_interactive_key_input(KeyEvent::new(
+                KeyCode::Char('x'),
+                KeyModifiers::NONE
+            )),
+            Some("x".to_string())
+        );
+        assert_eq!(
+            shell_attach_interactive_key_input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Some("\r".to_string())
+        );
+        assert_eq!(
+            shell_attach_interactive_key_input(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+            Some("\x1b[A".to_string())
+        );
+        assert_eq!(
+            shell_attach_interactive_key_input(KeyEvent::new(
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL,
+            )),
+            Some("\x03".to_string())
+        );
+        assert!(shell_attach_interactive_is_detach_key(KeyEvent::new(
+            KeyCode::Char(']'),
+            KeyModifiers::CONTROL,
+        )));
     }
 
     #[test]

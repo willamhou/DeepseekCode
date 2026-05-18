@@ -31,7 +31,7 @@ DeepSeekCode は DeepSeek-first のターミナル向けコーディングエー
 - OpenAI-compatible の単一 tool call と同一ターンの batch tool calls に対応し、
   各呼び出しは通常の hook、permission、recovery 経路を通ります。
 - 権限ゲート付き shell 実行に加えて、バックグラウンド shell job、wait/poll、
-  replay、attach snapshot、stdin、resize metadata、cancel、workspace
+  replay、attach snapshot、bounded interactive attach、stdin、resize metadata、cancel、workspace
   shell-supervisor protocol bridge をサポートします。
 - Runtime approval は approve-once と approve-for-session に対応し、安全な
   コマンド変種はグループで再利用し、denial は exact fingerprint で扱います。
@@ -117,11 +117,14 @@ deepseek tui --runtime-url http://127.0.0.1:13000
 DeepSeekCode は自身の開発に使える段階ですが、Claude Code CLI / Codex CLI
 ほどの製品成熟度にはまだ届いていません。大きな残差は次の通りです。
 
-- CI-smoked default TUI entrypoint と現行 shell-supervisor coverage を超える、
-  より深い interactive shell / PTY takeover proof。
+- 現行 bounded interactive attach と CI-smoked default TUI entrypoint を超える、
+  byte-level PTY proxy と Windows shell-supervisor ConPTY proof。
 - disposable な実外部リポジトリでの live external write-fixture サンプル厚み。
 - npm registry 公開と Homebrew tap。どちらも資格情報が未設定です。
 - 決定的な TUI snapshot を超えた、レビュー済みでコミットされた model-backed README メディア。
+
+現在の状態、次の作業、最終目標は
+[docs/current-status.md](./docs/current-status.md) にまとめています。
 
 ## Demo 素材
 

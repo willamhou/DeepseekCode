@@ -673,6 +673,7 @@ pub enum AgentsShellAction {
         limit_bytes: Option<u64>,
         tail: bool,
         follow: bool,
+        interactive: bool,
         poll_ms: Option<u64>,
         max_ms: Option<u64>,
     },
@@ -2409,6 +2410,7 @@ fn parse_agents_shell_attach_args(args: Vec<String>) -> Result<AgentsAction, Str
     let mut limit_bytes = None;
     let mut tail = false;
     let mut follow = false;
+    let mut interactive = false;
     let mut poll_ms = None;
     let mut max_ms = None;
     let mut i = 0;
@@ -2417,6 +2419,7 @@ fn parse_agents_shell_attach_args(args: Vec<String>) -> Result<AgentsAction, Str
             "--json" => json = true,
             "--tail" => tail = true,
             "--follow" => follow = true,
+            "--interactive" | "--takeover" => interactive = true,
             "--cursor" => {
                 i += 1;
                 cursor = Some(parse_agents_shell_u64(&args, i, "attach", "--cursor")?);
@@ -2439,7 +2442,7 @@ fn parse_agents_shell_attach_args(args: Vec<String>) -> Result<AgentsAction, Str
             }
             value if value.starts_with("--") => {
                 return Err(format!(
-                    "unknown flag for `agents shell attach`: {value}; expected --cursor|--wait-ms|--poll-ms|--max-ms|--limit-bytes|--tail|--follow|--json"
+                    "unknown flag for `agents shell attach`: {value}; expected --cursor|--wait-ms|--poll-ms|--max-ms|--limit-bytes|--tail|--follow|--interactive|--takeover|--json"
                 ));
             }
             value => set_agents_shell_task_id(&mut task_id, value, "attach")?,
@@ -2455,6 +2458,7 @@ fn parse_agents_shell_attach_args(args: Vec<String>) -> Result<AgentsAction, Str
             limit_bytes,
             tail,
             follow,
+            interactive,
             poll_ms,
             max_ms,
         },
@@ -5687,11 +5691,40 @@ mod tests {
                     limit_bytes: Some(4096),
                     tail: false,
                     follow: true,
+                    interactive: false,
                     poll_ms: Some(50),
                     max_ms: Some(1000),
                 },
                 json: false,
             }))) if task_id == "task-1"
+        ));
+
+        let shell_attach_interactive = Cli::from_argv(vec![
+            "agents".to_string(),
+            "shell".to_string(),
+            "attach".to_string(),
+            "task-2".to_string(),
+            "--takeover".to_string(),
+            "--cursor".to_string(),
+            "12".to_string(),
+        ])
+        .expect("parse should succeed");
+        assert!(matches!(
+            shell_attach_interactive.command,
+            Some(Command::Agents(AgentsAction::Shell(AgentsShellArgs {
+                action: AgentsShellAction::Attach {
+                    ref task_id,
+                    cursor: Some(12),
+                    wait_ms: None,
+                    limit_bytes: None,
+                    tail: false,
+                    follow: false,
+                    interactive: true,
+                    poll_ms: None,
+                    max_ms: None,
+                },
+                json: false,
+            }))) if task_id == "task-2"
         ));
 
         let shell_resize = Cli::from_argv(vec![
