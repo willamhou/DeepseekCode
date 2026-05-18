@@ -344,7 +344,8 @@
 
 ### Phase 9: 交互式体验
 
-- REPL (`deepseek` / `deepseek chat`)：v1 已完成
+- REPL (`deepseek chat` / `deepseek repl` / `deepseek interactive`)：v1 已完成
+  - 后续默认入口已调整：真实 TTY 中裸 `deepseek` 进入 TUI workbench
   - 持久化 stdin 循环 + `> ` 提示符 + TTY 守门
   - 跨轮 transcript 完整传给 LLM (user / assistant / tool 三类 turn)
   - 9 个 slash 命令：`/quit /help /clear /budget /skill /diff /save /load /cost`
@@ -1404,7 +1405,9 @@
 **11a-1 (`main`, 2026-05-09) — 已完成**：
 - `deepseek` 已收敛为主入口：
   - `Cargo.toml` 默认运行目标切到 `deepseek`
-  - `deepseek` / `deepseek chat` / `deepseek repl` / `deepseek interactive` 同入口
+  - 历史上 `deepseek` / `deepseek chat` / `deepseek repl` / `deepseek interactive`
+    同入口；当前真实 TTY 中裸 `deepseek` 已改为进入 TUI workbench，REPL 改由
+    `deepseek chat` / `deepseek repl` / `deepseek interactive` 显式启动
   - 主文档、PR/CI 文档、streaming/todos 文档、关键 runtime 提示统一为 `deepseek`
   - `dscode` 退回兼容别名，不再作为主品牌展示
 - review / 收尾：

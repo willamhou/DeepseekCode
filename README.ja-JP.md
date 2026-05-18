@@ -18,9 +18,11 @@ DeepSeekCode は DeepSeek-first のターミナル向けコーディングエー
 
 ## 現在できること
 
+- 実 TTY で `deepseek` を実行すると full-screen coding-agent terminal
+  workbench が起動します。`deepseek chat` で行指向 REPL も使えます。
 - `deepseek run` で単発のコーディングタスクを実行できます。
-- `deepseek tui` でキーボード操作のターミナル workbench を開き、Plan / Agent /
-  YOLO モードを切り替えられます。
+- `deepseek tui` で明示的にキーボード操作のターミナル workbench を開き、
+  Plan / Agent / YOLO モードを切り替えられます。
 - `.dscode/runtime/` 以下に sessions、threads、turns、items、events、tasks、
   usage、automations を永続化します。
 - ファイルの読み取り/検索、パッチ適用、diff review、todo、rollback snapshot、
@@ -87,10 +89,12 @@ deepseek doctor --json
 コーディングタスクを実行:
 
 ```bash
+deepseek
+deepseek chat
 deepseek run "explain the current repository structure"
 ```
 
-TUI を起動:
+TUI を明示的に起動:
 
 ```bash
 deepseek tui
@@ -112,7 +116,8 @@ deepseek tui --runtime-url http://127.0.0.1:13000
 DeepSeekCode は自身の開発に使える段階ですが、Claude Code CLI / Codex CLI
 ほどの製品成熟度にはまだ届いていません。大きな残差は次の通りです。
 
-- ネイティブ supervisor-owned PTY の attach/stdin/resize/replay/wait/cancel。
+- TTY-aware default TUI entrypoint と現行 Unix/Linux native-supervisor PTY
+  smoke coverage を超える、さらに広い terminal/platform proof。
 - disposable な実外部リポジトリでの live external write-fixture サンプル厚み。
 - npm registry 公開と Homebrew tap。どちらも資格情報が未設定です。
 - 決定的な TUI snapshot を超えた、レビュー済みでコミットされた model-backed README メディア。

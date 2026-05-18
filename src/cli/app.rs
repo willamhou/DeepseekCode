@@ -1,8 +1,35 @@
 use std::env;
+use std::io::{self, IsTerminal};
 
 #[derive(Debug)]
 pub struct Cli {
     pub command: Option<Command>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TerminalContext {
+    stdin_tty: bool,
+    stdout_tty: bool,
+}
+
+impl TerminalContext {
+    fn current() -> Self {
+        Self {
+            stdin_tty: io::stdin().is_terminal(),
+            stdout_tty: io::stdout().is_terminal(),
+        }
+    }
+
+    fn non_interactive() -> Self {
+        Self {
+            stdin_tty: false,
+            stdout_tty: false,
+        }
+    }
+
+    fn supports_full_screen(self) -> bool {
+        self.stdin_tty && self.stdout_tty
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -355,13 +382,25 @@ pub fn parse_pr_subcommand(args: Vec<String>) -> Result<PrAction, String> {
 impl Cli {
     pub fn parse() -> Result<Self, String> {
         let argv = env::args().skip(1).collect::<Vec<_>>();
-        Self::from_argv(argv)
+        Self::from_argv_with_terminal(argv, TerminalContext::current())
     }
 
-    pub fn from_argv(mut args: Vec<String>) -> Result<Self, String> {
+    pub fn from_argv(args: Vec<String>) -> Result<Self, String> {
+        Self::from_argv_with_terminal(args, TerminalContext::non_interactive())
+    }
+
+    fn from_argv_with_terminal(
+        mut args: Vec<String>,
+        terminal: TerminalContext,
+    ) -> Result<Self, String> {
         if args.is_empty() {
+            let command = if terminal.supports_full_screen() {
+                Command::Tui(TuiArgs::default())
+            } else {
+                Command::Chat(ChatArgs::default())
+            };
             return Ok(Self {
-                command: Some(Command::Chat(ChatArgs::default())),
+                command: Some(command),
             });
         }
 
@@ -5030,6 +5069,48 @@ mod tests {
     fn cli_from_argv_defaults_to_chat_when_no_args_are_provided() {
         let cli = Cli::from_argv(Vec::new()).expect("parse should succeed");
         assert!(matches!(cli.command, Some(Command::Chat(_))));
+    }
+
+    #[test]
+    fn cli_from_argv_defaults_to_tui_when_no_args_have_terminal() {
+        let cli = Cli::from_argv_with_terminal(
+            Vec::new(),
+            TerminalContext {
+                stdin_tty: true,
+                stdout_tty: true,
+            },
+        )
+        .expect("parse should succeed");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Tui(TuiArgs {
+                demo: false,
+                once: false,
+                runtime_url: None
+            }))
+        ));
+    }
+
+    #[test]
+    fn cli_from_argv_keeps_no_args_repl_without_full_terminal() {
+        for terminal in [
+            TerminalContext {
+                stdin_tty: false,
+                stdout_tty: true,
+            },
+            TerminalContext {
+                stdin_tty: true,
+                stdout_tty: false,
+            },
+            TerminalContext {
+                stdin_tty: false,
+                stdout_tty: false,
+            },
+        ] {
+            let cli =
+                Cli::from_argv_with_terminal(Vec::new(), terminal).expect("parse should succeed");
+            assert!(matches!(cli.command, Some(Command::Chat(_))));
+        }
     }
 
     #[test]

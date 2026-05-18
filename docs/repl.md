@@ -1,13 +1,12 @@
-# `deepseek` — REPL Mode
+# `deepseek chat` — REPL Mode
 
-`deepseek` enters a persistent interactive REPL with cross-turn
-transcript, slash commands, and JSON session save/load. Each user
-message triggers an agent loop with up to 20 steps (configurable via
-`/budget`).
+`deepseek chat` enters a persistent interactive REPL with cross-turn transcript,
+slash commands, and JSON session save/load. Each user message triggers an agent
+loop with up to 20 steps (configurable via `/budget`). Bare `deepseek` now
+starts the full-screen TUI workbench when stdin and stdout are both real TTYs.
 
 Explicit aliases are also supported:
 
-- `deepseek chat`
 - `deepseek repl`
 - `deepseek interactive`
 

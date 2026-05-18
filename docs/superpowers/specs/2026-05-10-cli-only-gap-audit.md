@@ -101,7 +101,8 @@ Current verification:
 
 Current:
 
-- `deepseek` enters REPL.
+- `deepseek` enters the full-screen TUI in real TTYs; `deepseek chat` enters
+  the line-oriented REPL.
 - `deepseek run "task"` handles one-shot tasks.
 - `/save`, `/load`, `/todos`, `/cost`, `/diff`, custom slash commands exist.
 

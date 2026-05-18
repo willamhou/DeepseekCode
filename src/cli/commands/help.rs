@@ -27,8 +27,9 @@ fn global_help() -> &'static str {
         "DeepSeekCode\n",
         "\n",
         "Usage:\n",
-        "  deepseek                         Start the interactive coding agent REPL (requires a TTY)\n",
-        "  deepseek tui                     Start the full-screen terminal workbench\n",
+        "  deepseek                         Start the full-screen terminal workbench in a TTY\n",
+        "  deepseek chat                    Start the line-oriented coding agent REPL\n",
+        "  deepseek tui                     Explicitly start the terminal workbench\n",
         "  deepseek run \"<task>\"             Run one coding task and exit\n",
         "  deepseek exec run \"<task>\"        Run a durable one-shot agent task\n",
         "  deepseek dogfood <action>        Run self-verification and release evidence commands\n",
@@ -47,6 +48,7 @@ fn global_help() -> &'static str {
         "\n",
         "Examples:\n",
         "  deepseek\n",
+        "  deepseek chat\n",
         "  deepseek tui\n",
         "  deepseek run \"fix the failing tests and summarize the diff\"\n",
         "  deepseek dogfood live-plan --limit 10\n",
@@ -82,7 +84,7 @@ fn run_help() -> &'static str {
         "  deepseek run [--skill <name>] [--budget <1..200>] [--benchmark-gate] \"<task>\"\n",
         "\n",
         "Runs one coding-agent task and exits. Use bare `deepseek` for the interactive\n",
-        "terminal REPL or `deepseek tui` for the full-screen workbench."
+        "full-screen workbench or `deepseek chat` for the line-oriented REPL."
     )
 }
 
@@ -235,7 +237,8 @@ mod tests {
     fn global_help_mentions_interactive_entrypoint() {
         let help = render_help(&[]);
         assert!(help.contains("deepseek"));
-        assert!(help.contains("interactive coding agent REPL"));
+        assert!(help.contains("full-screen terminal workbench"));
+        assert!(help.contains("deepseek chat"));
         assert!(help.contains("deepseek tui"));
     }
 

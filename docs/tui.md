@@ -1,6 +1,8 @@
 # `deepseek tui` — Terminal Workbench
 
-`deepseek tui` starts the ratatui/crossterm full-screen workbench shell.
+`deepseek tui` starts the ratatui/crossterm full-screen workbench shell. Bare
+`deepseek` now routes here automatically when stdin and stdout are both real
+TTYs; use `deepseek chat` for the older line-oriented REPL.
 
 Current surfaces:
 
@@ -297,6 +299,7 @@ Current surfaces:
 Useful commands:
 
 ```bash
+deepseek
 deepseek tui
 deepseek tui --demo
 deepseek tui --demo --once

@@ -283,7 +283,8 @@ Phase 11 拆成 6 条 workstream：
 范围：
 
 - CLI 帮助、doctor、README、REPL guide 统一主品牌
-- `deepseek` / `deepseek chat` / `deepseek repl` / `deepseek interactive` 同心智
+- 裸 `deepseek` 保持主入口心智；REPL 由 `deepseek chat` /
+  `deepseek repl` / `deepseek interactive` 显式启动
 - REPL 启动时给出更明确的首屏引导
 - 非 TTY / 非交互错误提示统一
 - one-shot 指令示例统一为 `deepseek run "..."`

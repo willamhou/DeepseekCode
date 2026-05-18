@@ -1,7 +1,7 @@
 # DeepSeek-TUI Parity Plan
 
 **Status:** active
-**Source comparison:** `Hmbown/DeepSeek-TUI` refreshed at `/tmp/deepseek-tui-compare-20260514`; original local HEAD `9483248a9f35b5f2b56c34b5b84fbc5334473c9d`, latest fetched `origin/main` `b834548d3b1dd60d08f8023d64ba129945f44420`.
+**Source comparison:** `Hmbown/DeepSeek-TUI` refreshed at `/tmp/deepseek-tui-compare-20260514`; original local HEAD `9483248a9f35b5f2b56c34b5b84fbc5334473c9d`, latest fetched `origin/main` `eeccf7d`.
 **Current repo:** `willamhou/DeepSeekCode` (`PUBLIC` after 2026-05-12 repo publication), release command `deepseek`, compatibility alias `dscode`.
 
 ## Objective
@@ -120,10 +120,15 @@ approve-once remains exact, approve-for-session uses command/path/host grouping,
 and denials only reuse exact fingerprints. The TUI approval modal exposes `a`
 for session approval and cached resolver decisions are persisted as
 `permission_response` events with `scope=cached`.
+Bare `deepseek` now also matches DeepSeek-TUI's dispatcher-style default in real
+TTY sessions by opening the full-screen workbench directly; `deepseek chat` /
+`repl` / `interactive` remain explicit aliases for the line-oriented REPL, and
+non-full-screen contexts keep the prior REPL path with its existing fail-closed
+TTY guidance.
 The largest remaining DeepSeek-TUI / Claude Code CLI / Codex CLI gaps are now:
 
-- full terminal takeover and broader platform proof beyond the current
-  Unix/Linux native-supervisor smoke coverage;
+- broader terminal/platform proof beyond the TTY-aware default TUI entrypoint
+  and current Unix/Linux native-supervisor smoke coverage;
 - model-backed live dogfood and external write-fixture sample depth across
   disposable real repositories;
 - release-channel proof for npm and Homebrew once credentials are available;

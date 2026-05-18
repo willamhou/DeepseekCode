@@ -18,7 +18,8 @@ iterating from the same terminal.
 
 ## What Works Today
 
-- `deepseek` for the interactive coding-agent REPL.
+- `deepseek` starts the full-screen coding-agent terminal workbench when run in
+  a real TTY; `deepseek chat` keeps the line-oriented REPL available.
 - `deepseek run` for one-shot coding tasks.
 - `deepseek tui` for a keyboard-driven terminal workbench with Plan / Agent /
   YOLO modes.
@@ -87,10 +88,11 @@ Run a coding task:
 
 ```bash
 deepseek
+deepseek chat
 deepseek run "explain the current repository structure"
 ```
 
-Start the TUI:
+Start the TUI explicitly:
 
 ```bash
 deepseek tui
@@ -112,8 +114,8 @@ git.
 DeepSeekCode is close enough to use as its own coding CLI, but it is not yet at
 Claude Code CLI / Codex CLI polish. The largest remaining gaps are:
 
-- full terminal takeover and broader platform proof beyond current Unix/Linux
-  native-supervisor PTY smoke coverage;
+- broader terminal/platform proof beyond the TTY-aware default TUI entrypoint
+  and current Unix/Linux native-supervisor PTY smoke coverage;
 - deeper model-backed live dogfood and external write-fixture sample evidence
   across disposable real repositories;
 - npm registry publishing and a Homebrew tap, both blocked on credentials;
