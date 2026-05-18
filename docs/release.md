@@ -121,6 +121,7 @@ cargo package --allow-dirty
 (cd npm && npm run check:version)
 (cd npm && npm test)
 DEEPSEEK_BINARY=./target/release/deepseek node npm/bin/deepseek.js version
+DEEPSEEK_BINARY=./target/release/deepseek node npm/scripts/test-tui-entrypoint-wrapper.js
 node npm/scripts/stage-platform-package.js --platform linux-x64 --binary ./target/release/deepseek
 node npm/scripts/verify-platform-package.js --platform linux-x64
 ./target/release/deepseek update publish-status

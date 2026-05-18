@@ -25,7 +25,8 @@
   ],
   "scripts": {
     "check:version": "node scripts/check-version-sync.js",
-    "test": "node --check bin/deepseek.js && node scripts/test-wrapper-resolution.js"
+    "test": "node --check bin/deepseek.js && node --check scripts/test-tui-entrypoint-wrapper.js && node scripts/test-wrapper-resolution.js",
+    "test:tui-entrypoint": "node scripts/test-tui-entrypoint-wrapper.js"
   },
   "publishConfig": {
     "access": "public"

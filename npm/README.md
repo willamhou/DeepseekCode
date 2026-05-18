@@ -30,6 +30,7 @@ For local testing, set `DEEPSEEK_BINARY` to an existing binary:
 
 ```bash
 DEEPSEEK_BINARY=../target/release/deepseek node bin/deepseek.js version
+DEEPSEEK_BINARY=../target/release/deepseek npm run test:tui-entrypoint
 ```
 
 The release matrix stages each compiled binary into `npm/platforms/<platform>/bin`

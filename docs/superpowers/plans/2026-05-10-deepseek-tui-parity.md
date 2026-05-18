@@ -132,6 +132,10 @@ through `script`, verifies alternate-screen TUI rendering, sends `q`, and emits
 README demo refresh is now also repo-native: `docs/demo/record-readme-demo.sh`
 regenerates the animated and static SVG assets and fails if the README
 animation loses SVG keyframes.
+The npm wrapper now also has release smoke coverage for that same entrypoint:
+`npm/scripts/test-tui-entrypoint-wrapper.js` runs the real PTY smoke through
+`npm/bin/deepseek.js` with `DEEPSEEK_BINARY` pointing at the selected binary,
+and the wrapper is committed executable.
 The largest remaining DeepSeek-TUI / Claude Code CLI / Codex CLI gaps are now:
 
 - broader terminal/platform proof beyond the TTY-aware default TUI entrypoint,
