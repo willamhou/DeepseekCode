@@ -39,11 +39,14 @@ chmod 600 /tmp/deepseek-demo.key
 DEEPSEEK_DEMO_KEY_FILE=/tmp/deepseek-demo.key docs/demo/record-model-backed-demo.sh
 latest_log=$(ls -t docs/demo/deepseek-code-model-demo-*.log | head -n 1)
 docs/demo/verify-model-backed-demo.js "$latest_log"
+docs/demo/render-model-backed-demo-svg.js "$latest_log" --out docs/demo/deepseek-code-model-demo.svg
 ```
 
 The default output is a timestamped `docs/demo/deepseek-code-model-demo-*.log`
 transcript. Verify the transcript before converting a reviewed successful run
-into the GIF/MP4 or SVG asset linked from the README; do not publish runs
+into the GIF/MP4 or SVG asset linked from the README. The SVG renderer first
+reuses the verifier, then extracts the failing test, `deepseek exec`, diff, and
+passing test evidence into a static terminal-style asset. Do not publish runs
 created with `DEEPSEEK_DEMO_ALLOW_OFFLINE=1` as model-backed evidence.
 
 `DEEPSEEK_DEMO_KEY_FILE` must point outside this repository so API keys cannot
@@ -55,4 +58,5 @@ The verifier can be checked without a model call:
 
 ```bash
 docs/demo/verify-model-backed-demo.js --self-test
+docs/demo/render-model-backed-demo-svg.js --self-test
 ```

@@ -151,6 +151,7 @@ jobs:
           docs/demo/record-model-backed-demo.sh --dry-run
           docs/demo/record-model-backed-demo.sh --redaction-self-test
           docs/demo/verify-model-backed-demo.js --self-test
+          docs/demo/render-model-backed-demo-svg.js --self-test
 
       - name: Cargo Package Verify
         run: cargo package
@@ -232,6 +233,7 @@ jobs:
             echo "- npm wrapper tests and root/platform dry packs"
             echo "- staged npm platform binary smoke"
             echo "- model-backed README demo evidence checks"
+            echo "- model-backed README SVG render self-test"
             echo "- Homebrew formula syntax and render smoke"
             echo "- Docker artifact smoke"
             echo "- runtime service template smoke"

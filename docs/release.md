@@ -32,6 +32,7 @@ chmod 600 /tmp/deepseek-demo.key
 DEEPSEEK_DEMO_KEY_FILE=/tmp/deepseek-demo.key docs/demo/record-model-backed-demo.sh
 latest_log=$(ls -t docs/demo/deepseek-code-model-demo-*.log | head -n 1)
 docs/demo/verify-model-backed-demo.js "$latest_log"
+docs/demo/render-model-backed-demo-svg.js "$latest_log" --out docs/demo/deepseek-code-model-demo.svg
 ```
 
 ## Required Gates
@@ -47,6 +48,7 @@ deepseek benchmark
 docs/demo/record-model-backed-demo.sh --dry-run
 docs/demo/record-model-backed-demo.sh --redaction-self-test
 docs/demo/verify-model-backed-demo.js --self-test
+docs/demo/render-model-backed-demo-svg.js --self-test
 ```
 
 `deepseek benchmark` must pass all three layers:

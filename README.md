@@ -148,6 +148,7 @@ chmod 600 /tmp/deepseek-demo.key
 DEEPSEEK_DEMO_KEY_FILE=/tmp/deepseek-demo.key docs/demo/record-model-backed-demo.sh
 latest_log=$(ls -t docs/demo/deepseek-code-model-demo-*.log | head -n 1)
 docs/demo/verify-model-backed-demo.js "$latest_log"
+docs/demo/render-model-backed-demo-svg.js "$latest_log" --out docs/demo/deepseek-code-model-demo.svg
 ```
 
 ## Development Checks
@@ -158,6 +159,7 @@ cargo test --lib -- --test-threads=1
 cargo package --allow-dirty
 node scripts/check-secrets.js
 docs/demo/verify-model-backed-demo.js --self-test
+docs/demo/render-model-backed-demo-svg.js --self-test
 deepseek tui --demo --once
 ```
 

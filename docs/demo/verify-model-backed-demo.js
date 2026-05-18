@@ -182,9 +182,15 @@ function main(argv) {
   console.log(`model-backed demo transcript ok: ${result.label} (${result.bytes} bytes)`);
 }
 
-try {
-  main(process.argv);
-} catch (error) {
-  console.error(`model-backed demo transcript verification failed: ${error.message}`);
-  process.exit(1);
+if (require.main === module) {
+  try {
+    main(process.argv);
+  } catch (error) {
+    console.error(`model-backed demo transcript verification failed: ${error.message}`);
+    process.exit(1);
+  }
 }
+
+module.exports = {
+  validateTranscript,
+};
