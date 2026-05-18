@@ -589,7 +589,7 @@ mod windows_conpty {
         let stdout = reader.join().unwrap_or_default();
 
         Ok(EntrypointSmokeOutput {
-            backend: "conpty-windows".to_string(),
+            backend: "conpty-windows-cmd".to_string(),
             status_code,
             timed_out,
             stdout: String::from_utf8_lossy(&stdout).into_owned(),
@@ -624,7 +624,7 @@ mod windows_conpty {
     }
 
     fn windows_command_line(bin: &Path) -> Vec<u16> {
-        let mut command = windows_quote_path(bin);
+        let mut command = format!(r#"cmd.exe /d /s /c "{}""#, windows_quote_path(bin));
         command.push('\0');
         command.encode_utf16().collect()
     }
