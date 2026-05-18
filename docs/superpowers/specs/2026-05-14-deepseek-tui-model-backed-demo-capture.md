@@ -29,6 +29,8 @@ capture workflow, the README could only describe this as future manual work.
 - Added `docs/demo/verify-model-backed-demo.js`, which validates the transcript
   shape before media conversion and rejects offline rehearsal markers, redaction
   markers, and API-key-shaped tokens.
+- Release Matrix packaging checks now run the recorder syntax check, dry-run,
+  redaction self-test, and verifier self-test without requiring API credentials.
 
 ## Verification
 
@@ -36,6 +38,7 @@ capture workflow, the README could only describe this as future manual work.
 - `docs/demo/record-model-backed-demo.sh --dry-run`
 - `docs/demo/record-model-backed-demo.sh --redaction-self-test`
 - `docs/demo/verify-model-backed-demo.js --self-test`
+- release workflow `Model Demo Evidence Checks`
 - `cargo fmt --check`
 - `cargo check`
 - `cargo test --lib -- --test-threads=1`

@@ -150,7 +150,9 @@ stream redacts known API key values and exposes `--redaction-self-test` for
 offline verification. The model-backed README transcript now also has
 `docs/demo/verify-model-backed-demo.js`, which verifies the failure -> agent
 exec -> diff -> passing-test evidence shape and rejects offline rehearsal or
-secret-bearing transcripts before media conversion.
+secret-bearing transcripts before media conversion; Release Matrix packaging
+checks now run the recorder dry-run, redaction self-test, and verifier self-test
+without requiring API credentials.
 Release packaging now also runs `node scripts/check-secrets.js`, a tracked-file
 secret scan that blocks committed `sk-...` style API tokens before publishing.
 The largest remaining DeepSeek-TUI / Claude Code CLI / Codex CLI gaps are now:
