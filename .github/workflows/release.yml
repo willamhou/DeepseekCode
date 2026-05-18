@@ -162,7 +162,9 @@ jobs:
           done
 
       - name: Homebrew Formula Syntax
-        run: ruby -c packaging/homebrew/deepseek.rb
+        run: |
+          node packaging/homebrew/verify-formula.js
+          ruby -c packaging/homebrew/deepseek.rb
 
       - name: Homebrew Formula Render Smoke
         run: |
@@ -172,6 +174,7 @@ jobs:
           printf '%064d  deepseek-macos-arm64.tar.gz\n' 3 > target/homebrew-shas/deepseek-macos-arm64.tar.gz.sha256
           version="$(node -e "const fs = require('fs'); process.stdout.write(fs.readFileSync('Cargo.toml', 'utf8').match(/^version = \"([^\"]+)\"/m)[1])")"
           cargo run --bin deepseek -- update homebrew-formula --version "$version" --repo willamhou/DeepSeekCode --dist target/homebrew-shas --formula packaging/homebrew/deepseek.rb --out target/deepseek.rb
+          node packaging/homebrew/verify-formula.js --formula target/deepseek.rb --release
           ruby -c target/deepseek.rb
 
       - name: Docker Artifact Smoke
@@ -410,6 +413,7 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           cargo run --bin deepseek -- update homebrew-formula --version "${version}" --repo "${GITHUB_REPOSITORY}" --dist dist-assets --formula packaging/homebrew/deepseek.rb --out target/deepseek.rb
+          node packaging/homebrew/verify-formula.js --formula target/deepseek.rb --release
           ruby -c target/deepseek.rb
 
       - name: Checkout Homebrew Tap

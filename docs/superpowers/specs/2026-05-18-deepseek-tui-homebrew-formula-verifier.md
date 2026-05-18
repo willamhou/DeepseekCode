@@ -31,6 +31,8 @@ from release-publish mode.
   `deepseek update homebrew-formula` renders real release checksums.
 - README, install docs, release docs, and the parity plan now include the
   verifier.
+- The Release Matrix packaging and tap-publish jobs run the verifier in
+  template mode and rendered-release mode.
 
 ## Validation
 
