@@ -10,9 +10,12 @@ what must remain explicit until the full durable runtime lands.
 
 `deepseek tui` starts the ratatui/crossterm full-screen workbench shell. It has
 Plan / Agent / YOLO mode tabs, sidebar, transcript/composer frame, task panel,
-session picker, command palette, and approval modal surfaces. `deepseek tui
+session picker, command palette, and approval modal surfaces. Bare `deepseek`
+enters this workbench when stdin and stdout are both real TTYs. `deepseek tui
 --demo --once` renders a deterministic non-interactive snapshot for release and
-CI checks.
+CI checks; `deepseek tui --entrypoint-smoke --smoke-bin <path>` validates the
+bare entrypoint under a real PTY and emits `deepseek.tui.entrypoint_smoke.v1`
+JSON evidence.
 
 The TUI reads file-backed durable sessions, linked threads, and thread item
 timelines from `.dscode/runtime/` at startup and refreshes them while the

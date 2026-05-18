@@ -114,6 +114,7 @@ cargo build --release
 ./target/release/deepseek agents service-doctor --kind all --out target/service-smoke --bin ./target/release/deepseek --workdir "$PWD" --json
 mkdir -p /tmp/dsc-smk
 ./target/release/deepseek agents service-smoke --bin ./target/release/deepseek --workdir /tmp/dsc-smk --json
+./target/release/deepseek tui --entrypoint-smoke --smoke-bin ./target/release/deepseek
 test -f target/service-smoke/SERVICES.md
 ./target/release/deepseek agents rlm-status --json
 cargo package --allow-dirty

@@ -492,9 +492,9 @@ curl http://127.0.0.1:8765/runtime
 
 ## 基本用法
 
-- `deepseek`：直接进入交互模式
+- `deepseek`：在真实 TTY 中直接进入全屏 TUI workbench
 - `deepseek "task"` 或 `deepseek run "task"`：执行单次任务
-- `deepseek tui [--demo]`：启动 ratatui/crossterm 全屏 workbench shell；`--once` 可输出 CI 快照；command palette 支持 `mcp` full-width manager screen 和项目级 `mcp init/add/enable/disable/remove/validate`
+- `deepseek tui [--demo]`：启动 ratatui/crossterm 全屏 workbench shell；`--once` 可输出 CI 快照；`--entrypoint-smoke --smoke-bin <path>` 会在真实 PTY 中验证裸入口进入 TUI；command palette 支持 `mcp` full-width manager screen 和项目级 `mcp init/add/enable/disable/remove/validate`
 - `deepseek benchmark`：跑本地 benchmark 基线
 - `deepseek dogfood ...`：记录或回放真实任务
 - `deepseek update`：打印 source checkout 安装命令和 release package/verify 提示

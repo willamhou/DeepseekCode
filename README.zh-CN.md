@@ -111,8 +111,8 @@ deepseek tui --runtime-url http://127.0.0.1:13000
 DeepSeekCode 已经可以直接拿来写自己的代码，但还没有达到 Claude Code CLI /
 Codex CLI 的产品成熟度。最大差距集中在：
 
-- TTY-aware 默认 TUI 入口和当前 Unix/Linux native-supervisor PTY smoke
-  coverage 之外的更多 terminal/platform 证明；
+- TTY-aware 默认 TUI 入口、PTY entrypoint smoke 和当前 Unix/Linux
+  native-supervisor PTY smoke coverage 之外的更多 terminal/platform 证明；
 - 真实 disposable 外部仓库上更厚的 live write-fixture 样本证据；
 - npm registry 发布和 Homebrew tap，这两项还缺少对应凭据；
 - 超出确定性 TUI snapshot、已 review 并提交的真实 model-backed README 媒体素材。
@@ -148,6 +148,7 @@ cargo fmt --check
 cargo test --lib -- --test-threads=1
 cargo package --allow-dirty
 deepseek tui --demo --once
+deepseek tui --entrypoint-smoke --smoke-bin "$(command -v deepseek)"
 ```
 
 npm wrapper 元数据检查：
@@ -164,6 +165,7 @@ deepseek update publish-status --dist dist-assets --npm-dist npm-dist --strict
 deepseek update publish-status --json
 deepseek agents service-doctor --kind all --workdir "$PWD" --bin "$(command -v deepseek)" --json
 deepseek agents service-smoke --workdir "$PWD" --bin "$(command -v deepseek)" --json
+deepseek tui --entrypoint-smoke --smoke-bin "$(command -v deepseek)"
 ```
 
 PR/CI 工作流检查：

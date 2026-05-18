@@ -12,7 +12,7 @@ use std::sync::{
     Arc,
 };
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use flate2::read::GzDecoder;
 
@@ -90,6 +90,10 @@ use crate::workspace_trust::{
 };
 
 pub fn run(args: TuiArgs) -> AppResult<()> {
+    if args.entrypoint_smoke {
+        return run_entrypoint_smoke(args.smoke_bin.as_deref());
+    }
+
     if args.demo {
         let app = TuiApp::demo();
         if args.once {
@@ -146,6 +150,241 @@ pub fn run(args: TuiArgs) -> AppResult<()> {
         },
         move |app| drain_tui_live_events(&live_rx, app),
     )
+}
+
+#[derive(Debug)]
+struct EntrypointSmokeOutput {
+    backend: String,
+    status_code: Option<i32>,
+    timed_out: bool,
+    stdout: String,
+    stderr: String,
+}
+
+#[derive(Debug)]
+struct EntrypointSmokeReport {
+    ok: bool,
+    backend: String,
+    bin: String,
+    status_code: Option<i32>,
+    timed_out: bool,
+    entered_alternate_screen: bool,
+    left_alternate_screen: bool,
+    rendered_tui: bool,
+    sent_quit: bool,
+    stdout_bytes: usize,
+    stderr_bytes: usize,
+    stdout_preview: String,
+    stderr_preview: String,
+}
+
+fn run_entrypoint_smoke(smoke_bin: Option<&str>) -> AppResult<()> {
+    let bin = match smoke_bin {
+        Some(path) => PathBuf::from(path),
+        None => std::env::current_exe()
+            .map_err(|err| app_error(format!("failed to resolve current executable: {err}")))?,
+    };
+    let output = run_entrypoint_smoke_process(&bin, Duration::from_secs(6))?;
+    let report = entrypoint_smoke_report(&bin, output);
+    println!("{}", json_value_to_string(&entrypoint_smoke_json(&report)));
+    if report.ok {
+        Ok(())
+    } else {
+        Err(app_error(format!(
+            "TUI entrypoint smoke failed for {}",
+            bin.display()
+        )))
+    }
+}
+
+#[cfg(unix)]
+fn run_entrypoint_smoke_process(bin: &Path, timeout: Duration) -> AppResult<EntrypointSmokeOutput> {
+    let linux = vec![
+        "-q".to_string(),
+        "-e".to_string(),
+        "-c".to_string(),
+        entrypoint_smoke_shell_command(bin),
+        "/dev/null".to_string(),
+    ];
+    let first = run_script_smoke(bin, &linux, timeout, "script-linux")?;
+    if first.status_code == Some(0)
+        || (!first.stderr.contains("invalid option") && !first.stderr.contains("illegal option"))
+    {
+        return Ok(first);
+    }
+
+    let bsd = vec![
+        "-q".to_string(),
+        "/dev/null".to_string(),
+        "sh".to_string(),
+        "-c".to_string(),
+        entrypoint_smoke_shell_command(bin),
+    ];
+    run_script_smoke(bin, &bsd, timeout, "script-bsd")
+}
+
+#[cfg(not(unix))]
+fn run_entrypoint_smoke_process(
+    _bin: &Path,
+    _timeout: Duration,
+) -> AppResult<EntrypointSmokeOutput> {
+    Err(app_error(
+        "TUI entrypoint smoke currently requires a Unix `script` command",
+    ))
+}
+
+#[cfg(unix)]
+fn run_script_smoke(
+    bin: &Path,
+    args: &[String],
+    timeout: Duration,
+    backend: &str,
+) -> AppResult<EntrypointSmokeOutput> {
+    if !bin.exists() {
+        return Err(app_error(format!(
+            "TUI entrypoint smoke binary does not exist: {}",
+            bin.display()
+        )));
+    }
+    let mut child = Command::new("script")
+        .args(args)
+        .env("TERM", "xterm-256color")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| app_error(format!("failed to start `script` for TUI smoke: {err}")))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        thread::sleep(Duration::from_millis(800));
+        let _ = stdin.write_all(b"q");
+        let _ = stdin.flush();
+    }
+
+    let started = Instant::now();
+    let mut timed_out = false;
+    let status = loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|err| app_error(format!("failed to poll TUI smoke child: {err}")))?
+        {
+            break status;
+        }
+        if started.elapsed() >= timeout {
+            timed_out = true;
+            let _ = child.kill();
+            break child
+                .wait()
+                .map_err(|err| app_error(format!("failed to reap timed-out TUI smoke: {err}")))?;
+        }
+        thread::sleep(Duration::from_millis(20));
+    };
+
+    let mut stdout = Vec::new();
+    if let Some(mut out) = child.stdout.take() {
+        out.read_to_end(&mut stdout)
+            .map_err(|err| app_error(format!("failed to read TUI smoke stdout: {err}")))?;
+    }
+    let mut stderr = Vec::new();
+    if let Some(mut err) = child.stderr.take() {
+        err.read_to_end(&mut stderr)
+            .map_err(|err| app_error(format!("failed to read TUI smoke stderr: {err}")))?;
+    }
+
+    Ok(EntrypointSmokeOutput {
+        backend: backend.to_string(),
+        status_code: status.code(),
+        timed_out,
+        stdout: String::from_utf8_lossy(&stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+    })
+}
+
+fn entrypoint_smoke_report(bin: &Path, output: EntrypointSmokeOutput) -> EntrypointSmokeReport {
+    let entered_alternate_screen = output.stdout.contains("\x1b[?1049h");
+    let left_alternate_screen = output.stdout.contains("\x1b[?1049l");
+    let rendered_tui = output.stdout.contains("DeepSeekCode") && output.stdout.contains("TUI");
+    let ok = output.status_code == Some(0)
+        && !output.timed_out
+        && entered_alternate_screen
+        && left_alternate_screen
+        && rendered_tui;
+    EntrypointSmokeReport {
+        ok,
+        backend: output.backend,
+        bin: bin.display().to_string(),
+        status_code: output.status_code,
+        timed_out: output.timed_out,
+        entered_alternate_screen,
+        left_alternate_screen,
+        rendered_tui,
+        sent_quit: true,
+        stdout_bytes: output.stdout.len(),
+        stderr_bytes: output.stderr.len(),
+        stdout_preview: clipped_smoke_preview(&output.stdout),
+        stderr_preview: clipped_smoke_preview(&output.stderr),
+    }
+}
+
+fn entrypoint_smoke_json(report: &EntrypointSmokeReport) -> JsonValue {
+    json_object([
+        (
+            "schema",
+            JsonValue::String("deepseek.tui.entrypoint_smoke.v1".to_string()),
+        ),
+        ("ok", JsonValue::Bool(report.ok)),
+        ("backend", JsonValue::String(report.backend.clone())),
+        ("bin", JsonValue::String(report.bin.clone())),
+        (
+            "status_code",
+            report
+                .status_code
+                .map(|code| JsonValue::Number(code.to_string()))
+                .unwrap_or(JsonValue::Null),
+        ),
+        ("timed_out", JsonValue::Bool(report.timed_out)),
+        (
+            "entered_alternate_screen",
+            JsonValue::Bool(report.entered_alternate_screen),
+        ),
+        (
+            "left_alternate_screen",
+            JsonValue::Bool(report.left_alternate_screen),
+        ),
+        ("rendered_tui", JsonValue::Bool(report.rendered_tui)),
+        ("sent_quit", JsonValue::Bool(report.sent_quit)),
+        (
+            "stdout_bytes",
+            JsonValue::Number(report.stdout_bytes.to_string()),
+        ),
+        (
+            "stderr_bytes",
+            JsonValue::Number(report.stderr_bytes.to_string()),
+        ),
+        (
+            "stdout_preview",
+            JsonValue::String(report.stdout_preview.clone()),
+        ),
+        (
+            "stderr_preview",
+            JsonValue::String(report.stderr_preview.clone()),
+        ),
+    ])
+}
+
+fn clipped_smoke_preview(value: &str) -> String {
+    value.chars().take(240).collect()
+}
+
+#[cfg(unix)]
+fn shell_quote(path: &Path) -> String {
+    let value = path.to_string_lossy();
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(unix)]
+fn entrypoint_smoke_shell_command(bin: &Path) -> String {
+    format!("stty rows 36 cols 120; exec {}", shell_quote(bin))
 }
 
 struct RuntimeSnapshot {
@@ -7685,6 +7924,58 @@ mod tests {
         LOCK.get_or_init(|| Mutex::new(()))
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    #[test]
+    fn entrypoint_smoke_report_detects_tui_terminal_takeover() {
+        let report = entrypoint_smoke_report(
+            Path::new("/tmp/deepseek"),
+            EntrypointSmokeOutput {
+                backend: "script-linux".to_string(),
+                status_code: Some(0),
+                timed_out: false,
+                stdout: "\x1b[?1049h DeepSeekCode TUI \x1b[?1049l".to_string(),
+                stderr: String::new(),
+            },
+        );
+        assert!(report.ok);
+        assert!(report.entered_alternate_screen);
+        assert!(report.left_alternate_screen);
+        assert!(report.rendered_tui);
+        let json = json_value_to_string(&entrypoint_smoke_json(&report));
+        assert!(json.contains("\"schema\":\"deepseek.tui.entrypoint_smoke.v1\""));
+        assert!(json.contains("\"ok\":true"));
+    }
+
+    #[test]
+    fn entrypoint_smoke_report_fails_without_alternate_screen() {
+        let report = entrypoint_smoke_report(
+            Path::new("/tmp/deepseek"),
+            EntrypointSmokeOutput {
+                backend: "script-linux".to_string(),
+                status_code: Some(0),
+                timed_out: false,
+                stdout: "DeepSeekCode TUI".to_string(),
+                stderr: String::new(),
+            },
+        );
+        assert!(!report.ok);
+        assert!(!report.entered_alternate_screen);
+        assert!(!report.left_alternate_screen);
+        assert!(report.rendered_tui);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn entrypoint_smoke_shell_quote_escapes_single_quotes() {
+        assert_eq!(
+            shell_quote(Path::new("/tmp/deep'seek")),
+            "'/tmp/deep'\\''seek'"
+        );
+        assert_eq!(
+            entrypoint_smoke_shell_command(Path::new("/tmp/deepseek")),
+            "stty rows 36 cols 120; exec '/tmp/deepseek'"
+        );
     }
 
     fn with_workspace_trust_file<F: FnOnce()>(path: &Path, f: F) {

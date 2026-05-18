@@ -68,11 +68,14 @@ fn tui_help() -> &'static str {
         "\n",
         "Usage:\n",
         "  deepseek tui [--demo] [--once] [--runtime-url <url>]\n",
+        "  deepseek tui --entrypoint-smoke [--smoke-bin <path>]\n",
         "\n",
         "Options:\n",
         "  --demo                 Render deterministic demo state instead of local runtime state\n",
         "  --once                 Render one snapshot and exit; useful for CI and README captures\n",
-        "  --runtime-url <url>    Connect to a running DeepSeekCode HTTP runtime"
+        "  --runtime-url <url>    Connect to a running DeepSeekCode HTTP runtime\n",
+        "  --entrypoint-smoke     Verify bare `deepseek` enters the TUI in a real PTY\n",
+        "  --smoke-bin <path>     Smoke a selected binary instead of the current executable"
     )
 }
 

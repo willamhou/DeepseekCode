@@ -836,6 +836,8 @@ pub struct TuiArgs {
     pub demo: bool,
     pub once: bool,
     pub runtime_url: Option<String>,
+    pub entrypoint_smoke: bool,
+    pub smoke_bin: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1396,6 +1398,17 @@ fn parse_tui_args(args: Vec<String>) -> Result<TuiArgs, String> {
         match arg.as_str() {
             "--demo" => parsed.demo = true,
             "--once" => parsed.once = true,
+            "--entrypoint-smoke" => parsed.entrypoint_smoke = true,
+            "--smoke-bin" => {
+                let Some(value) = iter.next() else {
+                    return Err("tui --smoke-bin requires a binary path".to_string());
+                };
+                if value.is_empty() {
+                    return Err("tui --smoke-bin requires a binary path".to_string());
+                }
+                parsed.entrypoint_smoke = true;
+                parsed.smoke_bin = Some(value);
+            }
             "--runtime-url" => {
                 let Some(value) = iter.next() else {
                     return Err("tui --runtime-url requires a URL".to_string());
@@ -1410,11 +1423,25 @@ fn parse_tui_args(args: Vec<String>) -> Result<TuiArgs, String> {
                     parsed.runtime_url = Some(value.to_string());
                     continue;
                 }
+                if let Some(value) = other.strip_prefix("--smoke-bin=") {
+                    if value.is_empty() {
+                        return Err("tui --smoke-bin requires a binary path".to_string());
+                    }
+                    parsed.entrypoint_smoke = true;
+                    parsed.smoke_bin = Some(value.to_string());
+                    continue;
+                }
                 return Err(format!(
-                    "unknown tui argument `{other}`; expected --demo|--once|--runtime-url <url>"
+                    "unknown tui argument `{other}`; expected --demo|--once|--runtime-url <url>|--entrypoint-smoke|--smoke-bin <path>"
                 ));
             }
         }
+    }
+    if parsed.entrypoint_smoke && (parsed.demo || parsed.once || parsed.runtime_url.is_some()) {
+        return Err(
+            "tui --entrypoint-smoke cannot be combined with --demo, --once, or --runtime-url"
+                .to_string(),
+        );
     }
     Ok(parsed)
 }
@@ -4350,7 +4377,9 @@ mod tests {
             Some(Command::Tui(TuiArgs {
                 demo: true,
                 once: true,
-                runtime_url: None
+                runtime_url: None,
+                entrypoint_smoke: false,
+                smoke_bin: None
             }))
         ));
 
@@ -4365,9 +4394,37 @@ mod tests {
             Some(Command::Tui(TuiArgs {
                 demo: false,
                 once: false,
-                runtime_url: Some(ref url)
+                runtime_url: Some(ref url),
+                entrypoint_smoke: false,
+                smoke_bin: None
             })) if url == "http://127.0.0.1:13000"
         ));
+
+        let parsed = Cli::from_argv(vec![
+            "tui".to_string(),
+            "--entrypoint-smoke".to_string(),
+            "--smoke-bin".to_string(),
+            "./target/release/deepseek".to_string(),
+        ])
+        .unwrap();
+        assert!(matches!(
+            parsed.command,
+            Some(Command::Tui(TuiArgs {
+                demo: false,
+                once: false,
+                runtime_url: None,
+                entrypoint_smoke: true,
+                smoke_bin: Some(ref bin)
+            })) if bin == "./target/release/deepseek"
+        ));
+
+        let error = Cli::from_argv(vec![
+            "tui".to_string(),
+            "--entrypoint-smoke".to_string(),
+            "--once".to_string(),
+        ])
+        .unwrap_err();
+        assert!(error.contains("cannot be combined"));
 
         let error = Cli::from_argv(vec!["tui".to_string(), "--bad".to_string()]).unwrap_err();
         assert!(error.contains("unknown tui argument"));
@@ -5086,7 +5143,9 @@ mod tests {
             Some(Command::Tui(TuiArgs {
                 demo: false,
                 once: false,
-                runtime_url: None
+                runtime_url: None,
+                entrypoint_smoke: false,
+                smoke_bin: None
             }))
         ));
     }

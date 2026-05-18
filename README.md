@@ -97,6 +97,7 @@ Start the TUI explicitly:
 ```bash
 deepseek tui
 deepseek tui --demo --once
+deepseek tui --entrypoint-smoke --smoke-bin "$(command -v deepseek)"
 ```
 
 Start the local runtime and connect the TUI:
@@ -114,8 +115,9 @@ git.
 DeepSeekCode is close enough to use as its own coding CLI, but it is not yet at
 Claude Code CLI / Codex CLI polish. The largest remaining gaps are:
 
-- broader terminal/platform proof beyond the TTY-aware default TUI entrypoint
-  and current Unix/Linux native-supervisor PTY smoke coverage;
+- broader terminal/platform proof beyond the TTY-aware default TUI entrypoint,
+  PTY entrypoint smoke, and current Unix/Linux native-supervisor PTY smoke
+  coverage;
 - deeper model-backed live dogfood and external write-fixture sample evidence
   across disposable real repositories;
 - npm registry publishing and a Homebrew tap, both blocked on credentials;
@@ -173,6 +175,7 @@ deepseek update publish-status --json
 deepseek agents service-doctor --kind all --workdir "$PWD" --bin "$(command -v deepseek)" --json
 mkdir -p /tmp/dsc-smk
 deepseek agents service-smoke --workdir /tmp/dsc-smk --bin "$(command -v deepseek)" --json
+deepseek tui --entrypoint-smoke --smoke-bin "$(command -v deepseek)"
 ```
 
 For PR/CI workflow checks:

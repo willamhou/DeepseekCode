@@ -303,12 +303,16 @@ deepseek
 deepseek tui
 deepseek tui --demo
 deepseek tui --demo --once
+deepseek tui --entrypoint-smoke --smoke-bin "$(command -v deepseek)"
 deepseek serve --http --addr 127.0.0.1:13000
 deepseek tui --runtime-url http://127.0.0.1:13000
 ```
 
 `--once` renders a deterministic ratatui test-backend snapshot to stdout. Use
 it for CI and release smoke checks where a real TTY is not available.
+`--entrypoint-smoke` starts bare `deepseek` under a real PTY through `script`,
+verifies alternate-screen TUI rendering, sends `q`, and emits
+`deepseek.tui.entrypoint_smoke.v1` JSON evidence.
 
 Key bindings:
 

@@ -125,10 +125,15 @@ TTY sessions by opening the full-screen workbench directly; `deepseek chat` /
 `repl` / `interactive` remain explicit aliases for the line-oriented REPL, and
 non-full-screen contexts keep the prior REPL path with its existing fail-closed
 TTY guidance.
+That default-entrypoint behavior now has a repo-native PTY release smoke:
+`deepseek tui --entrypoint-smoke [--smoke-bin <path>]` starts bare `deepseek`
+through `script`, verifies alternate-screen TUI rendering, sends `q`, and emits
+`deepseek.tui.entrypoint_smoke.v1` JSON evidence.
 The largest remaining DeepSeek-TUI / Claude Code CLI / Codex CLI gaps are now:
 
-- broader terminal/platform proof beyond the TTY-aware default TUI entrypoint
-  and current Unix/Linux native-supervisor smoke coverage;
+- broader terminal/platform proof beyond the TTY-aware default TUI entrypoint,
+  repo-native PTY entrypoint smoke, and current Unix/Linux native-supervisor
+  smoke coverage;
 - model-backed live dogfood and external write-fixture sample depth across
   disposable real repositories;
 - release-channel proof for npm and Homebrew once credentials are available;
@@ -774,7 +779,8 @@ Landed first slice:
 - TUI now supports DeepSeek-TUI-style `/exit` plus `/quit` and `/q` aliases
   from both the command palette and focused composer
 - AgentLoop cancellation now propagates into cancel-aware model/tool execution; `run_shell` starts commands in a process group and kills that group when a durable cancel event is observed, while remote model streams and blocked model process-pipe reads stop through cancel-aware polling
-- deterministic `--once` snapshot path for CI/release smoke tests
+- deterministic `--once` snapshot path for CI/release smoke tests plus
+  `deepseek tui --entrypoint-smoke` for a real-PTY default-entrypoint proof
 
 Remaining:
 
@@ -1294,6 +1300,10 @@ Landed first slice:
   too-long Unix socket paths before spawning the supervisor, requests
   `shutdown`, and emits `deepseek.agents.service_smoke.v1` JSON evidence for
   local release smoke runs before clean-machine service installation.
+- `deepseek tui --entrypoint-smoke --smoke-bin <path>` starts a selected
+  release binary as bare `deepseek` under a real PTY, checks alternate-screen
+  TUI output, sends `q`, and emits `deepseek.tui.entrypoint_smoke.v1` JSON
+  evidence for local release smoke runs.
 - `deepseek update package` includes `SERVICES.md` and packaged service templates under `services/`
 - Cargo registry distribution now has an explicit source-build/package-only
   decision: the release workflow skips Cargo registry publishing while
