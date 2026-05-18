@@ -121,5 +121,4 @@ jobs:
           }
 
       - name: TUI Entrypoint Smoke
-        if: runner.os != 'Windows'
         run: ${{ matrix.binary }} tui --entrypoint-smoke --smoke-bin ${{ matrix.binary }}

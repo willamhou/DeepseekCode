@@ -95,7 +95,6 @@ jobs:
           }
 
       - name: Verify Release Binary TUI Entrypoint
-        if: runner.os != 'Windows'
         run: ${{ matrix.binary }} tui --entrypoint-smoke --smoke-bin ${{ matrix.binary }}
 
       - name: Verify npm Wrapper TUI Entrypoint

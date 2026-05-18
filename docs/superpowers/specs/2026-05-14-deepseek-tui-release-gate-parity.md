@@ -46,8 +46,8 @@ gate already used elsewhere is serial test execution.
   gate with `cargo test -- --test-threads=1`; macOS and Windows now verify
   compile/package viability without depending on Unix-specific test fixtures.
 - Release Matrix build jobs now also verify deterministic TUI snapshot rendering
-  on Linux, macOS, and Windows release binaries before packaging. Non-Windows
-  jobs continue to run the real PTY entrypoint smoke as well.
+  on Linux, macOS, and Windows release binaries before packaging. All build
+  jobs also run the real PTY entrypoint smoke; Windows uses the ConPTY backend.
 - Updated the macOS x64 runner from the old Intel label to `macos-15-intel`
   after the tag workflow queued indefinitely on `macos-13`.
 - Updated `docs/release.md` to use the same serial test command in the local

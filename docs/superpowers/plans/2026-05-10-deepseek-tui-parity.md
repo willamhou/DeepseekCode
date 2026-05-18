@@ -127,9 +127,10 @@ non-full-screen contexts keep the prior REPL path with its existing fail-closed
 TTY guidance.
 That default-entrypoint behavior now has a repo-native PTY release smoke:
 `deepseek tui --entrypoint-smoke [--smoke-bin <path>]` starts bare `deepseek`
-through `script`, verifies alternate-screen TUI rendering, sends `q`, and emits
-`deepseek.tui.entrypoint_smoke.v1` JSON evidence; the Release Matrix runs that
-smoke directly against non-Windows release binaries before packaging.
+through Unix `script` or Windows ConPTY, verifies alternate-screen TUI
+rendering, sends `q`, and emits `deepseek.tui.entrypoint_smoke.v1` JSON
+evidence; CI and the Release Matrix run that smoke directly against release
+and debug binaries before packaging.
 Release Matrix build jobs now also verify deterministic TUI snapshot rendering
 on Linux, macOS, and Windows release binaries before packaging.
 README demo refresh is now also repo-native: `docs/demo/record-readme-demo.sh`
@@ -160,7 +161,7 @@ secret scan that blocks committed `sk-...` style API tokens before publishing.
 Normal `main` pushes and pull requests now also run `.github/workflows/ci.yml`,
 a CI gate covering Linux Rust fmt/lib tests/build, secret scanning, demo
 evidence self-tests, npm metadata/wrapper smoke, Homebrew formula checks, plus
-Linux and macOS x64 direct TUI entrypoint smoke and macOS x64 / Windows x64
+Linux, macOS x64, and Windows x64 direct TUI entrypoint smoke and macOS x64 / Windows x64
 `cargo check --all-targets` / debug binary version / deterministic TUI snapshot
 proof; CI and release Windows jobs now pin `windows-2025-vs2026` instead of the
 moving `windows-latest` alias.
@@ -168,7 +169,7 @@ The largest remaining DeepSeek-TUI / Claude Code CLI / Codex CLI gaps are now:
 
 - broader terminal/platform proof beyond the TTY-aware default TUI entrypoint,
   repo-native PTY entrypoint smoke, current Unix/Linux native-supervisor smoke
-  coverage, CI Linux/macOS direct TUI smoke, and CI macOS/Windows
+  coverage, CI Linux/macOS/Windows direct TUI smoke, and CI macOS/Windows
   compile/version/snapshot checks;
 - model-backed live dogfood and external write-fixture sample depth across
   disposable real repositories;

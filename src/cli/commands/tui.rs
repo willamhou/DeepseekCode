@@ -223,13 +223,18 @@ fn run_entrypoint_smoke_process(bin: &Path, timeout: Duration) -> AppResult<Entr
     run_script_smoke(bin, &bsd, timeout, "script-bsd")
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn run_entrypoint_smoke_process(bin: &Path, timeout: Duration) -> AppResult<EntrypointSmokeOutput> {
+    run_conpty_smoke(bin, timeout)
+}
+
+#[cfg(all(not(unix), not(windows)))]
 fn run_entrypoint_smoke_process(
     _bin: &Path,
     _timeout: Duration,
 ) -> AppResult<EntrypointSmokeOutput> {
     Err(app_error(
-        "TUI entrypoint smoke currently requires a Unix `script` command",
+        "TUI entrypoint smoke currently requires Unix `script` or Windows ConPTY",
     ))
 }
 
@@ -299,6 +304,328 @@ fn run_script_smoke(
         stderr: String::from_utf8_lossy(&stderr).into_owned(),
     })
 }
+
+#[cfg(windows)]
+#[allow(non_snake_case)]
+mod windows_conpty {
+    use std::ffi::c_void;
+    use std::fs::File;
+    use std::io::{Read, Write};
+    use std::mem::{size_of, zeroed};
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::{FromRawHandle, RawHandle};
+    use std::path::Path;
+    use std::ptr::{null, null_mut};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    use crate::error::{app_error, AppResult};
+
+    use super::EntrypointSmokeOutput;
+
+    type BOOL = i32;
+    type DWORD = u32;
+    type HANDLE = *mut c_void;
+    type HRESULT = i32;
+    type HPCON = *mut c_void;
+    type LPVOID = *mut c_void;
+    type LPPROC_THREAD_ATTRIBUTE_LIST = *mut c_void;
+    type SIZE_T = usize;
+    type WCHAR = u16;
+
+    const FALSE: BOOL = 0;
+    const EXTENDED_STARTUPINFO_PRESENT: DWORD = 0x0008_0000;
+    const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: SIZE_T = 0x0002_0016;
+    const WAIT_OBJECT_0: DWORD = 0;
+    const WAIT_TIMEOUT: DWORD = 258;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct COORD {
+        X: i16,
+        Y: i16,
+    }
+
+    #[repr(C)]
+    struct SECURITY_ATTRIBUTES {
+        nLength: DWORD,
+        lpSecurityDescriptor: LPVOID,
+        bInheritHandle: BOOL,
+    }
+
+    #[repr(C)]
+    struct STARTUPINFOW {
+        cb: DWORD,
+        lpReserved: *mut WCHAR,
+        lpDesktop: *mut WCHAR,
+        lpTitle: *mut WCHAR,
+        dwX: DWORD,
+        dwY: DWORD,
+        dwXSize: DWORD,
+        dwYSize: DWORD,
+        dwXCountChars: DWORD,
+        dwYCountChars: DWORD,
+        dwFillAttribute: DWORD,
+        dwFlags: DWORD,
+        wShowWindow: u16,
+        cbReserved2: u16,
+        lpReserved2: *mut u8,
+        hStdInput: HANDLE,
+        hStdOutput: HANDLE,
+        hStdError: HANDLE,
+    }
+
+    #[repr(C)]
+    struct STARTUPINFOEXW {
+        StartupInfo: STARTUPINFOW,
+        lpAttributeList: LPPROC_THREAD_ATTRIBUTE_LIST,
+    }
+
+    #[repr(C)]
+    struct PROCESS_INFORMATION {
+        hProcess: HANDLE,
+        hThread: HANDLE,
+        dwProcessId: DWORD,
+        dwThreadId: DWORD,
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn CloseHandle(hObject: HANDLE) -> BOOL;
+        fn CreatePipe(
+            hReadPipe: *mut HANDLE,
+            hWritePipe: *mut HANDLE,
+            lpPipeAttributes: *mut SECURITY_ATTRIBUTES,
+            nSize: DWORD,
+        ) -> BOOL;
+        fn CreateProcessW(
+            lpApplicationName: *const WCHAR,
+            lpCommandLine: *mut WCHAR,
+            lpProcessAttributes: *mut SECURITY_ATTRIBUTES,
+            lpThreadAttributes: *mut SECURITY_ATTRIBUTES,
+            bInheritHandles: BOOL,
+            dwCreationFlags: DWORD,
+            lpEnvironment: LPVOID,
+            lpCurrentDirectory: *const WCHAR,
+            lpStartupInfo: *mut STARTUPINFOW,
+            lpProcessInformation: *mut PROCESS_INFORMATION,
+        ) -> BOOL;
+        fn CreatePseudoConsole(
+            size: COORD,
+            hInput: HANDLE,
+            hOutput: HANDLE,
+            dwFlags: DWORD,
+            phPC: *mut HPCON,
+        ) -> HRESULT;
+        fn ClosePseudoConsole(hPC: HPCON);
+        fn DeleteProcThreadAttributeList(lpAttributeList: LPPROC_THREAD_ATTRIBUTE_LIST);
+        fn GetExitCodeProcess(hProcess: HANDLE, lpExitCode: *mut DWORD) -> BOOL;
+        fn GetLastError() -> DWORD;
+        fn InitializeProcThreadAttributeList(
+            lpAttributeList: LPPROC_THREAD_ATTRIBUTE_LIST,
+            dwAttributeCount: DWORD,
+            dwFlags: DWORD,
+            lpSize: *mut SIZE_T,
+        ) -> BOOL;
+        fn TerminateProcess(hProcess: HANDLE, uExitCode: u32) -> BOOL;
+        fn UpdateProcThreadAttribute(
+            lpAttributeList: LPPROC_THREAD_ATTRIBUTE_LIST,
+            dwFlags: DWORD,
+            Attribute: SIZE_T,
+            lpValue: LPVOID,
+            cbSize: SIZE_T,
+            lpPreviousValue: LPVOID,
+            lpReturnSize: *mut SIZE_T,
+        ) -> BOOL;
+        fn WaitForSingleObject(hHandle: HANDLE, dwMilliseconds: DWORD) -> DWORD;
+    }
+
+    pub(super) fn run_conpty_smoke(
+        bin: &Path,
+        timeout: Duration,
+    ) -> AppResult<EntrypointSmokeOutput> {
+        if !bin.exists() {
+            return Err(app_error(format!(
+                "TUI entrypoint smoke binary does not exist: {}",
+                bin.display()
+            )));
+        }
+
+        unsafe { run_conpty_smoke_inner(bin, timeout) }
+    }
+
+    unsafe fn run_conpty_smoke_inner(
+        bin: &Path,
+        timeout: Duration,
+    ) -> AppResult<EntrypointSmokeOutput> {
+        let (input_read, input_write) = create_pipe_pair("ConPTY input pipe")?;
+        let (output_read, output_write) = create_pipe_pair("ConPTY output pipe")?;
+
+        let mut hpc: HPCON = null_mut();
+        let hr = CreatePseudoConsole(
+            COORD { X: 120, Y: 36 },
+            input_read,
+            output_write,
+            0,
+            &mut hpc,
+        );
+        let _ = CloseHandle(input_read);
+        let _ = CloseHandle(output_write);
+        if hr < 0 {
+            let _ = CloseHandle(input_write);
+            let _ = CloseHandle(output_read);
+            return Err(app_error(format!(
+                "failed to create Windows ConPTY for TUI smoke: HRESULT 0x{hr:08x}"
+            )));
+        }
+
+        let mut attr_size: SIZE_T = 0;
+        let _ = InitializeProcThreadAttributeList(null_mut(), 1, 0, &mut attr_size);
+        if attr_size == 0 {
+            close_conpty_resources(hpc, input_write, output_read);
+            return Err(app_error(
+                "failed to size Windows ConPTY process attribute list",
+            ));
+        }
+
+        let mut attr_storage = vec![0u8; attr_size];
+        let attr_list = attr_storage.as_mut_ptr().cast::<c_void>();
+        if InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size) == 0 {
+            let err = GetLastError();
+            close_conpty_resources(hpc, input_write, output_read);
+            return Err(app_error(format!(
+                "failed to initialize Windows ConPTY process attribute list: {err}"
+            )));
+        }
+
+        if UpdateProcThreadAttribute(
+            attr_list,
+            0,
+            PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+            hpc.cast::<c_void>(),
+            size_of::<HPCON>(),
+            null_mut(),
+            null_mut(),
+        ) == 0
+        {
+            let err = GetLastError();
+            DeleteProcThreadAttributeList(attr_list);
+            close_conpty_resources(hpc, input_write, output_read);
+            return Err(app_error(format!(
+                "failed to attach Windows ConPTY to startup info: {err}"
+            )));
+        }
+
+        let mut startup: STARTUPINFOEXW = zeroed();
+        startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as DWORD;
+        startup.lpAttributeList = attr_list;
+
+        let mut process_info: PROCESS_INFORMATION = zeroed();
+        let mut command_line = windows_command_line(bin);
+        if CreateProcessW(
+            null(),
+            command_line.as_mut_ptr(),
+            null_mut(),
+            null_mut(),
+            FALSE,
+            EXTENDED_STARTUPINFO_PRESENT,
+            null_mut(),
+            null(),
+            &mut startup.StartupInfo,
+            &mut process_info,
+        ) == 0
+        {
+            let err = GetLastError();
+            DeleteProcThreadAttributeList(attr_list);
+            close_conpty_resources(hpc, input_write, output_read);
+            return Err(app_error(format!(
+                "failed to start Windows ConPTY TUI smoke child: {err}"
+            )));
+        }
+
+        DeleteProcThreadAttributeList(attr_list);
+
+        let reader = thread::spawn(move || {
+            let mut file = File::from_raw_handle(output_read as RawHandle);
+            let mut output = Vec::new();
+            let _ = file.read_to_end(&mut output);
+            output
+        });
+
+        {
+            let mut input = File::from_raw_handle(input_write as RawHandle);
+            thread::sleep(Duration::from_millis(800));
+            let _ = input.write_all(b"q");
+            let _ = input.flush();
+        }
+
+        let started = Instant::now();
+        let mut timed_out = false;
+        let wait_ms = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
+        let wait_result = WaitForSingleObject(process_info.hProcess, wait_ms);
+        if wait_result == WAIT_TIMEOUT {
+            timed_out = true;
+            let _ = TerminateProcess(process_info.hProcess, 1);
+            let _ = WaitForSingleObject(process_info.hProcess, 2_000);
+        } else if wait_result != WAIT_OBJECT_0 {
+            timed_out = started.elapsed() >= timeout;
+        }
+
+        let mut exit_code: DWORD = 1;
+        let status_code = if GetExitCodeProcess(process_info.hProcess, &mut exit_code) != 0 {
+            Some(exit_code as i32)
+        } else {
+            None
+        };
+
+        let _ = CloseHandle(process_info.hThread);
+        let _ = CloseHandle(process_info.hProcess);
+        ClosePseudoConsole(hpc);
+
+        let stdout = reader.join().unwrap_or_default();
+
+        Ok(EntrypointSmokeOutput {
+            backend: "conpty-windows".to_string(),
+            status_code,
+            timed_out,
+            stdout: String::from_utf8_lossy(&stdout).into_owned(),
+            stderr: String::new(),
+        })
+    }
+
+    unsafe fn create_pipe_pair(label: &str) -> AppResult<(HANDLE, HANDLE)> {
+        let mut read: HANDLE = null_mut();
+        let mut write: HANDLE = null_mut();
+        if CreatePipe(&mut read, &mut write, null_mut(), 0) == 0 {
+            return Err(app_error(format!(
+                "failed to create {label}: {}",
+                GetLastError()
+            )));
+        }
+        Ok((read, write))
+    }
+
+    unsafe fn close_conpty_resources(hpc: HPCON, input_write: HANDLE, output_read: HANDLE) {
+        let _ = CloseHandle(input_write);
+        let _ = CloseHandle(output_read);
+        ClosePseudoConsole(hpc);
+    }
+
+    fn windows_command_line(bin: &Path) -> Vec<u16> {
+        let mut command = windows_quote_path(bin);
+        command.push('\0');
+        command.encode_utf16().collect()
+    }
+
+    fn windows_quote_path(bin: &Path) -> String {
+        let raw = bin.as_os_str().encode_wide().collect::<Vec<_>>();
+        let value = String::from_utf16_lossy(&raw);
+        format!("\"{}\"", value.replace('"', "\\\""))
+    }
+}
+
+#[cfg(windows)]
+use windows_conpty::run_conpty_smoke;
 
 fn entrypoint_smoke_report(bin: &Path, output: EntrypointSmokeOutput) -> EntrypointSmokeReport {
     let entered_alternate_screen = output.stdout.contains("\x1b[?1049h");
