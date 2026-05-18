@@ -29,6 +29,8 @@ which weakens local and packed-bin confidence.
   path.
 - npm docs, release docs, and README locale checks include the wrapper
   entrypoint smoke.
+- The Release Matrix build job runs the wrapper TUI entrypoint smoke on
+  non-Windows release binaries before packaging artifacts.
 
 ## Validation
 

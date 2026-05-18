@@ -65,6 +65,12 @@ jobs:
       - name: Verify Release Binary
         run: ${{ matrix.binary }} version
 
+      - name: Verify npm Wrapper TUI Entrypoint
+        if: runner.os != 'Windows'
+        env:
+          DEEPSEEK_BINARY: ${{ matrix.binary }}
+        run: node npm/scripts/test-tui-entrypoint-wrapper.js
+
       - name: Package Release
         run: ${{ matrix.binary }} update package --bin ${{ matrix.binary }} --out dist
 

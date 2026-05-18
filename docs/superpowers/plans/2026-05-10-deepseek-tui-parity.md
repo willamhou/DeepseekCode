@@ -135,7 +135,8 @@ animation loses SVG keyframes.
 The npm wrapper now also has release smoke coverage for that same entrypoint:
 `npm/scripts/test-tui-entrypoint-wrapper.js` runs the real PTY smoke through
 `npm/bin/deepseek.js` with `DEEPSEEK_BINARY` pointing at the selected binary,
-and the wrapper is committed executable.
+the wrapper is committed executable, and the Release Matrix runs that smoke on
+non-Windows release binaries before packaging artifacts.
 Homebrew template validation is now also runnable without Homebrew/Ruby:
 `packaging/homebrew/verify-formula.js` checks the formula version, release URLs,
 SHA-256 entries, install/test blocks, optional Ruby syntax, and release-mode
