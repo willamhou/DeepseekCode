@@ -61,3 +61,32 @@ jobs:
 
       - name: Homebrew Formula Check
         run: node packaging/homebrew/verify-formula.js
+
+  platform:
+    name: Platform Checks (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-x64
+            os: macos-15-intel
+            binary: ./target/debug/deepseek
+          - name: windows-x64
+            os: windows-latest
+            binary: ./target/debug/deepseek.exe
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check All Targets
+        run: cargo check --all-targets
+
+      - name: Build Debug Binary
+        run: cargo build --bin deepseek
+
+      - name: Verify Debug Binary
+        run: ${{ matrix.binary }} version

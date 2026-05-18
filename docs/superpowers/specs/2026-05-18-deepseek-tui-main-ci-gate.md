@@ -17,6 +17,9 @@ release-proof work dependent on local checks until the next tag workflow.
   secret scanning, model-demo recorder/verifier/renderer self-tests, npm
   metadata checks, npm wrapper TUI entrypoint smoke, and Homebrew formula
   validation.
+- macOS x64 and Windows x64 platform checks cover `cargo check --all-targets`,
+  debug binary build, and `deepseek version`, giving normal PRs the same basic
+  non-Linux compile/runtime proof that previously only existed in release jobs.
 - The workflow keeps expensive release-only work such as Docker packaging,
   attestation, npm publishing, and tap publishing in the release matrix.
 - CI and release workflows use `actions/checkout@v5` and
@@ -28,6 +31,7 @@ release-proof work dependent on local checks until the next tag workflow.
 - Local equivalents:
   - `cargo fmt --check`
   - `cargo test --lib -- --test-threads=1`
+  - `cargo check --all-targets`
   - `cargo build --bin deepseek`
   - `node scripts/check-secrets.js`
   - `docs/demo/record-model-backed-demo.sh --dry-run`
