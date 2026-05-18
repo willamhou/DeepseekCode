@@ -18,6 +18,9 @@ capture workflow, the README could only describe this as future manual work.
   the disposable repository, then records `git diff` plus a final `cargo test`.
 - Real model-backed runs require `DEEPSEEK_API_KEY`; `DEEPSEEK_DEMO_ALLOW_OFFLINE=1`
   is explicitly documented as rehearsal-only evidence.
+- `DEEPSEEK_DEMO_KEY_FILE` and `--api-key-stdin` let operators provide the key
+  without putting it directly in shell history or committed docs; key files must
+  live outside the repository.
 - `--dry-run` prints the planned fixture, transcript path, budget, and prompt
   without creating a repo or calling a model.
 - `docs/demo/README.md` and all README locales now point to the recorder.

@@ -143,7 +143,9 @@ fixture recorder:
 
 ```bash
 docs/demo/record-model-backed-demo.sh --dry-run
-DEEPSEEK_API_KEY=... docs/demo/record-model-backed-demo.sh
+printf '%s\n' '<deepseek-api-key>' > /tmp/deepseek-demo.key
+chmod 600 /tmp/deepseek-demo.key
+DEEPSEEK_DEMO_KEY_FILE=/tmp/deepseek-demo.key docs/demo/record-model-backed-demo.sh
 ```
 
 ## Development Checks

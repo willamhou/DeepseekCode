@@ -33,10 +33,16 @@ docs/demo/record-model-backed-demo.sh --dry-run
 Record a real model-backed transcript:
 
 ```bash
-DEEPSEEK_API_KEY=... docs/demo/record-model-backed-demo.sh
+printf '%s\n' '<deepseek-api-key>' > /tmp/deepseek-demo.key
+chmod 600 /tmp/deepseek-demo.key
+DEEPSEEK_DEMO_KEY_FILE=/tmp/deepseek-demo.key docs/demo/record-model-backed-demo.sh
 ```
 
 The default output is a timestamped `docs/demo/deepseek-code-model-demo-*.log`
 transcript. Convert a reviewed successful run into the GIF/MP4 or SVG asset
 linked from the README; do not publish runs created with
 `DEEPSEEK_DEMO_ALLOW_OFFLINE=1` as model-backed evidence.
+
+`DEEPSEEK_DEMO_KEY_FILE` must point outside this repository so API keys cannot
+be accidentally committed. `--api-key-stdin` is also supported when piping from
+a local secret manager.

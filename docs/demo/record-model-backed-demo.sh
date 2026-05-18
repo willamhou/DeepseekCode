@@ -3,13 +3,15 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: docs/demo/record-model-backed-demo.sh [--dry-run] [--cleanup] [--help]
+Usage: docs/demo/record-model-backed-demo.sh [--dry-run] [--cleanup] [--api-key-stdin] [--help]
 
 Records a model-backed DeepSeekCode coding loop against a disposable Rust repo:
 failing test -> deepseek exec edit -> git diff -> passing cargo test.
 
 Environment:
   DEEPSEEK_API_KEY          Required unless DEEPSEEK_DEMO_ALLOW_OFFLINE=1.
+  DEEPSEEK_DEMO_KEY_FILE    Read DEEPSEEK_API_KEY from a first-line key file
+                            outside this repository when DEEPSEEK_API_KEY is unset.
   DEEPSEEK_DEMO_ALLOW_OFFLINE=1
                             Allow offline fallback for local rehearsal only.
   DEEPSEEK_DEMO_BIN         DeepSeekCode binary to run. Defaults to target/debug/deepseek,
@@ -26,6 +28,7 @@ EOF
 
 dry_run=0
 cleanup=0
+api_key_stdin=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -35,6 +38,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --cleanup)
       cleanup=1
+      shift
+      ;;
+    --api-key-stdin)
+      api_key_stdin=1
       shift
       ;;
     --help|-h)
@@ -69,8 +76,31 @@ if [[ "$dry_run" -eq 1 ]]; then
   exit 0
 fi
 
+if [[ -z "${DEEPSEEK_API_KEY:-}" && -n "${DEEPSEEK_DEMO_KEY_FILE:-}" ]]; then
+  if [[ ! -f "$DEEPSEEK_DEMO_KEY_FILE" ]]; then
+    echo "DEEPSEEK_DEMO_KEY_FILE does not exist: $DEEPSEEK_DEMO_KEY_FILE" >&2
+    exit 1
+  fi
+  key_file_dir=$(CDPATH= cd -- "$(dirname -- "$DEEPSEEK_DEMO_KEY_FILE")" && pwd)
+  key_file_abs="$key_file_dir/$(basename -- "$DEEPSEEK_DEMO_KEY_FILE")"
+  case "$key_file_abs" in
+    "$repo_root"/*)
+      echo "DEEPSEEK_DEMO_KEY_FILE must live outside this repository: $key_file_abs" >&2
+      exit 1
+      ;;
+  esac
+  IFS= read -r DEEPSEEK_API_KEY < "$key_file_abs"
+  export DEEPSEEK_API_KEY
+fi
+
+if [[ -z "${DEEPSEEK_API_KEY:-}" && "$api_key_stdin" -eq 1 ]]; then
+  IFS= read -r DEEPSEEK_API_KEY
+  export DEEPSEEK_API_KEY
+fi
+
 if [[ "${DEEPSEEK_DEMO_ALLOW_OFFLINE:-0}" != "1" && -z "${DEEPSEEK_API_KEY:-}" ]]; then
   echo "DEEPSEEK_API_KEY is required for model-backed README demo evidence." >&2
+  echo "Use DEEPSEEK_DEMO_KEY_FILE outside the repo or --api-key-stdin to avoid putting the key in shell history." >&2
   echo "Set DEEPSEEK_DEMO_ALLOW_OFFLINE=1 only for local rehearsal; do not publish that as model-backed evidence." >&2
   exit 1
 fi

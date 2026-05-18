@@ -140,6 +140,9 @@ Homebrew template validation is now also runnable without Homebrew/Ruby:
 `packaging/homebrew/verify-formula.js` checks the formula version, release URLs,
 SHA-256 entries, install/test blocks, optional Ruby syntax, and release-mode
 non-placeholder checksums.
+The model-backed README demo recorder now also supports `DEEPSEEK_DEMO_KEY_FILE`
+outside the repository and `--api-key-stdin`, so real demo capture can consume
+DeepSeek credentials without committing or echoing the key.
 The largest remaining DeepSeek-TUI / Claude Code CLI / Codex CLI gaps are now:
 
 - broader terminal/platform proof beyond the TTY-aware default TUI entrypoint,
