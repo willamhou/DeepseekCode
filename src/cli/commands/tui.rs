@@ -556,12 +556,10 @@ mod windows_conpty {
             output
         });
 
-        {
-            let mut input = File::from_raw_handle(input_write as RawHandle);
-            thread::sleep(Duration::from_millis(800));
-            let _ = input.write_all(b"q");
-            let _ = input.flush();
-        }
+        let mut input = File::from_raw_handle(input_write as RawHandle);
+        thread::sleep(Duration::from_millis(800));
+        let _ = input.write_all(b"q");
+        let _ = input.flush();
 
         let started = Instant::now();
         let mut timed_out = false;
@@ -585,6 +583,7 @@ mod windows_conpty {
         let _ = CloseHandle(process_info.hThread);
         let _ = CloseHandle(process_info.hProcess);
         ClosePseudoConsole(hpc);
+        drop(input);
 
         let stdout = reader.join().unwrap_or_default();
 
