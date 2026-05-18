@@ -29,6 +29,8 @@ release-proof work dependent on local checks until the next tag workflow.
 - CI and release workflows use `actions/checkout@v5` and
   `actions/setup-node@v5`, and opt into Node 24 action runtime behavior ahead
   of GitHub's announced Node 20 action runtime removal.
+- CI and release Windows jobs are pinned to `windows-2025-vs2026` so the
+  Windows proof does not drift with GitHub's `windows-latest` migration.
 
 ## Verification
 

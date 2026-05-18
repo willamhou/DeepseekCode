@@ -160,7 +160,8 @@ a CI gate covering Linux Rust fmt/lib tests/build, secret scanning, demo
 evidence self-tests, npm metadata/wrapper smoke, Homebrew formula checks, plus
 Linux and macOS x64 direct TUI entrypoint smoke and macOS x64 / Windows x64
 `cargo check --all-targets` / debug binary version / deterministic TUI snapshot
-proof.
+proof; CI and release Windows jobs now pin `windows-2025-vs2026` instead of the
+moving `windows-latest` alias.
 The largest remaining DeepSeek-TUI / Claude Code CLI / Codex CLI gaps are now:
 
 - broader terminal/platform proof beyond the TTY-aware default TUI entrypoint,

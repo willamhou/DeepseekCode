@@ -40,7 +40,7 @@ jobs:
             binary: ./target/release/deepseek
             npm_platform: macos-arm64
           - name: windows-x64
-            os: windows-latest
+            os: windows-2025-vs2026
             artifact: deepseek-windows-x64
             binary: ./target/release/deepseek.exe
             npm_platform: windows-x64
