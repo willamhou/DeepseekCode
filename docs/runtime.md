@@ -169,9 +169,11 @@ The rendered set runs `deepseek serve --http`,
 `deepseek agents shell-supervisor --json` against the selected workspace. The
 shell supervisor service publishes workspace-local
 status/show/start/wait/replay/attach/stdin/resize/cancel over the protocol
-socket and controls durable safe shell jobs; native PTY sessions are still not
-implemented. The service set is still local template output, not a hosted
-multi-user runtime. When `--out` is used, `deepseek agents service` also writes
+socket and controls durable safe shell jobs; on supported Unix/Linux builds,
+`tty=true` starts supervisor-owned native PTY jobs, while unsupported platforms
+fall back to non-TTY protocol control. The service set is still local template
+output, not a hosted multi-user runtime. When `--out` is used,
+`deepseek agents service` also writes
 `SERVICES.md` beside the generated units with install/start/status/logs/restart
 and stop/unload commands plus `curl /v1/health`, `doctor --json`,
 `agents rlm-status --json`, and `agents shell status --json` checks.
@@ -1441,7 +1443,10 @@ task_id=<id> cursor=<bytes>` returns a terminal-oriented attach snapshot from
 durable stdout PTY/log bytes, including command/status/TTY geometry metadata,
 `next_offset`, optional `tail=true`, and bounded `wait_ms` for new terminal
 bytes. It is intended for attach-style terminal viewers; stderr-only logs remain
-available through `exec_shell_replay stream=stderr`.
+available through `exec_shell_replay stream=stderr`. Human operators can use
+`deepseek agents shell attach <task_id> --follow` to continuously print only
+new terminal payloads while the job is running; `--wait-ms`, `--poll-ms`,
+`--max-ms`, `--cursor`, `--tail`, and `--limit-bytes` tune the follow loop.
 For supervisor-backed terminal event logs, `exec_shell_terminal_events
 cwd=<path> task_id=<id> cursor=<seq>` returns `schema:
 deepseek.exec_shell.terminal_events.v1`, `next_cursor`, `events`,

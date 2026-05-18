@@ -3842,7 +3842,6 @@ fn process_is_alive(pid: u32) -> bool {
     #[cfg(unix)]
     {
         if detached_process_is_zombie(pid) {
-            reap_process_if_child(pid);
             return false;
         }
         unsafe extern "C" {
@@ -3867,18 +3866,6 @@ fn detached_process_is_zombie(pid: u32) -> bool {
         return false;
     };
     after_name.1.starts_with("Z ")
-}
-
-#[cfg(unix)]
-fn reap_process_if_child(pid: u32) {
-    const WNOHANG: i32 = 1;
-    unsafe extern "C" {
-        fn waitpid(pid: i32, status: *mut i32, options: i32) -> i32;
-    }
-    let mut status = 0;
-    unsafe {
-        let _ = waitpid(pid as i32, &mut status, WNOHANG);
-    }
 }
 
 #[cfg(test)]
@@ -5367,6 +5354,30 @@ mod tests {
             listed.summary
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(all(unix, target_os = "linux"))]
+    #[test]
+    fn process_liveness_probe_does_not_reap_owned_child_zombies() {
+        let mut child = Command::new("sh")
+            .args(["-lc", "exit 0"])
+            .spawn()
+            .expect("spawn short child");
+        let pid = child.id();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !detached_process_is_zombie(pid) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            detached_process_is_zombie(pid),
+            "child did not become zombie"
+        );
+        assert!(!process_is_alive(pid));
+        let status = child
+            .try_wait()
+            .expect("liveness probe must not reap child")
+            .expect("child should be reapable by its Child handle");
+        assert!(status.success());
     }
 
     #[test]

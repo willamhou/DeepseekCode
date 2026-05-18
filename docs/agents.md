@@ -137,6 +137,9 @@ It binds the workspace-local `.dscode/shell-supervisor/supervisor.sock` and
 writes a manifest for `exec_shell_supervisor_status`; where the platform
 supports it, supervisor-owned native PTY jobs advertise attach/stdin/resize/
 replay/wait/cancel protocol capabilities through the same manifest.
+For human terminal monitoring, `deepseek agents shell attach <task_id>
+--follow` prints new terminal payloads as they arrive; use `--max-ms` for a
+bounded follow in scripts.
 
 After a supervisor starts the agents daemon, use the RLM lifecycle commands to
 check live worker state:

@@ -108,8 +108,8 @@ git.
 DeepSeekCode is close enough to use as its own coding CLI, but it is not yet at
 Claude Code CLI / Codex CLI polish. The largest remaining gaps are:
 
-- broader platform proof for native supervisor-owned PTY control beyond current
-  Unix/Linux smoke coverage;
+- full terminal takeover and broader platform proof beyond current Unix/Linux
+  native-supervisor PTY smoke coverage;
 - deeper model-backed live dogfood and external write-fixture sample evidence
   across disposable real repositories;
 - npm registry publishing and a Homebrew tap, both blocked on credentials;

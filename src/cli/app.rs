@@ -609,6 +609,9 @@ pub enum AgentsShellAction {
         wait_ms: Option<u64>,
         limit_bytes: Option<u64>,
         tail: bool,
+        follow: bool,
+        poll_ms: Option<u64>,
+        max_ms: Option<u64>,
     },
     Stdin {
         task_id: String,
@@ -2315,11 +2318,15 @@ fn parse_agents_shell_attach_args(args: Vec<String>) -> Result<AgentsAction, Str
     let mut wait_ms = None;
     let mut limit_bytes = None;
     let mut tail = false;
+    let mut follow = false;
+    let mut poll_ms = None;
+    let mut max_ms = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--json" => json = true,
             "--tail" => tail = true,
+            "--follow" => follow = true,
             "--cursor" => {
                 i += 1;
                 cursor = Some(parse_agents_shell_u64(&args, i, "attach", "--cursor")?);
@@ -2328,13 +2335,21 @@ fn parse_agents_shell_attach_args(args: Vec<String>) -> Result<AgentsAction, Str
                 i += 1;
                 wait_ms = Some(parse_agents_shell_u64(&args, i, "attach", "--wait-ms")?);
             }
+            "--poll-ms" => {
+                i += 1;
+                poll_ms = Some(parse_agents_shell_u64(&args, i, "attach", "--poll-ms")?);
+            }
+            "--max-ms" => {
+                i += 1;
+                max_ms = Some(parse_agents_shell_u64(&args, i, "attach", "--max-ms")?);
+            }
             "--limit-bytes" => {
                 i += 1;
                 limit_bytes = Some(parse_agents_shell_u64(&args, i, "attach", "--limit-bytes")?);
             }
             value if value.starts_with("--") => {
                 return Err(format!(
-                    "unknown flag for `agents shell attach`: {value}; expected --cursor|--wait-ms|--limit-bytes|--tail|--json"
+                    "unknown flag for `agents shell attach`: {value}; expected --cursor|--wait-ms|--poll-ms|--max-ms|--limit-bytes|--tail|--follow|--json"
                 ));
             }
             value => set_agents_shell_task_id(&mut task_id, value, "attach")?,
@@ -2349,6 +2364,9 @@ fn parse_agents_shell_attach_args(args: Vec<String>) -> Result<AgentsAction, Str
             wait_ms,
             limit_bytes,
             tail,
+            follow,
+            poll_ms,
+            max_ms,
         },
         json,
     }))
@@ -5475,6 +5493,41 @@ mod tests {
                 },
                 json: false,
             }))) if task_id == "task-1" && input == "hello"
+        ));
+
+        let shell_attach_follow = Cli::from_argv(vec![
+            "agents".to_string(),
+            "shell".to_string(),
+            "attach".to_string(),
+            "task-1".to_string(),
+            "--follow".to_string(),
+            "--cursor".to_string(),
+            "7".to_string(),
+            "--wait-ms".to_string(),
+            "250".to_string(),
+            "--poll-ms".to_string(),
+            "50".to_string(),
+            "--max-ms".to_string(),
+            "1000".to_string(),
+            "--limit-bytes".to_string(),
+            "4096".to_string(),
+        ])
+        .expect("parse should succeed");
+        assert!(matches!(
+            shell_attach_follow.command,
+            Some(Command::Agents(AgentsAction::Shell(AgentsShellArgs {
+                action: AgentsShellAction::Attach {
+                    ref task_id,
+                    cursor: Some(7),
+                    wait_ms: Some(250),
+                    limit_bytes: Some(4096),
+                    tail: false,
+                    follow: true,
+                    poll_ms: Some(50),
+                    max_ms: Some(1000),
+                },
+                json: false,
+            }))) if task_id == "task-1"
         ));
 
         let shell_resize = Cli::from_argv(vec![

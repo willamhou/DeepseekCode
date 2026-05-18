@@ -84,10 +84,128 @@ pub fn run(action: AgentsAction) -> AppResult<()> {
 }
 
 fn run_shell_control(args: AgentsShellArgs) -> AppResult<()> {
+    if agents_shell_attach_follow_requested(&args) {
+        return run_shell_attach_follow(args);
+    }
     let cwd = std::env::current_dir()?;
     let request = agents_shell_request_json(&args);
     let response = send_shell_supervisor_cli_request(&cwd, &request)?;
     print_shell_control_response(&args, response)
+}
+
+fn agents_shell_attach_follow_requested(args: &AgentsShellArgs) -> bool {
+    matches!(&args.action, AgentsShellAction::Attach { follow: true, .. })
+}
+
+fn run_shell_attach_follow(args: AgentsShellArgs) -> AppResult<()> {
+    let AgentsShellAction::Attach {
+        task_id,
+        cursor,
+        wait_ms,
+        limit_bytes,
+        tail,
+        follow: _,
+        poll_ms,
+        max_ms,
+    } = args.action
+    else {
+        return Err(app_error(
+            "agents shell attach --follow requires attach action",
+        ));
+    };
+    let cwd = std::env::current_dir()?;
+    let per_request_wait_ms = wait_ms.or(Some(1000));
+    let poll_delay = Duration::from_millis(poll_ms.unwrap_or(100).min(5000));
+    let max_duration = max_ms.map(Duration::from_millis);
+    let started = Instant::now();
+    let mut current_cursor = cursor.unwrap_or(0);
+    let mut first_request = true;
+
+    loop {
+        let request_args = AgentsShellArgs {
+            action: AgentsShellAction::Attach {
+                task_id: task_id.clone(),
+                cursor: Some(current_cursor),
+                wait_ms: per_request_wait_ms,
+                limit_bytes,
+                tail: tail && first_request,
+                follow: false,
+                poll_ms: None,
+                max_ms: None,
+            },
+            json: args.json,
+        };
+        let response =
+            send_shell_supervisor_cli_request(&cwd, &agents_shell_request_json(&request_args))?;
+        let object = json_as_object(&response)
+            .ok_or_else(|| app_error("shell supervisor response must be a JSON object"))?;
+        let response_status = object
+            .get("status")
+            .and_then(json_as_string)
+            .unwrap_or("unknown");
+        if response_status == "error" || response_status == "unsupported" {
+            let error = object
+                .get("error")
+                .and_then(json_as_string)
+                .unwrap_or("shell supervisor attach follow failed");
+            return Err(app_error(error.to_string()));
+        }
+        if args.json {
+            println!("{}", json_value_to_string(&response));
+        }
+        let summary = object
+            .get("attach_summary")
+            .and_then(json_as_string)
+            .ok_or_else(|| app_error("shell supervisor attach response missing attach_summary"))?;
+        if !args.json {
+            print_shell_attach_follow_payload(summary)?;
+        }
+        let next_cursor = shell_attach_summary_next_cursor(summary).unwrap_or(current_cursor);
+        let advanced = next_cursor > current_cursor;
+        current_cursor = next_cursor;
+        first_request = false;
+        let job_status = shell_summary_value(summary, "status").unwrap_or("unknown");
+        if job_status != "running" {
+            break;
+        }
+        if max_duration.is_some_and(|max| started.elapsed() >= max) {
+            break;
+        }
+        if !advanced {
+            std::thread::sleep(poll_delay);
+        }
+    }
+    Ok(())
+}
+
+fn print_shell_attach_follow_payload(summary: &str) -> AppResult<()> {
+    let Some(payload) = shell_attach_summary_terminal_payload(summary) else {
+        return Ok(());
+    };
+    let mut stdout = std::io::stdout();
+    stdout.write_all(payload.as_bytes())?;
+    stdout.write_all(b"\n")?;
+    stdout.flush()?;
+    Ok(())
+}
+
+fn shell_attach_summary_next_cursor(summary: &str) -> Option<u64> {
+    shell_summary_value(summary, "next_cursor")
+        .or_else(|| shell_summary_value(summary, "next_offset"))
+        .and_then(|value| value.parse::<u64>().ok())
+}
+
+fn shell_attach_summary_terminal_payload(summary: &str) -> Option<&str> {
+    let (_, payload) = summary.split_once("terminal:\n")?;
+    let payload = payload.trim_end_matches('\n');
+    (!payload.is_empty()).then_some(payload)
+}
+
+fn shell_summary_value<'a>(summary: &'a str, key: &str) -> Option<&'a str> {
+    let prefix = format!("{key}: ");
+    summary
+        .lines()
+        .find_map(|line| line.strip_prefix(&prefix).map(str::trim))
 }
 
 fn agents_shell_request_json(args: &AgentsShellArgs) -> JsonValue {
@@ -157,6 +275,9 @@ fn agents_shell_request_json(args: &AgentsShellArgs) -> JsonValue {
             wait_ms,
             limit_bytes,
             tail,
+            follow: _,
+            poll_ms: _,
+            max_ms: _,
         } => {
             object.insert(
                 "method".to_string(),
@@ -4741,6 +4862,64 @@ mod tests {
             Some("cancel")
         );
         assert!(matches!(cancel.get("all"), Some(JsonValue::Bool(true))));
+
+        let attach_follow = AgentsShellArgs {
+            action: AgentsShellAction::Attach {
+                task_id: "task-2".to_string(),
+                cursor: Some(9),
+                wait_ms: Some(250),
+                limit_bytes: Some(4096),
+                tail: false,
+                follow: true,
+                poll_ms: Some(50),
+                max_ms: Some(1000),
+            },
+            json: false,
+        };
+        assert!(agents_shell_attach_follow_requested(&attach_follow));
+        let attach = agents_shell_request_json(&attach_follow);
+        let attach = json_as_object(&attach).unwrap();
+        assert_eq!(
+            attach.get("method").and_then(json_as_string),
+            Some("attach")
+        );
+        assert_eq!(
+            attach.get("task_id").and_then(json_as_string),
+            Some("task-2")
+        );
+        assert_eq!(attach.get("cursor").and_then(json_as_u64), Some(9));
+        assert_eq!(attach.get("wait_ms").and_then(json_as_u64), Some(250));
+        assert_eq!(attach.get("limit_bytes").and_then(json_as_u64), Some(4096));
+        assert!(!attach.contains_key("follow"));
+        assert!(!attach.contains_key("poll_ms"));
+        assert!(!attach.contains_key("max_ms"));
+    }
+
+    #[test]
+    fn agents_shell_attach_follow_parses_cursor_status_and_payload() {
+        let stdout_summary =
+            "task_id: task-1\nstatus: running\nnext_offset: 12\nterminal:\nhello\n";
+        assert_eq!(shell_attach_summary_next_cursor(stdout_summary), Some(12));
+        assert_eq!(
+            shell_attach_summary_terminal_payload(stdout_summary),
+            Some("hello")
+        );
+        assert_eq!(
+            shell_summary_value(stdout_summary, "status"),
+            Some("running")
+        );
+
+        let terminal_summary =
+            "task_id: task-2\nstatus: completed\nnext_cursor: 3\nevents: 1\nterminal:\n[3 output epoch] done\n";
+        assert_eq!(shell_attach_summary_next_cursor(terminal_summary), Some(3));
+        assert_eq!(
+            shell_attach_summary_terminal_payload(terminal_summary),
+            Some("[3 output epoch] done")
+        );
+        assert_eq!(
+            shell_summary_value(terminal_summary, "status"),
+            Some("completed")
+        );
     }
 
     #[test]

@@ -95,6 +95,10 @@ surface truthfully: the daemon supports health, status, show, start, wait,
 replay, attach, stdin, resize, cancel, and shutdown, and `tty=true` creates
 native-supervisor PTY jobs on supported Unix/Linux builds, while full
 interactive terminal takeover and broader platform proof remain open.
+The human shell control CLI now also supports `deepseek agents shell attach
+<task_id> --follow`, a cursor-following terminal payload stream over durable
+attach snapshots. This narrows the operator-facing terminal gap without claiming
+raw terminal takeover.
 Dogfood readiness evidence is now also transport-aware: new ledger rows record
 `model_transport`, the report surfaces model-backed counts and table transport,
 and release gates can require model-backed totals, success rate, and
@@ -108,8 +112,8 @@ it defaults to a dry-run selection, caps the next batch, and requires
 `--execute` plus online model transport before spending model calls.
 The largest remaining DeepSeek-TUI / Claude Code CLI / Codex CLI gaps are now:
 
-- native supervisor-owned PTY polish and broader platform proof beyond the
-  current Unix/Linux smoke coverage;
+- full terminal takeover and broader platform proof beyond the current
+  Unix/Linux native-supervisor smoke coverage;
 - model-backed live dogfood and external write-fixture sample depth across
   disposable real repositories;
 - release-channel proof for npm and Homebrew once credentials are available;
