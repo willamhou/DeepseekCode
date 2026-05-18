@@ -19,6 +19,8 @@ release-proof work dependent on local checks until the next tag workflow.
   validation.
 - The workflow keeps expensive release-only work such as Docker packaging,
   attestation, npm publishing, and tap publishing in the release matrix.
+- CI and release workflows opt into Node 24 action runtime behavior ahead of
+  GitHub's announced Node 20 action runtime removal.
 
 ## Verification
 
