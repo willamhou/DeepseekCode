@@ -469,11 +469,11 @@ mod windows_conpty {
             0,
             &mut hpc,
         );
-        let _ = CloseHandle(input_read);
-        let _ = CloseHandle(output_write);
         if hr < 0 {
+            let _ = CloseHandle(input_read);
             let _ = CloseHandle(input_write);
             let _ = CloseHandle(output_read);
+            let _ = CloseHandle(output_write);
             return Err(app_error(format!(
                 "failed to create Windows ConPTY for TUI smoke: HRESULT 0x{:08x}",
                 hr as u32
@@ -483,7 +483,7 @@ mod windows_conpty {
         let mut attr_size: SIZE_T = 0;
         let _ = InitializeProcThreadAttributeList(null_mut(), 1, 0, &mut attr_size);
         if attr_size == 0 {
-            close_conpty_resources(hpc, input_write, output_read);
+            close_conpty_resources(hpc, input_read, input_write, output_read, output_write);
             return Err(app_error(
                 "failed to size Windows ConPTY process attribute list",
             ));
@@ -493,7 +493,7 @@ mod windows_conpty {
         let attr_list = attr_storage.as_mut_ptr().cast::<c_void>();
         if InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size) == 0 {
             let err = GetLastError();
-            close_conpty_resources(hpc, input_write, output_read);
+            close_conpty_resources(hpc, input_read, input_write, output_read, output_write);
             return Err(app_error(format!(
                 "failed to initialize Windows ConPTY process attribute list: {err}"
             )));
@@ -511,7 +511,7 @@ mod windows_conpty {
         {
             let err = GetLastError();
             DeleteProcThreadAttributeList(attr_list);
-            close_conpty_resources(hpc, input_write, output_read);
+            close_conpty_resources(hpc, input_read, input_write, output_read, output_write);
             return Err(app_error(format!(
                 "failed to attach Windows ConPTY to startup info: {err}"
             )));
@@ -538,13 +538,15 @@ mod windows_conpty {
         {
             let err = GetLastError();
             DeleteProcThreadAttributeList(attr_list);
-            close_conpty_resources(hpc, input_write, output_read);
+            close_conpty_resources(hpc, input_read, input_write, output_read, output_write);
             return Err(app_error(format!(
                 "failed to start Windows ConPTY TUI smoke child: {err}"
             )));
         }
 
         DeleteProcThreadAttributeList(attr_list);
+        let _ = CloseHandle(input_read);
+        let _ = CloseHandle(output_write);
 
         let output_read_raw = output_read as usize;
         let reader = thread::spawn(move || {
@@ -607,9 +609,17 @@ mod windows_conpty {
         Ok((read, write))
     }
 
-    unsafe fn close_conpty_resources(hpc: HPCON, input_write: HANDLE, output_read: HANDLE) {
+    unsafe fn close_conpty_resources(
+        hpc: HPCON,
+        input_read: HANDLE,
+        input_write: HANDLE,
+        output_read: HANDLE,
+        output_write: HANDLE,
+    ) {
+        let _ = CloseHandle(input_read);
         let _ = CloseHandle(input_write);
         let _ = CloseHandle(output_read);
+        let _ = CloseHandle(output_write);
         ClosePseudoConsole(hpc);
     }
 
