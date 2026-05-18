@@ -37,14 +37,22 @@ Record a real model-backed transcript:
 printf '%s\n' '<deepseek-api-key>' > /tmp/deepseek-demo.key
 chmod 600 /tmp/deepseek-demo.key
 DEEPSEEK_DEMO_KEY_FILE=/tmp/deepseek-demo.key docs/demo/record-model-backed-demo.sh
+latest_log=$(ls -t docs/demo/deepseek-code-model-demo-*.log | head -n 1)
+docs/demo/verify-model-backed-demo.js "$latest_log"
 ```
 
 The default output is a timestamped `docs/demo/deepseek-code-model-demo-*.log`
-transcript. Convert a reviewed successful run into the GIF/MP4 or SVG asset
-linked from the README; do not publish runs created with
-`DEEPSEEK_DEMO_ALLOW_OFFLINE=1` as model-backed evidence.
+transcript. Verify the transcript before converting a reviewed successful run
+into the GIF/MP4 or SVG asset linked from the README; do not publish runs
+created with `DEEPSEEK_DEMO_ALLOW_OFFLINE=1` as model-backed evidence.
 
 `DEEPSEEK_DEMO_KEY_FILE` must point outside this repository so API keys cannot
 be accidentally committed. `--api-key-stdin` is also supported when piping from
 a local secret manager. The transcript stream redacts known API key values
 before writing the log.
+
+The verifier can be checked without a model call:
+
+```bash
+docs/demo/verify-model-backed-demo.js --self-test
+```

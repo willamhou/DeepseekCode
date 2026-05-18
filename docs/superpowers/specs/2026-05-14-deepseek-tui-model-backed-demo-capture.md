@@ -26,12 +26,16 @@ capture workflow, the README could only describe this as future manual work.
 - `--dry-run` prints the planned fixture, transcript path, budget, and prompt
   without creating a repo or calling a model.
 - `docs/demo/README.md` and all README locales now point to the recorder.
+- Added `docs/demo/verify-model-backed-demo.js`, which validates the transcript
+  shape before media conversion and rejects offline rehearsal markers, redaction
+  markers, and API-key-shaped tokens.
 
 ## Verification
 
 - `bash -n docs/demo/record-model-backed-demo.sh`
 - `docs/demo/record-model-backed-demo.sh --dry-run`
 - `docs/demo/record-model-backed-demo.sh --redaction-self-test`
+- `docs/demo/verify-model-backed-demo.js --self-test`
 - `cargo fmt --check`
 - `cargo check`
 - `cargo test --lib -- --test-threads=1`

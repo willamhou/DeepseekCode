@@ -30,6 +30,8 @@ disposable fixture before generating GIF/MP4 assets:
 printf '%s\n' '<deepseek-api-key>' > /tmp/deepseek-demo.key
 chmod 600 /tmp/deepseek-demo.key
 DEEPSEEK_DEMO_KEY_FILE=/tmp/deepseek-demo.key docs/demo/record-model-backed-demo.sh
+latest_log=$(ls -t docs/demo/deepseek-code-model-demo-*.log | head -n 1)
+docs/demo/verify-model-backed-demo.js "$latest_log"
 ```
 
 ## Required Gates
@@ -44,6 +46,7 @@ node scripts/check-secrets.js
 deepseek benchmark
 docs/demo/record-model-backed-demo.sh --dry-run
 docs/demo/record-model-backed-demo.sh --redaction-self-test
+docs/demo/verify-model-backed-demo.js --self-test
 ```
 
 `deepseek benchmark` must pass all three layers:

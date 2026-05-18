@@ -147,7 +147,10 @@ The model-backed README demo recorder now also supports `DEEPSEEK_DEMO_KEY_FILE`
 outside the repository and `--api-key-stdin`, so real demo capture can consume
 DeepSeek credentials without committing or echoing the key; its transcript
 stream redacts known API key values and exposes `--redaction-self-test` for
-offline verification.
+offline verification. The model-backed README transcript now also has
+`docs/demo/verify-model-backed-demo.js`, which verifies the failure -> agent
+exec -> diff -> passing-test evidence shape and rejects offline rehearsal or
+secret-bearing transcripts before media conversion.
 Release packaging now also runs `node scripts/check-secrets.js`, a tracked-file
 secret scan that blocks committed `sk-...` style API tokens before publishing.
 The largest remaining DeepSeek-TUI / Claude Code CLI / Codex CLI gaps are now:
